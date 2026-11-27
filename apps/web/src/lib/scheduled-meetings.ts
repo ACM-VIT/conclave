@@ -81,17 +81,27 @@ const lookupInTenant = async (
     : { kind: "unscheduled" };
 };
 
-const noActiveRoomOwner = async ({ roomCode, clientId }: RoomDestination, signal: AbortSignal): Promise<boolean> => {
-  const route = `/routing/rooms/${encodeURIComponent(clientId)}/${encodeURIComponent(roomCode)}`;
-  const results = await Promise.allSettled(resolveSfuUrls().map(async (sfuUrl) => {
-    const response = await fetch(sfuUrl.replace(/\/$/, "") + route, {
-      headers: { "x-sfu-secret": resolveSfuSecret(), accept: "application/json" },
-      cache: "no-store",
-      signal,
-    });
+const noActiveRoom = async ({ roomCode, clientId }: RoomDestination, signal: AbortSignal): Promise<boolean> => {
+  const room = encodeURIComponent(roomCode);
+  const tenant = encodeURIComponent(clientId);
+  const init = {
+    headers: { "x-sfu-secret": resolveSfuSecret(), accept: "application/json" },
+    cache: "no-store",
+    signal,
+  } satisfies RequestInit;
+  const absentAt = async (url: string, field: "owner" | "room"): Promise<boolean> => {
+    const response = await fetch(url, init);
     if (!response.ok) return false;
-    const body = (await response.json()) as { owner?: unknown } | null;
-    return body?.owner === null;
+    const body = (await response.json()) as Partial<Record<typeof field, unknown>> | null;
+    return body?.[field] === null;
+  };
+  // A live room can outlast its registry lease while Redis is down.
+  const results = await Promise.allSettled(resolveSfuUrls().flatMap((sfuUrl) => {
+    const base = sfuUrl.replace(/\/$/, "");
+    return [
+      absentAt(`${base}/routing/rooms/${tenant}/${room}`, "owner"),
+      absentAt(`${base}/rooms/${room}?clientId=${tenant}`, "room"),
+    ];
   }));
   return results.length > 0 && results.every((result) => result.status === "fulfilled" && result.value);
 };
@@ -108,7 +118,7 @@ export const lookupScheduledMeetingForCode = async (
   }
   const legacy = await lookupInTenant({ ...destination, clientId: CONCLAVE_SFU_CLIENT_ID }, deadline);
   return legacy.kind === "scheduled" && legacy.meeting.bookingLink === true &&
-    await noActiveRoomOwner(destination, deadline) ? legacy : primary;
+    await noActiveRoom(destination, deadline) ? legacy : primary;
 };
 
 export const lookupScheduledMeetingHostEmail = async ({
