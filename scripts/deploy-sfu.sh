@@ -1474,9 +1474,10 @@ serving_config_hash() {
 # reaches it. One look, no waiting; SERVING_WHY says what failed.
 SERVING_WHY=""
 SERVING_IMAGE=""
+SERVING_DRAINING=""
 serving() {
-  local svc="$1" image="${2:-}" container env url status running identity
-  SERVING_IMAGE=""
+  local svc="$1" image="${2:-}" allow_drained="${3:-false}" container env url status running identity
+  SERVING_IMAGE="" SERVING_DRAINING=""
   if ! identity="$(service_identity "$svc")"; then SERVING_WHY="Docker cannot read its container's image"; return 1; fi
   if [[ -z "$identity" ]]; then SERVING_WHY="it has no container"; return 1; fi
   read -r container running <<< "$identity"
@@ -1494,20 +1495,21 @@ serving() {
   verdict="$(HEALTH="$health" STATUS="$status" PUBLIC="$public" node -e '
 const read = (name) => { try { return JSON.parse(process.env[name] || "null") || {}; } catch { return {}; } };
 const [health, status, publicStatus] = [read("HEALTH"), read("STATUS"), read("PUBLIC")];
-const [svc, expected, url, publicUrl] = process.argv.slice(1);
+const [svc, expected, url, publicUrl, allowDrained] = process.argv.slice(1);
 const why =
   health.status !== "healthy" ? `${url}/health does not say healthy` :
   status.instanceId === undefined ? "its /status cannot be read" :
   status.instanceId !== expected ? `its management URL answers as ${status.instanceId}, not ${expected}` :
   status.healthy !== true ? "its /status says unhealthy" :
-  status.draining !== false ? "it is draining" :
+  status.draining !== false && !(allowDrained === "true" && status.draining === true) ? "it is draining" :
   publicStatus.instanceId !== expected ? `its public URL ${publicUrl} reaches ${publicStatus.instanceId ?? "nothing"}` :
   publicStatus.healthy !== true ? `its public URL ${publicUrl} does not report healthy` : "";
 process.stdout.write(why);
-' "$svc" "${EXPECTED_ID[$svc]:-$svc}" "$url" "$(service_public_url "$svc")")"
+' "$svc" "${EXPECTED_ID[$svc]:-$svc}" "$url" "$(service_public_url "$svc")" "$allow_drained")"
   if [[ -n "$verdict" ]]; then SERVING_WHY="$verdict"; return 1; fi
   SERVING_WHY=""
   SERVING_IMAGE="$running"
+  if [[ "$allow_drained" == true ]]; then SERVING_DRAINING="$(printf "%s" "$status" | json_field draining)"; fi
 }
 
 # serving, waited for up to HEALTH_TIMEOUT_SECONDS.
@@ -1675,6 +1677,25 @@ roll_back() {
 }
 
 declare -A REPAIR_CODE=()
+recover_before_build() {
+  local svc phase image
+  for svc in "${ALL_SFU_SERVICES[@]}"; do
+    phase="$(journal_get "$svc" phase)"
+    case "$phase" in
+      drained|candidate|rollback|passed) image="$(journal_get "$svc" lkg)" ;;
+      promoting) image="$(journal_get "$svc" prevLkg)" ;;
+      *) continue ;;
+    esac
+    [[ -n "$image" && "$(journal_get "$svc" wasDraining)" != true ]] || continue
+    if serving "$svc" "$image" true && [[ "$SERVING_DRAINING" == true ]]; then
+      if [[ "$phase" != drained ]]; then
+        journal_set "$svc" phase=drained lkg="$image" wasDraining=false candidate= prevLkg=
+      fi
+      restore_drain_state "$svc" "$(service_url "$svc")" false || true
+    fi
+  done
+}
+
 repair_interrupted() {
   local svc phase lkg candidate prev url image_name state code identity running first=() rest=()
   for svc in "${ALL_SFU_SERVICES[@]}"; do
@@ -2018,6 +2039,7 @@ for svc in "${ALL_SFU_SERVICES[@]}"; do
 done
 
 install_deploy_traps
+recover_before_build
 
 if [[ "$ROLLBACK" != true ]]; then
   TARGET_COMMIT="$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD)"
