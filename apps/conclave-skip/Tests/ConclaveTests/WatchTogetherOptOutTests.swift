@@ -281,11 +281,14 @@ struct WatchTogetherOptOutTests {
         host.resolveStageDiscardPrompt(id: cancelled, confirmed: true)
         #expect(host.stageDiscardPromptId == confirmed)
         #expect(viewModel.state.activeAppId == "watch")
+        viewModel.toggleAppsLock()
+        #expect(!viewModel.state.isAppsActionInFlight)
         host.resolveStageDiscardPrompt(id: confirmed, confirmed: true)
         await settle { !viewModel.state.isAppsActionInFlight }
         #expect(replacementSaveAttempts == 1)
         let expectedApp = replacementSaves ? (action == "close" ? nil : "wheel") : "watch"
         #expect(viewModel.state.activeAppId == expectedApp)
+        #expect(!viewModel.state.isAppsLocked)
         #expect(viewModel.state.appsRevision == 7)
     }
     #endif

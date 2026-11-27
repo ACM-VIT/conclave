@@ -15552,7 +15552,7 @@ final class MeetingViewModel {
     }
 
     func toggleAppsLock() {
-        guard state.isAdmin, !state.isWebinarAttendee else { return }
+        guard state.isAdmin, !state.isWebinarAttendee, activitySession.appHost.stageDiscardPromptId.isEmpty else { return }
         let locked = !state.isAppsLocked
         let actionKey = "apps"
         guard let actionToken = beginAdminAction(actionKey) else { return }
