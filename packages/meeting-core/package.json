@@ -14,6 +14,8 @@
     "./participant-reducer": "./src/participant-reducer.ts",
     "./scheduling": "./src/scheduling.ts",
     "./test-fixtures": "./test/support/token-fixtures.ts",
+    "./join-room-answer": "./src/join-room-answer.ts",
+    "./sender-packet-counts": "./src/sender-packet-counts.ts",
     "./sfu-events": "./src/sfu-events.ts",
     "./sfu-types": "./src/sfu-types.ts",
     "./transcript-models": "./src/transcript-models.ts",

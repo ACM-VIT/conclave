@@ -15,6 +15,7 @@ export function meetingPanelKey(
 type MeetingPanelBoundaryProps = {
   name: string;
   onClose?: () => void;
+  onFailed?: () => void;
   children: ReactNode;
 };
 
@@ -36,6 +37,7 @@ export default class MeetingPanelBoundary extends Component<
   // type and frames are sent; its message is withheld like any other.
   componentDidCatch(error: unknown) {
     telemetry.captureException(error, { source: "react_error_boundary", boundary: "panel" });
+    this.props.onFailed?.();
   }
 
   render() {

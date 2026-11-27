@@ -13,6 +13,7 @@ const renderPanel = (onAddEntries: (labels: string[]) => number) => {
       <WheelPanel
         fill
         entries={[{ id: "ada", label: "Ada" }]}
+        waitingCount={0}
         history={[]}
         canEdit
         locked={false}

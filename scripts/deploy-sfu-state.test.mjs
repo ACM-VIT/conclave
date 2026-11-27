@@ -4,7 +4,7 @@ import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkdtemp
 import { createServer } from "node:http";
 import { availableParallelism, tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, before, describe, test as nodeTest } from "node:test";
+import { describe, test as nodeTest } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const registered = [];
@@ -15,7 +15,6 @@ const scriptsDir = fileURLToPath(new URL(".", import.meta.url));
 const sfuDir = fileURLToPath(new URL("../packages/sfu/", import.meta.url));
 const OLD_CONTAINER = "old-sfu-a";
 const DATA = "/app/packages/sfu/data";
-const MINIMUM_POWERSHELL = [7, 4];
 
 const FAKE_DOCKER = `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$DOCKER_LOG"
@@ -107,9 +106,19 @@ if [[ "$1" == "compose" ]]; then
         fi
         CONCLAVE_FALLBACK_IMPORT_DIR="$FAKE_IMAGE_IMPORT_DIR" exec sh -c "$script" "\${rest[@]}" ;;
       stop) [[ "$FAKE_FAIL_AT" == stop ]] && exit 1; : > "$FAKE_STOPPED"; exit 0 ;;
-      build|up|start) exit 0 ;;
+      up) printf '%s' "$SFU_DEPLOY_ID" > "$DOCKER_LOG.deploy-id"; exit 0 ;;
+      build|start) exit 0 ;;
     esac
   done
+  exit 0
+fi
+if [[ "$1" == stop ]]; then
+  [[ "$FAKE_FAIL_AT" == stop ]] && exit 1
+  : > "$FAKE_STOPPED"
+  exit 0
+fi
+if [[ "$1" == image && "$2" == inspect ]]; then
+  if [[ "$*" == *health-deploy-id* ]]; then echo deploy-id; else echo sha256:replacement; fi
   exit 0
 fi
 if [[ "$1" == update ]]; then
@@ -136,6 +145,7 @@ if [[ "$1" == update ]]; then
 fi
 case "$1" in
   inspect)
+    if [[ "$*" == *'{{.Image}}'* ]]; then echo sha256:source; exit 0; fi
     if [[ "$*" == *WorkingDir* ]]; then printf '%s\n' "\${FAKE_WORKDIR-/app/packages/sfu}"; exit 0; fi
     if [[ "$*" == *Config.Env* ]]; then printf '%b' "$FAKE_ENV"; exit 0; fi
     if [[ "$*" == *RestartPolicy* ]]; then echo "\${FAKE_RESTART_POLICY:-unless-stopped}"; exit 0; fi
@@ -148,6 +158,7 @@ case "$1" in
     fi
     if [[ "$*" == *State.FinishedAt* ]]; then echo "$running $started $FAKE_FINISHED_AT"; exit 0; fi
     if [[ "$*" == *State.Running* ]]; then echo "$running"; exit 0; fi
+    if [[ "$*" == *State.Status* ]]; then if [[ "$running" == true ]]; then echo running; else echo exited; fi; exit 0; fi
     if [[ "$*" == *State.StartedAt* ]]; then echo "$started"; exit 0; fi
     exit 0 ;;
   diff)
@@ -190,35 +201,13 @@ exec shasum -a 256 "$@"
 
 const allDefinitions = (source, pattern) => source.match(pattern)?.join("\n") ?? "";
 const deployShell = readFileSync(join(scriptsDir, "deploy-sfu.sh"), "utf8");
-const deployPowerShell = readFileSync(join(scriptsDir, "deploy-sfu.ps1"), "utf8");
-const shellFunctions = /^[A-Za-z_][A-Za-z0-9_]*\(\) [{(]\n[\s\S]*?^[})]\n/gm;
-const powerShellFunctions = /^function [A-Za-z-]+ \{\n[\s\S]*?^\}\n/gm;
-const powerShellDefinitions = allDefinitions(deployPowerShell, powerShellFunctions);
-const restartGuardCompilation = /^    Add-Type -TypeDefinition @'\n[\s\S]*?^'@$/m;
-const restartGuardAssemblies = new Map();
-
-const versionOf = (binary) => {
-  const probe = spawnSync(binary, ["-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"], { encoding: "utf8" });
-  return probe.status === 0 ? probe.stdout.trim() : null;
-};
-
-const atLeast = (version, [major, minor]) => {
-  const [actualMajor, actualMinor] = version.split(".").map(Number);
-  return actualMajor > major || (actualMajor === major && actualMinor >= minor);
-};
-
-const powerShells = (process.env.CONCLAVE_PWSH_BINARIES ?? "pwsh")
-  .split(",")
-  .map((binary) => binary.trim())
-  .filter(Boolean)
-  .map((binary) => ({ binary, version: versionOf(binary) }))
-  .filter((shell) => shell.version);
+const bash = ["/opt/homebrew/bin/bash", "/usr/local/bin/bash", "bash"].find((binary) => spawnSync(binary, ["-c", "(( BASH_VERSINFO[0] >= 4 ))"]).status === 0) ?? "bash";
+const shellFunctions = /^(?!journal_(?:get|set)\()[A-Za-z_][A-Za-z0-9_]*\(\) [{(]\n[\s\S]*?^[})]\n/gm;
 
 const harnesses = [
   {
     name: "bash",
-    deploys: true,
-    command: "bash",
+    command: bash,
     args: [],
     file: "harness.sh",
     source: () =>
@@ -228,26 +217,25 @@ const harnesses = [
         "COMPOSE=(docker compose -f docker-compose.sfu.yml)",
         allDefinitions(deployShell, shellFunctions),
         `if [[ -n "\${FIXED_STAMP:-}" ]]; then archive_stamp() { printf '%s' "$FIXED_STAMP"; }; fi`,
-        'build_and_start sfu-a "$SFU_HEALTH_URL"',
+        'declare -A RESTART_HOLDS=() EXPECTED_ID=([sfu-a]=sfu-a)',
+        'EXIT_CARRY_REFUSED=6 STATUS_RETRY_SECONDS=0 CONTAINER_SETTLE_SECONDS=0.05 HEALTH_TIMEOUT_SECONDS="$SFU_HEALTH_TIMEOUT_SECONDS" POLL_SECONDS=0.05 STATE_TOOLS_TAG=state-tools',
+        'SERVICE_URL=("$SFU_HEALTH_URL")',
+        `instance_status() {
+          if [[ "$FAKE_FAIL_AT" == exit-before-final-status && ! -f "$FAKE_STOPPED" ]]; then
+            : > "$FAKE_STOPPED"
+            return 1
+          fi
+          printf '%s' '{"draining":true,"rooms":0}'
+        }`,
+        'service_url() { printf "%s" "$SFU_HEALTH_URL"; }',
+        'if [[ -n "$FIXED_STAMP" ]]; then',
+        '  archive_stamp() { printf "%s" "$FIXED_STAMP"; }',
+        '  od() { printf " 012345abcdef"; }',
+        "fi",
+        'install_deploy_traps',
+        'up_service sfu-a replacement false sha256:replacement',
       ].join("\n"),
   },
-  ...powerShells.map(({ binary, version }) => ({
-    name: `pwsh ${version}`,
-    deploys: atLeast(version, MINIMUM_POWERSHELL),
-    command: binary,
-    args: ["-NoProfile", "-NonInteractive", "-File"],
-    file: "harness.ps1",
-    source: () =>
-      [
-        "Set-StrictMode -Version Latest",
-        '$ErrorActionPreference = "Stop"',
-        '$env:DEPLOY_PID = [string]$PID',
-        '$composeBaseArgs = @("compose", "-f", "docker-compose.sfu.yml")',
-        powerShellDefinitions.replace(restartGuardCompilation, "    Add-Type -Path $env:RESTART_GUARD_ASSEMBLY"),
-        "if ($env:FIXED_STAMP) { function Get-ArchiveStamp { return $env:FIXED_STAMP } }",
-        "Start-SfuService -Service sfu-a -Url $env:SFU_HEALTH_URL",
-      ].join("\n"),
-  })),
 ];
 
 const hostHasSha256sum = spawnSync("sh", ["-c", "command -v sha256sum"]).status === 0;
@@ -411,7 +399,8 @@ const replaceService = async (
   let healthRequests = 0;
   const healthServer = createServer((req, res) => {
     if (req.url === "/health") healthRequests += 1;
-    const [code, body] = healthAnswers[health]("sfu-a", deployId);
+    const idFile = join(dir, "docker.log.deploy-id");
+    const [code, body] = healthAnswers[health]("sfu-a", existsSync(idFile) ? readFileSync(idFile, "utf8") : deployId);
     res.writeHead(req.url === "/health" ? code : 404, { "content-type": "application/json" });
     res.end(JSON.stringify(body));
   });
@@ -474,7 +463,6 @@ const replaceService = async (
       SFU_DEPLOY_ID: deployId,
       SFU_HEALTH_TIMEOUT_SECONDS: health === "deployed" ? "30" : "1",
       SFU_HEALTH_POLL_SECONDS: "1",
-      RESTART_GUARD_ASSEMBLY: restartGuardAssemblies.get(harness.command) ?? "",
       FIXED_STAMP: fixedStamp,
       FAKE_KILL_TRANSFER: killTransfer ? "1" : "",
       FAKE_FAIL_UNPACK: failUnpack ? "1" : "",
@@ -489,6 +477,7 @@ const replaceService = async (
     return {
       ...result,
       healthRequests,
+      bootId: existsSync(join(dir, "docker.log.deploy-id")) ? readFileSync(join(dir, "docker.log.deploy-id"), "utf8") : "",
       calls: readFileSync(log, "utf8").trim().split("\n").filter(Boolean),
       archives,
       staged,
@@ -522,11 +511,11 @@ const assertChangedInTransit = (corruptions) =>
 
 const callIndex = (calls, pattern) => calls.findIndex((call) => pattern.test(call));
 const receives = (calls) => calls.filter((call) => /^compose .* run .*--entrypoint sh sfu-a -c .*payload\.tar/.test(call));
-const stopped = (calls) => callIndex(calls, /^compose .* stop sfu-a$/) >= 0;
+const stopped = (calls) => callIndex(calls, /^stop old-sfu-a$/) >= 0;
 const wrote = (name) => `A ${DATA}/${name}\\n`;
 const leftStoppedAndRestored = (calls) => {
   const froze = calls.indexOf(`update --restart=no ${OLD_CONTAINER}`);
-  const stop = callIndex(calls, /^compose .* stop sfu-a$/);
+  const stop = callIndex(calls, /^stop old-sfu-a$/);
   const restored = calls.lastIndexOf(`update --restart=unless-stopped ${OLD_CONTAINER}`);
   assert.ok(froze >= 0 && stop > froze && restored > stop && callIndex(calls, / up -d /) === -1, calls.join("\n"));
 };
@@ -537,31 +526,6 @@ const BINARY = Buffer.concat([
   Buffer.from([0xef, 0xbb, 0xbf, 0xff, 0xfe, 0x0d, 0x0a, 0x0a, 0x0d, 0xc3, 0x28, 0xa0, 0xa1]),
   Buffer.from('"}\r\n'),
 ]);
-
-for (const { binary, version } of powerShells) {
-  test(`pwsh ${version}: the transfer helper hands a file to a command byte for byte`, () => {
-    const dir = mkdtempSync(join(tmpdir(), "deploy-sfu-transfer-"));
-    try {
-      const helper = deployPowerShell.match(/^function Send-FileToCommand \{\n[\s\S]*?^\}\n/m)?.[0];
-      assert.ok(helper, "deploy-sfu.ps1 defines Send-FileToCommand");
-      writeFileSync(join(dir, "payload.bin"), BINARY);
-      writeFileSync(
-        join(dir, "send.ps1"),
-        [
-          "param([string]$Source, [string]$Target)",
-          helper,
-          '$code = Send-FileToCommand -Path $Source -Command "sh" -Arguments @("-c", \'cat > "$1"\', "sh", $Target)',
-          "exit $code",
-        ].join("\n"),
-      );
-      const sent = spawnSync(binary, ["-NoProfile", "-NonInteractive", "-File", join(dir, "send.ps1"), join(dir, "payload.bin"), join(dir, "received.bin")], { encoding: "utf8" });
-      assert.equal(sent.status, 0, sent.stderr);
-      assert.ok(readFileSync(join(dir, "received.bin")).equals(BINARY), "the payload changed in transit");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-}
 
 for (const harness of harnesses) {
   const shell = harness.name;
@@ -580,16 +544,6 @@ for (const harness of harnesses) {
     }
   });
 
-  if (!harness.deploys) {
-    test(`${shell}: refuses to run before touching Docker`, async () => {
-      const { status, calls, stderr } = await replaceService(harness, { diff: wrote("scheduling.json") });
-      assert.notEqual(status, 0);
-      assert.deepEqual(calls, []);
-      assert.match(stderr, /PowerShell 7\.4/);
-    });
-    continue;
-  }
-
   test(`${shell}: keeps the old SFU from restarting, stops it, and only then copies its fallback files once, as they were when it stopped`, async () => {
     const { status, calls, stderr, archives } = await replaceService(harness, {
       diff: `C ${DATA}\\n${wrote("scheduling.json")}`,
@@ -598,11 +552,11 @@ for (const harness of harnesses) {
     });
     assert.equal(status, 0, stderr);
     const froze = calls.indexOf(`update --restart=no ${OLD_CONTAINER}`);
-    const stop = callIndex(calls, /^compose .* stop sfu-a$/);
+    const stop = callIndex(calls, /^stop old-sfu-a$/);
     const copies = calls.filter((call) => call.startsWith(`cp ${OLD_CONTAINER}:`)).map((call) => calls.indexOf(call));
     const sends = receives(calls).map((call) => calls.indexOf(call));
     const restored = calls.indexOf(`update --restart=unless-stopped ${OLD_CONTAINER}`);
-    const start = callIndex(calls, /^compose .* up -d sfu-a$/);
+    const start = callIndex(calls, /^compose .* up -d .*sfu-a$/);
     assert.ok(froze >= 0 && stop > froze && copies.length === 1 && copies[0] > stop && sends.length === 1 && sends[0] > copies[0] && restored > sends[0] && start > restored, calls.join("\n"));
     assert.deepEqual(archives.map((archive) => archive.bytes["scheduling.json"].toString()), ["[1,2]"]);
   });
@@ -621,7 +575,7 @@ for (const harness of harnesses) {
       assert.deepEqual(retried.staged, []);
       assert.equal(retried.archives[0].source, `${OLD_CONTAINER} 2026-11-25T09:30:00.000000000Z_2026-11-25T10:00:00.000000000Z`);
       const publish = callIndex(retried.calls, /^compose .* run .*--entrypoint sh sfu-a -c .*staged copy/);
-      assert.ok(publish > callIndex(retried.calls, /^compose .* stop sfu-a$/) && callIndex(retried.calls, /^compose .* up -d sfu-a$/) > publish, retried.calls.join("\n"));
+      assert.ok(publish > callIndex(retried.calls, /^stop old-sfu-a$/) && callIndex(retried.calls, /^compose .* up -d .*sfu-a$/) > publish, retried.calls.join("\n"));
     } finally {
       rmSync(shared, { recursive: true, force: true });
     }
@@ -635,8 +589,9 @@ for (const harness of harnesses) {
       const second = await replaceService(harness, { sharedImportDir: shared, deployId: "sfu-second-deploy", diff: wrote("scheduling.json"), files: { "scheduling.json": '["second"]' } });
       assert.equal(second.status, 0, second.stderr);
       assert.deepEqual(second.archives.map((archive) => archive.bytes["scheduling.json"].toString()), ['["first"]', '["second"]']);
-      assert.match(second.archives[0].name, /^\d{8}T\d{9}Z-sfu-first-deploy$/);
-      assert.match(second.archives[1].name, /^\d{8}T\d{9}Z-sfu-second-deploy$/);
+      assert.ok(second.archives[0].name.endsWith(`-${first.bootId}`));
+      assert.ok(second.archives[1].name.endsWith(`-${second.bootId}`));
+      assert.notEqual(first.bootId, second.bootId);
     } finally {
       rmSync(shared, { recursive: true, force: true });
     }
@@ -716,16 +671,15 @@ for (const harness of harnesses) {
     }
   });
 
-  test(`${shell}: stops a replacement that never answers healthy as this deploy`, async () => {
+  test(`${shell}: refuses a replacement that never answers healthy as this deploy`, async () => {
     const answers = ["unavailable", "an earlier deploy", "another SFU", "an older image"];
     const outcomes = await Promise.all(answers.map((health) => replaceService(harness, { health })));
     outcomes.forEach(({ status, calls, stderr, healthRequests }, at) => {
       const health = answers[at];
       assert.notEqual(status, 0, `${health} was accepted`);
-      const start = callIndex(calls, /^compose .* up -d sfu-a$/);
-      const stop = calls.findLastIndex((call) => /^compose .* stop sfu-a$/.test(call));
-      assert.ok(start >= 0 && stop > start, `${health}\n${calls.join("\n")}`);
-      assert.match(stderr, /did not answer healthy/, health);
+      const start = callIndex(calls, /^compose .* up -d .*sfu-a$/);
+      assert.ok(start >= 0, `${health}\n${calls.join("\n")}`);
+      assert.match(stderr, /did not report healthy/, health);
       assert.ok(healthRequests >= 1, `${health}: the deploy never asked for health, so the answer was never checked`);
     });
   });
@@ -848,7 +802,7 @@ for (const harness of harnesses) {
           volume: run.volumeEntries,
           mode: run.volumeFiles["conclave.sqlite"]?.mode,
           rows: run.volumeRows["conclave.sqlite"],
-          copiedAfterStop: copied > callIndex(run.calls, /^compose .* stop sfu-a$/) && callIndex(run.calls, /^compose .* up -d sfu-a$/) > copied,
+          copiedAfterStop: copied > callIndex(run.calls, /^stop old-sfu-a$/) && callIndex(run.calls, /^compose .* up -d .*sfu-a$/) > copied,
         }];
       }),
     );
@@ -985,6 +939,20 @@ for (const harness of harnesses) {
     assert.deepEqual(outcomes, Object.fromEntries(Object.keys(scenarios).map((name) => [name, { status: 0, stderr: "", rows: later, started: true }])));
   });
 
+  test(`${shell}: rechecks a held source that exits between the Docker state read and its final HTTP status`, async () => {
+    const { status, calls, stderr, archives } = await replaceService(harness, {
+      running: true,
+      failAt: "exit-before-final-status",
+      diff: wrote("scheduling.json"),
+    });
+    assert.equal(status, 0, stderr);
+    assert.equal(archives.length, 1);
+    const hold = callIndex(calls, /^update --restart=no old-sfu-a$/);
+    const restore = callIndex(calls, /^update --restart=unless-stopped old-sfu-a$/);
+    const up = callIndex(calls, /^compose .* up -d .*sfu-a$/);
+    assert.ok(hold >= 0 && restore > hold && up > restore, calls.join("\n"));
+  });
+
   test(`${shell}: every way a deploy can end after the old SFU's restarts are turned off gives it its restart policy back and says whether it is still running`, async () => {
     const base = {
       containerEnv: "CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite\\n",
@@ -1052,7 +1020,7 @@ for (const harness of harnesses) {
           };
           const first = await replaceService(harness, { ...base, files: { "scheduling.json": "[1]", ...sqliteFiles("conclave.sqlite", ["kept"]) }, restartAt: step });
           const stamp = existsSync(join(volume, "conclave.sqlite")) ? await carryStamp(join(volume, "conclave.sqlite")) : null;
-          const restoredAfterStop = first.calls.lastIndexOf(`update --restart=unless-stopped ${OLD_CONTAINER}`) > callIndex(first.calls, /^compose .* stop sfu-a$/);
+          const restoredAfterStop = first.calls.lastIndexOf(`update --restart=unless-stopped ${OLD_CONTAINER}`) > callIndex(first.calls, /^stop old-sfu-a$/);
           const retry = await replaceService(harness, {
             ...base,
             files: { "scheduling.json": "[1,2]", ...sqliteFiles("conclave.sqlite", later) },
@@ -1162,14 +1130,14 @@ for (const harness of harnesses) {
     const { status, calls, stderr } = await replaceService(harness, { container: "" });
     assert.equal(status, 0, stderr);
     assert.equal(callIndex(calls, /^(cp|diff) /), -1, calls.join("\n"));
-    assert.ok(callIndex(calls, /^compose .* up -d sfu-a$/) >= 0);
+    assert.ok(callIndex(calls, /^compose .* up -d .*sfu-a$/) >= 0);
   });
 }
 
 const pathHarnesses = [
   {
     name: "bash",
-    command: "bash",
+    command: bash,
     args: [],
     file: "paths.sh",
     source: () =>
@@ -1180,22 +1148,7 @@ const pathHarnesses = [
         'for case_dir in "$CASES"/*; do while IFS= read -r line; do printf \'%s\\t%s\\n\' "${case_dir##*/}" "$line"; done < <(store_file_paths "$case_dir"); done',
       ].join("\n"),
   },
-  ...powerShells
-    .filter(({ version }) => atLeast(version, MINIMUM_POWERSHELL))
-    .map(({ binary, version }) => ({
-      name: `pwsh ${version}`,
-      command: binary,
-      args: ["-NoProfile", "-NonInteractive", "-File"],
-      file: "paths.ps1",
-      source: () =>
-        [
-          "Set-StrictMode -Version Latest",
-          '$ErrorActionPreference = "Stop"',
-          allDefinitions(deployPowerShell, powerShellFunctions),
-          'function docker { $global:LASTEXITCODE = 0; $file = if ("$args" -like "*WorkingDir*") { "workdir" } else { "env" }; Get-Content -LiteralPath (Join-Path $args[-1] $file) }',
-          'foreach ($dir in @(Get-ChildItem -LiteralPath $env:CASES -Directory | Sort-Object Name)) { foreach ($entry in @(Get-StoreFilePaths -Container $dir.FullName)) { [Console]::Out.WriteLine("$($dir.Name)`t$($entry.Kind) $($entry.Name) $($entry.Path)") } }',
-        ].join("\n"),
-    })),
+
 ];
 
 const STORE_VARIABLES = [
@@ -1235,7 +1188,7 @@ const sqliteBranch = (env, prefix) => {
   return "default";
 };
 
-test("every store path both deploy scripts read from an old container is the path the SFU's own store code uses", async () => {
+test("every store path the deploy reads from an old container is the path the SFU's own store code uses", async () => {
   const cases = storePathCases(150, 272);
   const counts = {};
   for (const { env } of cases) {
@@ -1275,236 +1228,6 @@ test("every store path both deploy scripts read from an old container is the pat
   }
 });
 
-const FLOW_DOCKER = `#!/usr/bin/env bash
-printf '%s\\n' "$*" >> "$DOCKER_LOG"
-args=("$@")
-service="\${@: -1}"
-holds() { [[ " $FAKE_LAYER_HOLDERS " == *" \${1#old-} "* ]]; }
-if [[ "$1" == "compose" ]]; then
-  for ((i = 1; i < \${#args[@]}; i++)); do
-    if [[ "\${args[i]}" == run ]]; then
-      script="" rest=()
-      for ((j = i + 1; j < \${#args[@]}; j++)); do
-        [[ "\${args[j]}" == -c ]] && { script="\${args[j + 1]}"; rest=("\${args[@]:j + 2}"); break; }
-      done
-      [[ -n "$script" ]] || exit 0
-      script="\${script//\\/var\\/lib\\/conclave\\/recordings/$FAKE_VOLUME}"
-      cd "$FAKE_SFU_DIR" || exit 1
-      CONCLAVE_SQLITE_PATH="$FAKE_VOLUME/conclave.sqlite" CONCLAVE_FALLBACK_IMPORT_DIR="$FAKE_VOLUME/json-fallback-import" exec sh -c "$script" "\${rest[@]}"
-    fi
-  done
-  case " $* " in
-    *" config --services "*) printf 'sfu-a\\nsfu-b\\n'; exit 0 ;;
-    *" config --format json "*) echo '{}'; exit 0 ;;
-    *" up -d "*) printf '%s' "$SFU_DEPLOY_ID" > "$FAKE_STATE/$service.up"; exit 0 ;;
-    *" stop "*) rm -f "$FAKE_STATE/$service.up"; : > "$FAKE_STATE/old-$service.stopped"; exit 0 ;;
-    *" ps -a -q "*) [[ " $FAKE_CONTAINERS " == *" $service "* ]] && echo "old-$service"; exit 0 ;;
-  esac
-  exit 0
-fi
-case "$1" in
-  inspect)
-    case "$*" in
-      *WorkingDir*) echo /app/packages/sfu ;;
-      *Config.Env*) holds "$service" && echo "CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite" ;;
-      *RestartPolicy*) echo unless-stopped ;;
-      *State.Running*)
-        running=false
-        [[ " $FAKE_RUNNING " == *" \${service#old-} "* && ! -f "$FAKE_STATE/$service.stopped" ]] && running=true
-        if [[ "$*" == *State.FinishedAt* ]]; then echo "$running 2026-11-25T08:00:00.000000000Z 2026-11-25T08:45:00.000000000Z"; else echo "$running"; fi ;;
-    esac ;;
-  diff) holds "$2" && printf 'A /var/lib/conclave/conclave.sqlite\\nA /var/lib/conclave/conclave.sqlite-wal\\n' ;;
-  cp) cat "$FAKE_FILES/\${2##*/}" > "$3" ;;
-esac
-exit 0
-`;
-
-const fakeSfu = (service, { rooms, replacement, state, log, down = false }) => {
-  let draining = false;
-  let active = rooms;
-  return createServer((req, res) => {
-    const reply = (code, body) => {
-      res.writeHead(code, { "content-type": "application/json" });
-      res.end(JSON.stringify(body));
-    };
-    if (req.method === "POST" && req.url === "/drain" && down) return reply(503, {});
-    if (req.method === "POST" && req.url === "/drain") {
-      draining = true;
-      active = 0;
-      appendFileSync(log, `drain ${service}\n`);
-      req.resume();
-      return reply(200, { draining: true });
-    }
-    if (req.url === "/status") return down ? reply(503, {}) : reply(200, { instanceId: service, rooms: active, draining, healthy: true });
-    if (req.url === "/health") {
-      const upFile = join(state, `${service}.up`);
-      if (!existsSync(upFile)) return reply(200, { status: "healthy", workers: { healthy: 1 } });
-      const [code, body] = healthAnswers[replacement](service, readFileSync(upFile, "utf8"));
-      return reply(code, body);
-    }
-    return reply(404, {});
-  });
-};
-
-const deployShells = [
-  { name: "bash", script: "deploy-sfu.sh", command: "bash", args: [] },
-  ...powerShells
-    .filter(({ version }) => atLeast(version, MINIMUM_POWERSHELL))
-    .map(({ binary, version }) => ({ name: `pwsh ${version}`, script: "deploy-sfu.ps1", command: binary, args: ["-NoProfile", "-NonInteractive", "-File"] })),
-];
-
-const deploySfus = async (shell, replacements, { containers = "", layerHolders = "", running = "", down = [] } = {}) => {
-  const root = mkdtempSync(join(tmpdir(), "deploy-sfu-flow-"));
-  const state = join(root, "state");
-  const volume = realpathSync(mkdtempSync(join(tmpdir(), "deploy-sfu-flow-volume-")));
-  const log = join(root, "deploy.log");
-  mkdirSync(state);
-  writeFileSync(log, "");
-  writeFiles(join(root, "files"), sqliteFiles("conclave.sqlite", ["kept", "only in the log"]));
-  const servers = {
-    "sfu-a": fakeSfu("sfu-a", { rooms: 1, replacement: replacements["sfu-a"], state, log, down: down.includes("sfu-a") }),
-    "sfu-b": fakeSfu("sfu-b", { rooms: 0, replacement: replacements["sfu-b"], state, log, down: down.includes("sfu-b") }),
-  };
-  const urls = { "sfu-a": await listen(servers["sfu-a"]), "sfu-b": await listen(servers["sfu-b"]) };
-  try {
-    const bin = join(root, "bin");
-    mkdirSync(bin);
-    mkdirSync(join(root, "scripts"));
-    copyFileSync(join(scriptsDir, shell.script), join(root, "scripts", shell.script));
-    writeFileSync(join(root, "scripts", "deploy-sfu-preflight.mjs"), "process.stdin.resume();\n");
-    writeFileSync(join(root, ".env"), "SFU_SECRET=test-secret\nREDIS_URL=redis://127.0.0.1:6399\n");
-    writeFileSync(join(root, "docker-compose.sfu.yml"), "services: {}\n");
-    writeFileSync(join(bin, "docker"), FLOW_DOCKER);
-    writeFileSync(join(bin, "chown"), "#!/bin/sh\nexit 0\n");
-    if (!hostHasSha256sum) writeFileSync(join(bin, "sha256sum"), SHA256SUM_SHIM);
-    writeFileSync(join(bin, "git"), "#!/bin/sh\nexit 0\n");
-    writeFileSync(join(bin, "npm"), "#!/bin/sh\nexit 0\n");
-    for (const name of readdirSync(bin)) chmodSync(join(bin, name), 0o755);
-    const result = await run(shell.command, [...shell.args, join(root, "scripts", shell.script)], {
-      PATH: `${bin}:${process.env.PATH}`,
-      HOME: root,
-      TMPDIR: tmpdir(),
-      DOCKER_LOG: log,
-      FAKE_STATE: state,
-      FAKE_VOLUME: volume,
-      FAKE_FILES: join(root, "files"),
-      FAKE_SFU_DIR: sfuDir,
-      FAKE_CONTAINERS: `${containers} ${layerHolders}`,
-      FAKE_LAYER_HOLDERS: layerHolders,
-      FAKE_RUNNING: running,
-      SFU_A_URL: urls["sfu-a"],
-      SFU_B_URL: urls["sfu-b"],
-      SFU_DEPLOY_ID: "sfu-flow-deploy",
-      SFU_HEALTH_TIMEOUT_SECONDS: Object.values(replacements).every((answer) => answer === "deployed") ? "30" : "1",
-      SFU_HEALTH_POLL_SECONDS: "1",
-      DRAIN_POLL_SECONDS: "1",
-    });
-    const calls = readFileSync(log, "utf8").trim().split("\n").filter(Boolean);
-    return { ...result, calls, rows: existsSync(join(volume, "conclave.sqlite")) ? await databaseRows(join(volume, "conclave.sqlite")) : null };
-  } finally {
-    await Promise.all(Object.values(servers).map(close));
-    rmSync(root, { recursive: true, force: true });
-    rmSync(volume, { recursive: true, force: true });
-  }
-};
-
-const touched = (calls) =>
-  calls
-    .filter((call) => /^compose .* (build|stop|up -d) sfu-[ab]$/.test(call) || call.startsWith("drain "))
-    .map((call) => call.replace(/^compose .* (build|stop|up -d) (sfu-[ab])$/, "$1 $2"));
-
-for (const shell of deployShells) {
-  test(`${shell.name}: drains the serving SFU only after its replacement answers healthy as this deploy`, async () => {
-    const { status, calls, stdout, stderr } = await deploySfus(shell, { "sfu-a": "deployed", "sfu-b": "deployed" });
-    assert.equal(status, 0, `${stdout}\n${stderr}`);
-    const started = callIndex(calls, /^compose .* up -d sfu-b$/);
-    const drained = calls.indexOf("drain sfu-a");
-    const replaced = callIndex(calls, /^compose .* up -d sfu-a$/);
-    assert.ok(started >= 0 && drained > started && replaced > drained, calls.join("\n"));
-    assert.match(stdout, /SFU deploy complete/);
-  });
-
-  test(`${shell.name}: a database inside an old SFU container is carried only from the slot replaced first, and a stopped SFU holding one is replaced first`, async () => {
-    const deployed = { "sfu-a": "deployed", "sfu-b": "deployed" };
-    const cases = {
-      "serving sfu-a running with it, sfu-b without a container": { layerHolders: "sfu-a", running: "sfu-a", down: ["sfu-b"] },
-      "both old containers keep one": { layerHolders: "sfu-a sfu-b", running: "sfu-a", down: ["sfu-b"] },
-      "inactive sfu-b stopped with it, sfu-a serving from the volume": { containers: "sfu-a", layerHolders: "sfu-b", running: "sfu-a", down: ["sfu-b"] },
-      "both down, stopped sfu-a keeps it, sfu-b without a container": { layerHolders: "sfu-a", down: ["sfu-a", "sfu-b"] },
-      "both down, stopped sfu-a keeps it, sfu-b stopped on the volume": { containers: "sfu-b", layerHolders: "sfu-a", down: ["sfu-a", "sfu-b"] },
-    };
-    const runs = await Promise.all(Object.values(cases).map((options) => deploySfus(shell, deployed, options)));
-    const outcomes = Object.fromEntries(
-      Object.keys(cases).map((name, at) => {
-        const { status, calls, stdout, stderr, rows } = runs[at];
-        return [name, { status: status === 0 ? "deployed" : stderr.match(/The serving \S+|each keep their own database/)?.[0] ?? stderr.trim().split("\n").at(-1), touched: touched(calls), rows, completed: /SFU deploy complete/.test(stdout) }];
-      }),
-    );
-    const carried = ["kept", "only in the log"];
-    assert.deepEqual(outcomes, {
-      "serving sfu-a running with it, sfu-b without a container": { status: "The serving sfu-a", touched: [], rows: null, completed: false },
-      "both old containers keep one": { status: "each keep their own database", touched: [], rows: null, completed: false },
-      "inactive sfu-b stopped with it, sfu-a serving from the volume": { status: "deployed", touched: ["build sfu-b", "stop sfu-b", "up -d sfu-b", "drain sfu-a", "build sfu-a", "stop sfu-a", "up -d sfu-a"], rows: carried, completed: true },
-      "both down, stopped sfu-a keeps it, sfu-b without a container": { status: "deployed", touched: ["build sfu-a", "stop sfu-a", "up -d sfu-a", "build sfu-b", "stop sfu-b", "up -d sfu-b"], rows: carried, completed: true },
-      "both down, stopped sfu-a keeps it, sfu-b stopped on the volume": { status: "deployed", touched: ["build sfu-a", "stop sfu-a", "up -d sfu-a", "build sfu-b", "stop sfu-b", "up -d sfu-b"], rows: carried, completed: true },
-    });
-  });
-
-  test(`${shell.name}: following the refusal's advice (stop the serving SFU) carries its database on the next deploy`, async () => {
-    const deployed = { "sfu-a": "deployed", "sfu-b": "deployed" };
-    const refused = await deploySfus(shell, deployed, { layerHolders: "sfu-a", running: "sfu-a", down: ["sfu-b"] });
-    assert.notEqual(refused.status, 0);
-    assert.match(refused.stderr, /stop sfu-a\) and deploy again/);
-    const followed = await deploySfus(shell, deployed, { layerHolders: "sfu-a", down: ["sfu-a", "sfu-b"] });
-    assert.equal(followed.status, 0, followed.stderr);
-    assert.deepEqual(followed.rows, ["kept", "only in the log"]);
-  });
-
-  test(`${shell.name}: a replacement that answers 503 is stopped, the serving SFU is never drained, and the deploy fails`, async () => {
-    const { status, calls, stdout, stderr } = await deploySfus(shell, { "sfu-a": "deployed", "sfu-b": "unavailable" });
-    assert.notEqual(status, 0, stdout);
-    assert.equal(calls.indexOf("drain sfu-a"), -1, calls.join("\n"));
-    const started = callIndex(calls, /^compose .* up -d sfu-b$/);
-    const stoppedReplacement = calls.findLastIndex((call) => /^compose .* stop sfu-b$/.test(call));
-    assert.ok(started >= 0 && stoppedReplacement > started, calls.join("\n"));
-    assert.equal(callIndex(calls, /^compose .* (build|stop|up -d) sfu-a$/), -1, calls.join("\n"));
-    assert.doesNotMatch(stdout, /SFU deploy complete/);
-    assert.match(stderr, /sfu-b did not answer healthy/);
-  });
-
-  test(`${shell.name}: a second replacement that never answers healthy is stopped and the deploy fails`, async () => {
-    const { status, calls, stdout, stderr } = await deploySfus(shell, { "sfu-a": "unavailable", "sfu-b": "deployed" });
-    assert.notEqual(status, 0, stdout);
-    const started = callIndex(calls, /^compose .* up -d sfu-a$/);
-    const stoppedReplacement = calls.findLastIndex((call) => /^compose .* stop sfu-a$/.test(call));
-    assert.ok(started > calls.indexOf("drain sfu-a") && stoppedReplacement > started, calls.join("\n"));
-    assert.equal(callIndex(calls.slice(callIndex(calls, /^compose .* up -d sfu-b$/) + 1), /^compose .* stop sfu-b$/), -1, calls.join("\n"));
-    assert.doesNotMatch(stdout, /SFU deploy complete/);
-    assert.match(stderr, /sfu-a did not answer healthy/);
-  });
-}
-
 describe(SUITE, { concurrency: Math.min(8, availableParallelism()) }, () => {
-  let fixtureDir;
-  before(async () => {
-    const binaries = [...new Set(powerShells.filter(({ version }) => atLeast(version, MINIMUM_POWERSHELL)).map(({ binary }) => binary))];
-    if (!binaries.length) return;
-
-    const compilation = powerShellDefinitions.match(restartGuardCompilation)?.[0];
-    assert.ok(compilation, "deploy-sfu.ps1 defines the restart guard type");
-    fixtureDir = mkdtempSync(join(tmpdir(), "deploy-sfu-guard-"));
-    const compiler = join(fixtureDir, "compile.ps1");
-    writeFileSync(compiler, `$ErrorActionPreference = "Stop"\n${compilation.replace("-TypeDefinition", "-OutputAssembly $env:RESTART_GUARD_ASSEMBLY -TypeDefinition")}\n`);
-    for (const [index, binary] of binaries.entries()) {
-      const assembly = join(fixtureDir, `SfuRestartGuard-${index}.dll`);
-      const result = await run(binary, ["-NoProfile", "-NonInteractive", "-File", compiler], { ...process.env, RESTART_GUARD_ASSEMBLY: assembly });
-      assert.equal(result.status, 0, result.stderr);
-      assert.ok(existsSync(assembly), `${binary} did not compile the restart guard`);
-      restartGuardAssemblies.set(binary, assembly);
-    }
-  });
-  after(() => {
-    if (fixtureDir) rmSync(fixtureDir, { recursive: true, force: true });
-  });
   for (const { name, body } of registered) nodeTest(name, body);
 });

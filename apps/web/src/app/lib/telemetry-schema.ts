@@ -141,7 +141,7 @@ export const WEBCAM_RESET_FAILURE = z.enum([
   "replacement-rollback-unconfirmed", "replacement-threw",
 ]);
 export const TURN_FALLBACK_REASON = z.enum([
-  "producer_ice_unrecovered", "producer_ice_failed", "consumer_ice_unrecovered", "consumer_ice_failed",
+  "producer_ice_unrecovered", "producer_ice_failed", "consumer_ice_unrecovered", "consumer_ice_failed", "media_path_rebuild",
 ]);
 export const RESUME_FAILURE = z.enum(["ack_timeout", "displaced", "rate_limited", "server_error"]);
 export const STALE_CONSUMER_REASON = z.enum([
@@ -236,6 +236,15 @@ export const TELEMETRY_EVENTS = {
     maximumSpatialLayer: spatialLayer,
   }),
   meet_turn_relay_activated: z.object({ reason: TURN_FALLBACK_REASON }),
+  meet_media_path_blocked: z.object({
+    transport: z.enum(["producer", "consumer"]),
+    relayOnly: flag,
+    silentWhileConnected: flag,
+  }),
+  meet_media_path_stalled: z.object({
+    transport: z.enum(["producer", "consumer"]),
+    condition: z.enum(["idle", "flowing", "connected-without-media", "not-connected"]),
+  }),
   meet_webcam_codec_policy_changed: z.object({ from: CODEC, to: CODEC, epoch: count }),
   meet_consumer_resume_exhausted: z.object({ kind: MEDIA_KIND, attempts: count, reason: RESUME_FAILURE }),
   meet_consumer_resume_recovered: z.object({ kind: MEDIA_KIND, attempts: count }),

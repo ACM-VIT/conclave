@@ -76,3 +76,13 @@ test("Cloudflare inlines Next.js preview props and rejects unknown manifests", a
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("staging has its own namespaces for every production Worker rate limiter", () => {
+  const { unstable_readConfig: readConfig } = require("wrangler");
+  const config = path.join(import.meta.dirname, "../apps/web/wrangler.jsonc");
+  const production = readConfig({ config }).ratelimits;
+  const staging = readConfig({ config, env: "staging" }).ratelimits;
+  assert.deepEqual(staging.map(({ name }) => name).toSorted(), production.map(({ name }) => name).toSorted());
+  const namespaces = [...production, ...staging].map(({ namespace_id }) => namespace_id);
+  assert.equal(new Set(namespaces).size, namespaces.length);
+});
