@@ -1,0 +1,47 @@
+{
+  "note": "Sol, round 7: a 16.5 s gap between samples, then a freeze that resumes 603 ms after it.",
+  "samples": [
+    {
+      "at": 5357,
+      "stat": {
+        "type": "inbound-rtp",
+        "kind": "video",
+        "mid": "0",
+        "id": "IT01V1221966000",
+        "packetsReceived": 170,
+        "bytesReceived": 19004,
+        "framesDecoded": 149,
+        "freezeCount": 0,
+        "totalFreezesDuration": 0
+      }
+    },
+    {
+      "at": 21862,
+      "stat": {
+        "type": "inbound-rtp",
+        "kind": "video",
+        "mid": "0",
+        "id": "IT01V1221966000",
+        "packetsReceived": 610,
+        "bytesReceived": 67198,
+        "framesDecoded": 590,
+        "freezeCount": 0,
+        "totalFreezesDuration": 0
+      }
+    },
+    {
+      "at": 22465,
+      "stat": {
+        "type": "inbound-rtp",
+        "kind": "video",
+        "mid": "0",
+        "id": "IT01V1221966000",
+        "packetsReceived": 623,
+        "bytesReceived": 68633,
+        "framesDecoded": 602,
+        "freezeCount": 1,
+        "totalFreezesDuration": 2.173
+      }
+    }
+  ]
+}

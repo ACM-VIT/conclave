@@ -28,6 +28,7 @@ import {
   isSupportedChatImageType,
 } from "../lib/chat-images";
 import { replaceEmojiShortcodesInMessage } from "../lib/emoji-shortcodes";
+import { ServerError } from "../lib/server-error";
 import {
   ConclaveAssistantApiKeyRequiredError,
   type AssistantChatMessage,
@@ -44,6 +45,7 @@ import {
   parseConclaveMention,
   streamConclaveAssistant,
 } from "../lib/conclave-assistant";
+import { logCallError } from "../lib/call-error-capture";
 
 export interface ConclaveAssistantContext {
   transcript: string;
@@ -215,7 +217,7 @@ export function useMeetChat({
             window.clearTimeout(timeoutId);
             if (!response || "error" in response) {
               reject(
-                new Error(
+                new ServerError(
                   response?.error || "Conclave could not authorize this answer.",
                 ),
               );
@@ -591,8 +593,8 @@ export function useMeetChat({
             "error" in response ? previous : (response.reactions ?? []);
 
           if ("error" in response) {
-            console.error(
-              "[Meets] Failed to toggle message reaction:",
+            logCallError(
+              "[Meets] Failed to toggle message reaction",
               response.error,
             );
           }
@@ -671,7 +673,7 @@ export function useMeetChat({
               | { error: string },
           ) => {
             if ("error" in response) {
-              console.error("[Meets] Chat error:", response.error);
+              logCallError("[Meets] Chat error", response.error);
               setChatMessages((prev) =>
                 prev.filter((message) => message.id !== optimisticMessage.id),
               );
@@ -962,7 +964,7 @@ export function useMeetChat({
             ) => {
               window.clearTimeout(timeoutId);
               if (!response || "error" in response) {
-                reject(new Error(response?.error || "Image upload unavailable."));
+                reject(new ServerError(response?.error || "Image upload unavailable."));
                 return;
               }
               resolve(response);

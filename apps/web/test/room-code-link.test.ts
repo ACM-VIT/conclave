@@ -356,7 +356,7 @@ describe("pasting into the join code field", () => {
 
   it("ignores a link to any of the app's own top-level pages", () => {
     expect(TOP_LEVEL_ROUTES).toEqual([...APP_ROUTE_SEGMENTS].sort());
-    for (const page of ["book", "w", "api", "sign-in", "privacy", "schedule", "sfu-admin", "delete-account"]) {
+    for (const page of TOP_LEVEL_ROUTES) {
       expect({ page, code: linkCode(`https://conclave.acmvit.in/${page}`) }).toEqual({ page, code: null });
       expect({ page, code: linkCode(`conclave.acmvit.in/${page}/`) }).toEqual({ page, code: null });
     }
