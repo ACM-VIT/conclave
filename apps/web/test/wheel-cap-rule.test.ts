@@ -6,8 +6,9 @@ import {
   clearEntries,
   createWheelDoc,
   getEntries,
+  getWheelNames,
   removeEntryById,
-  replaceEntries,
+  reorderEntries,
 } from "../../../packages/apps-sdk/src/apps/wheel/core/doc/index";
 
 const sync = (from: Y.Doc, to: Y.Doc) => Y.applyUpdate(to, Y.encodeStateAsUpdate(from, Y.encodeStateVector(to)));
@@ -24,9 +25,12 @@ const replicaOf = (doc: Y.Doc): Y.Doc => {
   return replica;
 };
 
-const rows = (doc: Y.Doc): Y.Array<unknown> => doc.getMap("wheel").get("entries") as Y.Array<unknown>;
+const rows = (doc: Y.Doc): Y.Array<unknown> => doc.getArray("wheel.entries");
 
-const stored = (doc: Y.Doc): string[] => (rows(doc).toArray() as { label: string }[]).map((row) => row.label);
+const stored = (doc: Y.Doc): string[] => {
+  const { shown, waiting } = getWheelNames(doc);
+  return [...shown, ...waiting].map(({ label }) => label);
+};
 
 const shown = (doc: Y.Doc): string[] => getEntries(doc).map((entry) => entry.label);
 
@@ -113,7 +117,7 @@ describe("wheel cap with several editors", () => {
       expect(everyone).toHaveLength(66);
 
       const current = getEntries(ada);
-      replaceEntries(ada, change === "sort" ? [...current].sort((a, b) => a.label.localeCompare(b.label)) : [...current].reverse());
+      reorderEntries(ada, change === "sort" ? [...current].sort((a, b) => a.label.localeCompare(b.label)) : [...current].reverse());
       settle([ada, ben]);
 
       expect([...stored(ben)].sort(), change).toEqual(everyone);
@@ -138,6 +142,7 @@ describe("wheel cap with several editors", () => {
 
     removeEntryById(doc, first.id);
 
+    expect(rows(doc).length).toBe(65);
     expect(stored(doc)).toEqual([...named("N", 64).slice(1), "Waiting 1", "Waiting 2"]);
     expect(shown(doc)).toEqual([...named("N", 64).slice(1), "Waiting 1"]);
   });
@@ -196,12 +201,10 @@ describe("wheel cap with several editors", () => {
             break;
           }
           case 3: {
-            settle(editors);
             const before = [...stored(doc)].sort();
             const current = getEntries(doc);
-            replaceEntries(doc, random(2) === 0 ? [...current].reverse() : [...current].sort((a, b) => a.label.localeCompare(b.label)));
+            reorderEntries(doc, random(2) === 0 ? [...current].reverse() : [...current].sort((a, b) => a.label.localeCompare(b.label)));
             expect([...stored(doc)].sort(), where).toEqual(before);
-            settle(editors);
             break;
           }
           default: {
@@ -220,4 +223,37 @@ describe("wheel cap with several editors", () => {
       }
     }
   });
+});
+
+it.each(["sort", "shuffle"] as const)("%s preserves concurrent removal, clear and new names", (command) => {
+  for (const change of ["remove", "clear"] as const) {
+    const base = createWheelDoc();
+    addEntries(base, ["Cy", "Ada", "Bo", "Cy"]);
+    const editor = replicaOf(base);
+    const reordering = replicaOf(base);
+    const added = replicaOf(base);
+    const original = getEntries(base);
+    if (change === "clear") clearEntries(editor);
+    else removeEntryById(editor, original[0].id);
+    expect(addEntries(added, ["Dee"])).toBe(1);
+
+    const next = command === "sort" ? [...original].sort((a, b) => a.label.localeCompare(b.label)) : [...original].reverse();
+    reorderEntries(reordering, next);
+    expect(getEntries(reordering)).toEqual(next);
+    const expected = [...(change === "clear" ? [] : next.filter(({ id }) => id !== original[0].id)), getEntries(added).at(-1)];
+
+    settle([editor, reordering, added]);
+    for (const doc of [editor, reordering, added, replicaOf(reordering)]) {
+      expect(getEntries(doc), change).toEqual(expected);
+    }
+  }
+});
+
+it("keeps concurrent first names on an empty wheel", () => {
+  const editors = [createWheelDoc(), createWheelDoc()];
+  expect(addEntries(editors[0], ["Ada"])).toBe(1);
+  expect(addEntries(editors[1], ["Bo"])).toBe(1);
+  settle(editors);
+  expect(shown(editors[0]).sort()).toEqual(["Ada", "Bo"]);
+  expect(shown(editors[1])).toEqual(shown(editors[0]));
 });

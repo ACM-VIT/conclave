@@ -8,7 +8,7 @@ import {
   normalizeLabel,
   readAddRecord,
   removeEntryById,
-  replaceEntries,
+  reorderEntries,
   setRemoveWinnerOnDone,
   type WheelEntry,
   type WheelResult,
@@ -154,13 +154,13 @@ export const runWheelCommand = (
     }
     case "shuffle": {
       const current = getEntries(doc);
-      if (current.length >= 2) replaceEntries(doc, shuffled(current));
+      if (current.length >= 2) reorderEntries(doc, shuffled(current));
       return { ok: true };
     }
     case "sort": {
       const current = getEntries(doc);
       if (current.length >= 2) {
-        replaceEntries(doc, [...current].sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" })));
+        reorderEntries(doc, [...current].sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" })));
       }
       return { ok: true };
     }

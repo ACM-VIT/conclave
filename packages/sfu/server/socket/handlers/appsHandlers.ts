@@ -339,10 +339,12 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       return;
     }
 
-    socket.to(context.currentRoom.channelId).emit("apps:yjs:update", {
+    const published = {
       appId,
       update,
-    } satisfies AppsUpdateData);
+    } satisfies AppsUpdateData;
+    socket.to(context.currentRoom.channelId).emit("apps:yjs:update", published);
+    if (appId === "wheel") socket.emit("apps:yjs:update", published);
   });
 
   socket.on("apps:awareness", (data: AppsAwarenessData) => {

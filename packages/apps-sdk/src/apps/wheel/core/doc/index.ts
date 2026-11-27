@@ -10,7 +10,8 @@ import { cutText } from "../../../../sdk/text";
 import { hasVisibleText } from "../labels";
 
 const ROOT_KEY = "wheel";
-const ENTRIES_KEY = "entries";
+const ENTRIES_ROOT = "wheel.entries";
+const ORDER_KEY = "order";
 const SPIN_KEY = "spin";
 const HISTORY_KEY = "history";
 const SETTINGS_KEY = "settings";
@@ -48,14 +49,9 @@ export type WheelResult = {
   byName: string;
 };
 
-type EntriesArray = Y.Array<WheelEntry>;
-
 const getRoot = (doc: Y.Doc): Y.Map<unknown> => getAppRoot(doc, ROOT_KEY);
 
-const readEntriesArray = (doc: Y.Doc): EntriesArray | null => {
-  const value = getRoot(doc).get(ENTRIES_KEY);
-  return value instanceof Y.Array ? (value as EntriesArray) : null;
-};
+const entriesOf = (doc: Y.Doc): Y.Array<unknown> => doc.getArray(ENTRIES_ROOT);
 
 const CONTROL_CHARACTERS = /\p{Cc}/gu;
 
@@ -111,9 +107,9 @@ const pruneTo = (array: Y.Array<unknown>, indexes: number[]): void => {
 const readNames = (records: readonly unknown[]): Accepted<WheelEntry> =>
   readable(records, readEntry, (entry) => entry.id);
 
-const prunedNames = (entries: EntriesArray): WheelEntry[] => {
+const prunedNames = (entries: Y.Array<unknown>): WheelEntry[] => {
   const names = readNames(entries.toArray());
-  pruneTo(entries as Y.Array<unknown>, names.indexes);
+  pruneTo(entries, names.indexes);
   return names.kept;
 };
 
@@ -125,8 +121,20 @@ export const createWheelDoc = (): Y.Doc => createAppDoc(ROOT_KEY);
 export type WheelNames = { shown: WheelEntry[]; waiting: WheelEntry[] };
 
 export const getWheelNames = (doc: Y.Doc): WheelNames => {
-  const entries = readEntriesArray(doc);
-  const names = entries ? readNames(entries.toArray()).kept : [];
+  const members = readNames(entriesOf(doc).toArray()).kept;
+  const remaining = new Map(members.map((entry) => [entry.id, entry]));
+  const order = getRoot(doc).get(ORDER_KEY);
+  const names: WheelEntry[] = [];
+  if (Array.isArray(order)) {
+    for (const id of order) {
+      if (typeof id !== "string") continue;
+      const entry = remaining.get(id);
+      if (!entry) continue;
+      names.push(entry);
+      remaining.delete(id);
+    }
+  }
+  names.push(...remaining.values());
   return { shown: names.slice(0, MAX_WHEEL_ENTRIES), waiting: names.slice(MAX_WHEEL_ENTRIES) };
 };
 
@@ -134,7 +142,7 @@ export const getEntries = (doc: Y.Doc): WheelEntry[] => getWheelNames(doc).shown
 
 const pushLabels = (doc: Y.Doc, labels: readonly string[]): number => {
   if (labels.length === 0) return 0;
-  const entries = ensureAppArray(getRoot(doc), ENTRIES_KEY) as EntriesArray;
+  const entries = entriesOf(doc);
   const room = MAX_WHEEL_ENTRIES - prunedNames(entries).length;
   if (room <= 0) return 0;
   const batch = labels.slice(0, room).map((label) => ({ id: createEntryId(), label }));
@@ -193,7 +201,8 @@ export type AddRecord = { added: ReadonlySet<string>; reachesBack: boolean };
 
 export const readAddRecord = (doc: Y.Doc, sentAt: number): AddRecord => {
   const ledger = readLedger(doc.getArray<unknown>(ADD_RECEIPTS_ROOT).toArray());
-  return { added: ledger.tokens, reachesBack: sentAt > ledger.floor };
+  const complete = !doc.store.pendingStructs && !doc.store.pendingDs;
+  return { added: ledger.tokens, reachesBack: complete && sentAt > ledger.floor };
 };
 
 export type TokenedLabel = { token: string; label: string };
@@ -223,8 +232,7 @@ export const addEntry = (doc: Y.Doc, rawLabel: string): boolean =>
   addEntries(doc, [rawLabel]) === 1;
 
 export const removeEntryById = (doc: Y.Doc, entryId: string): void => {
-  const entries = readEntriesArray(doc);
-  if (!entries) return;
+  const entries = entriesOf(doc);
   doc.transact(() => {
     const index = prunedNames(entries).findIndex((entry) => entry.id === entryId);
     if (index < 0) return;
@@ -233,19 +241,14 @@ export const removeEntryById = (doc: Y.Doc, entryId: string): void => {
 };
 
 export const clearEntries = (doc: Y.Doc): void => {
-  const entries = readEntriesArray(doc);
-  if (!entries || entries.length === 0) return;
-  entries.delete(0, entries.length);
+  const entries = entriesOf(doc);
+  if (entries.length > 0) entries.delete(0, entries.length);
 };
 
-export const replaceEntries = (doc: Y.Doc, next: WheelEntry[]): void => {
-  doc.transact(() => {
-    const entries = ensureAppArray(getRoot(doc), ENTRIES_KEY) as EntriesArray;
-    const waiting = readNames(entries.toArray()).kept.slice(MAX_WHEEL_ENTRIES);
-    const shown = readNames(next).kept.slice(0, MAX_WHEEL_ENTRIES);
-    entries.delete(0, entries.length);
-    entries.push(readNames([...shown, ...waiting]).kept);
-  });
+export const reorderEntries = (doc: Y.Doc, next: WheelEntry[]): void => {
+  const shown = new Set(getEntries(doc).map(({ id }) => id));
+  const order = next.flatMap(({ id }) => shown.delete(id) ? [id] : []);
+  getRoot(doc).set(ORDER_KEY, order);
 };
 
 const isSpin = (value: unknown): value is WheelSpin => {

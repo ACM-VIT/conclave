@@ -233,7 +233,9 @@ const makeRoom = (mod, context) => {
             roomUpdates.push(bytes);
             Y.applyUpdate(room, bytes, "client");
             for (const other of clients) {
-              if (other !== client) deliver(other, "update", { update: message.payload.update });
+              if (other !== client || client.scope.appId === "wheel") {
+                deliver(other, "update", { update: message.payload.update });
+              }
             }
           } else if (message.type === "ack") {
             client.acks.push(message);
@@ -270,8 +272,8 @@ const makeRoom = (mod, context) => {
   return { Y, room, roomUpdates, join, pump, deliver };
 };
 
-const wheelRunner = (mod, client) => (envelope, repeat) =>
-  mod.runWheelCommand(client.session.doc, envelope.type, envelope.payload, {
+const wheelRunner = (mod, client) => (envelope, repeat, doc) =>
+  mod.runWheelCommand(doc, envelope.type, envelope.payload, {
     synced: client.session.isSynced,
     canEdit: !client.session.hostStatus.readOnly,
     repeat,
@@ -357,6 +359,10 @@ test("a wheel add delivered twice under one request id adds once and is answered
   const payload = { labels: ["Ada", "", "Bo"], tokens: ["t-ada", "t-blank", "t-bo"], sentAt: SENT_AT };
   assert.equal(harness.deliver(ada, "addEntries", payload, "h-5"), "none");
   assert.equal(harness.deliver(ada, "addEntries", payload, "h-5"), "none");
+  assert.deepEqual(acksFor(ada, "h-5"), []);
+  harness.pump();
+  assert.deepEqual(acksFor(ada, "h-5"), [{ ok: true, added: [0, 2] }]);
+  assert.equal(harness.deliver(ada, "addEntries", payload, "h-5"), "none");
   harness.pump();
   assert.deepEqual(namesOn(sessionModule, ada), ["Ada", "Bo"]);
   assert.deepEqual(acksFor(ada, "h-5"), [{ ok: true, added: [0, 2] }, { ok: true, added: [0, 2] }]);
@@ -395,6 +401,7 @@ test("an add is answered from the document after the session forgot its request,
   const ada = harness.join("ada", {}, true);
   const payload = { labels: ["Ada", "Bo"], tokens: ["t-ada", "t-bo"], sentAt: SENT_AT };
   harness.deliver(ada, "addEntries", payload, "h-1");
+  harness.pump();
   for (let index = 0; index < protocol.NATIVE_EMBED_LIMITS.executedCommands + 8; index += 1) {
     harness.deliver(ada, "setSounds", { value: index % 2 === 0 }, `h-s${index}`);
   }
@@ -459,11 +466,22 @@ test("the embed says ready only once it can run commands, and runs any that came
   assert.deepEqual(outbox.filter((message) => message.type === "ready" || message.type === "ack"), []);
   client.session.start(wheelRunner(mod, client));
   client.session.start(wheelRunner(mod, client));
+  const pendingUpdate = outbox.find((message) => message.type === "update");
+  assert.equal(outbox.some((message) => message.type === "ack" && message.requestId === "h-1"), false);
+  assert.deepEqual(outbox.find((message) => message.type === "ack" && message.requestId === "h-2")?.payload, {
+    ok: false, error: "notSynced",
+  });
+  const room = new mod.Y.Doc();
+  context.after(() => room.destroy());
+  mod.Y.applyUpdate(room, mod.bytesFromBase64(pendingUpdate.payload.update, 262144).bytes);
+  host("update", pendingUpdate.payload, "n-3");
+  host("addOutcome", { tokens: ["t-ada"], sentAt: SENT_AT }, "h-3");
   const said = outbox.filter((message) => message.type === "ready" || message.type === "ack");
   assert.deepEqual(said.map((message) => [message.type, message.requestId, message.payload.ok]), [
     ["ready", said[0].requestId, undefined],
+    ["ack", "h-2", false],
     ["ack", "h-1", true],
-    ["ack", "h-2", true],
+    ["ack", "h-3", true],
   ]);
   assert.deepEqual(namesOn(mod, client), ["Ada"]);
 });
@@ -484,9 +502,9 @@ test("a session closed before its page started runs none of the commands it held
   assert.equal(host("close", {}, "n-3"), "none");
   let ran = 0;
   const runner = wheelRunner(mod, client);
-  client.session.start((envelope, repeat) => {
+  client.session.start((envelope, repeat, doc) => {
     ran += 1;
-    return runner(envelope, repeat);
+    return runner(envelope, repeat, doc);
   });
   assert.equal(ran, 0, "a held command never runs after close");
   assert.deepEqual(outbox.filter((message) => message.type === "ready" || message.type === "ack"), []);

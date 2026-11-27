@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { addEntries, clearEntries, createWheelDoc, getEntries } from "../../../packages/apps-sdk/src/apps/wheel/core/doc/index";
+import { addEntries, clearEntries, createWheelDoc, getEntries, removeEntryById, setRemoveWinnerOnDone } from "../../../packages/apps-sdk/src/apps/wheel/core/doc/index";
 import { WHEEL_RECEIPT_LIMITS } from "../../../packages/apps-sdk/src/native-embed/protocol";
 import { runWheelCommand, type WheelCommandContext } from "../../../packages/apps-sdk/src/native-embed/wheel/commands";
 
@@ -159,4 +159,33 @@ describe("what the wheel says about an add whose reply was lost", () => {
     expect(cannotTell).toBeGreaterThan(20);
     expect(definite).toBeGreaterThan(20);
   });
+});
+
+it("never reports notApplied between a receipt deletion and its floor", () => {
+  const phone = device(1_800_000_000_000);
+  const room = createWheelDoc();
+  const saved = phone.send(["Ada"]);
+  expect(add(room, saved)).toEqual({ ok: true, added: [0] });
+  for (let index = 1; index < WHEEL_RECEIPT_LIMITS.count; index += 1) {
+    expect(add(room, phone.send([`Name ${index}`]))).toEqual({ ok: true, added: [0] });
+    removeEntryById(room, getEntries(room)[1].id);
+  }
+  const editor = replicaOf(room);
+  const beforeGap = Y.encodeStateVector(editor);
+  setRemoveWinnerOnDone(editor, true);
+  const gap = Y.encodeStateAsUpdate(editor, beforeGap);
+  const afterGap = Y.encodeStateVector(editor);
+  expect(add(editor, phone.send(["Grace"]))).toEqual({ ok: true, added: [0] });
+
+  Y.applyUpdate(room, Y.encodeStateAsUpdate(editor, afterGap));
+  const reloaded = replicaOf(room);
+  for (const doc of [room, reloaded]) {
+    expect(getEntries(doc).map((entry) => entry.label)).toEqual(["Ada"]);
+    expect(ask(doc, saved)).toEqual(CANNOT_TELL);
+    expect(add(doc, saved, { repeat: true })).toEqual(CANNOT_TELL);
+  }
+
+  Y.applyUpdate(reloaded, gap);
+  expect(ask(reloaded, saved)).toEqual(CANNOT_TELL);
+  expect(ask(reloaded, phone.send(["Never submitted"]))).toEqual(NOTHING_ADDED);
 });

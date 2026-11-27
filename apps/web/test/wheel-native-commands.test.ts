@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { clearEntries as legacyClearEntries, removeEntryById as legacyRemoveEntry } from "./fixtures/wheel-staging-entries";
 import {
   addEntries,
   normalizeLabel,
@@ -118,8 +117,7 @@ describe("native wheel commands", () => {
     const names = ["Host", "\u{1F389}".repeat(40), "N".repeat(63) + "\u{1F389}", "Gr\uD83Cace"];
     for (let run = 0; run < 400; run += 1) {
       const doc = createWheelDoc();
-      const entries = new Y.Array<unknown>();
-      doc.getMap("wheel").set("entries", entries);
+      const entries = doc.getArray<unknown>("wheel.entries");
       entries.push(
         Array.from({ length: random(80) }, (_, index) =>
           random(9) === 0 ? null : { id: random(3) === 0 ? ids[random(ids.length)] : `e-${index}`, label: labels[random(labels.length)] }
@@ -187,9 +185,8 @@ describe("native wheel add receipts", () => {
   const NOTHING_ADDED = { ok: false, error: "notApplied", added: [] };
   const CANNOT_TELL = { ok: false, error: "outcomeUnknown" };
 
-  it("finds both adds after two peers add to an empty record before seeing each other", () => {
+  it("finds both adds after two peers add to an empty wheel before seeing each other", () => {
     const base = createWheelDoc();
-    addEntries(base, ["Host"]);
     const ada = replicaOf(base);
     const ben = replicaOf(base);
     const adaTokens = tokensFor(["Ada"]);
@@ -202,24 +199,24 @@ describe("native wheel add receipts", () => {
       expect(outcome(doc, adaTokens)).toEqual({ ok: true, added: [0] });
       expect(outcome(doc, benTokens)).toEqual({ ok: true, added: [0] });
       expect(add(doc, ["Ada"], adaTokens)).toEqual({ ok: true, added: [0] });
-      expect(labels(doc).sort()).toEqual(["Ada", "Ben", "Host"]);
+      expect(labels(doc).sort()).toEqual(["Ada", "Ben"]);
     }
   });
 
-  it.each(["remove", "clear"] as const)("still answers added after a staging client uses %s, on a replica that never ran the add", (change) => {
+  it.each(["remove", "clear"] as const)("still answers added after another editor uses %s, on a replica that never ran the add", (change) => {
     const origin = createWheelDoc();
     const updates: Uint8Array[] = [];
     origin.on("update", (update: Uint8Array) => updates.push(update));
     const tokens = tokensFor(["Ada", "", "Bo"]);
     expect(add(origin, ["Ada", "", "Bo"], tokens)).toEqual({ ok: true, added: [0, 2] });
     expect(updates).toHaveLength(1);
-    const legacy = createWheelDoc();
-    Y.applyUpdate(legacy, updates[0]);
+    const editor = createWheelDoc();
+    Y.applyUpdate(editor, updates[0]);
 
-    if (change === "remove") legacyRemoveEntry(legacy, getEntries(origin)[0].id);
-    else legacyClearEntries(legacy);
+    if (change === "remove") removeEntryById(editor, getEntries(origin)[0].id);
+    else clearEntries(editor);
 
-    const reloaded = replicaOf(legacy);
+    const reloaded = replicaOf(editor);
     const survivors = change === "remove" ? ["Bo"] : [];
     expect(labels(reloaded)).toEqual(survivors);
     expect(outcome(reloaded, tokens)).toEqual({ ok: true, added: [0, 2] });

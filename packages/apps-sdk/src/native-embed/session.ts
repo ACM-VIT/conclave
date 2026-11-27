@@ -69,9 +69,10 @@ export type WatchAppStatus = {
 export type AppStatusPayload = { app: WheelAppStatus | WatchAppStatus };
 
 export type CommandResult = { ok: boolean; error?: string; pngBase64?: string; added?: number[] };
-export type CommandHandler = (envelope: Envelope<NativeToEmbedType>, repeat: boolean) => CommandResult;
+export type CommandHandler = (envelope: Envelope<NativeToEmbedType>, repeat: boolean, doc: Y.Doc) => CommandResult;
 
 type HeldCommand = { envelope: Envelope<NativeToEmbedType>; repeat: boolean };
+type PendingAdd = { client: number; clock: number; result: CommandResult };
 
 type AwarenessChange = { added: number[]; updated: number[]; removed: number[] };
 
@@ -97,6 +98,8 @@ export class NativeEmbedSession {
   readonly rejections: RejectionReason[] = [];
 
   private readonly transport: NativeTransport;
+  private readonly roomDoc: Y.Doc | null;
+  private readonly pendingAdds = new Map<string, PendingAdd>();
   private host: HostStatus = INITIAL_HOST_STATUS;
   private synced = false;
   private closed = false;
@@ -115,6 +118,7 @@ export class NativeEmbedSession {
     this.transport = transport;
     this.scope = scope;
     this.doc = doc;
+    this.roomDoc = scope.appId === "wheel" ? new Y.Doc() : null;
     this.awareness = new Awareness(doc);
     doc.on("update", this.handleDocUpdate);
     this.awareness.on("update", this.handleAwarenessUpdate);
@@ -129,7 +133,7 @@ export class NativeEmbedSession {
       this.send("ready", {
         bundleVersion: NATIVE_EMBED_BUNDLE_VERSION,
         appId: this.scope.appId,
-        stateVector: base64FromBytes(Y.encodeStateVector(this.doc)),
+        stateVector: this.roomVector(),
       });
     }
     for (const command of this.held.splice(0)) this.runCommand(command.envelope, command.repeat);
@@ -203,7 +207,7 @@ export class NativeEmbedSession {
         return "none";
       case "resync":
         this.synced = false;
-        this.send("sync", { stateVector: base64FromBytes(Y.encodeStateVector(this.doc)) });
+        this.send("sync", { stateVector: this.roomVector() });
         this.notify();
         return "none";
       case "close":
@@ -253,6 +257,8 @@ export class NativeEmbedSession {
     this.awarenessTimer = null;
     this.pendingAwareness.clear();
     this.held.length = 0;
+    this.pendingAdds.clear();
+    this.roomDoc?.destroy();
     this.commandHandler = null;
     this.doc.off("update", this.handleDocUpdate);
     this.awareness.off("update", this.handleAwarenessUpdate);
@@ -293,10 +299,16 @@ export class NativeEmbedSession {
 
   private applyRemoteUpdate(bytes: Uint8Array): void {
     try {
+      if (this.roomDoc) Y.applyUpdate(this.roomDoc, bytes, REMOTE);
       Y.applyUpdate(this.doc, bytes, REMOTE);
+      this.acknowledgePublishedAdds();
     } catch {
       this.rejections.push("badPayload");
     }
+  }
+
+  private roomVector(): string {
+    return base64FromBytes(Y.encodeStateVector(this.roomDoc ?? this.doc));
   }
 
   private applyHostStatus(payload: Record<string, unknown>): void {
@@ -322,16 +334,62 @@ export class NativeEmbedSession {
     let result: CommandResult = { ok: false, error: "notReady" };
     if (handler) {
       try {
-        result = handler(envelope, repeat);
+        if (this.roomDoc && envelope.type === "addEntries") {
+          if (this.pendingAdds.has(envelope.requestId)) return;
+          const immediate = this.runWheelAdd(handler, envelope, repeat, this.roomDoc);
+          if (!immediate) return;
+          result = immediate;
+        } else if (this.roomDoc && envelope.type === "addOutcome") {
+          result = handler(envelope, repeat, this.roomDoc);
+          if (result.error === "notApplied" &&
+              (this.host.connection !== "live" || handler(envelope, repeat, this.doc).error !== "notApplied")) {
+            result = { ok: false, error: "notSynced" };
+          }
+        } else {
+          result = handler(envelope, repeat, this.doc);
+        }
       } catch {
         result = { ok: false, error: "failed" };
       }
     }
+    this.acknowledge(envelope.requestId, result);
+  }
+
+  private runWheelAdd(
+    handler: CommandHandler,
+    envelope: Envelope<NativeToEmbedType>,
+    repeat: boolean,
+    room: Y.Doc,
+  ): CommandResult | undefined {
+    if (this.host.connection !== "live") return { ok: false, error: "notSynced", added: [] };
+    const client = this.doc.clientID;
+    const before = Y.getState(this.doc.store, client);
+    const result = handler(envelope, repeat, this.doc);
+    if (!result.ok || !result.added?.length) return result;
+    const clock = Y.getState(this.doc.store, client);
+    if (clock === before) {
+      const confirmed = handler({ ...envelope, type: "addOutcome" }, repeat, room);
+      return confirmed.ok ? confirmed : { ok: false, error: "notSynced" };
+    }
+    this.pendingAdds.set(envelope.requestId, { client, clock, result });
+    this.acknowledgePublishedAdds();
+  }
+
+  private acknowledgePublishedAdds(): void {
+    if (!this.roomDoc) return;
+    for (const [id, add] of this.pendingAdds) {
+      if (Y.getState(this.roomDoc.store, add.client) < add.clock) continue;
+      this.pendingAdds.delete(id);
+      this.acknowledge(id, add.result);
+    }
+  }
+
+  private acknowledge(requestId: string, result: CommandResult): void {
     const payload: Record<string, unknown> = { ok: result.ok };
     if (result.error) payload.error = result.error.slice(0, 64);
     if (result.pngBase64) payload.pngBase64 = result.pngBase64;
     if (result.added) payload.added = result.added.slice(0, WHEEL_LIMITS.entries);
-    this.send("ack", payload, envelope.requestId);
+    this.send("ack", payload, requestId);
   }
 
   private readonly handleDocUpdate = (update: Uint8Array, origin: unknown): void => {
@@ -371,7 +429,10 @@ export class NativeEmbedSession {
     this.executed.add(requestId);
     if (this.executed.size <= NATIVE_EMBED_LIMITS.executedCommands) return;
     const oldest = this.executed.values().next();
-    if (!oldest.done) this.executed.delete(oldest.value);
+    if (!oldest.done) {
+      this.executed.delete(oldest.value);
+      this.pendingAdds.delete(oldest.value);
+    }
   }
 
   private noteSeen(requestId: string): void {

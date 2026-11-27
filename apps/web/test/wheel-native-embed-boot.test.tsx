@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 import { act } from "react";
+import * as Y from "yjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { encodeEnvelope } from "../../../packages/apps-sdk/src/native-embed/protocol";
+import { bytesFromBase64, encodeEnvelope } from "../../../packages/apps-sdk/src/native-embed/protocol";
 
 vi.mock("../../../packages/apps-sdk/src/apps/wheel/web/components/WheelStage", () => ({
   WheelStage: () => null,
@@ -28,6 +29,7 @@ describe("native wheel embed boot", () => {
   it("says ready only once it can answer, so what native asks at once is answered from the document", async () => {
     const host = window as EmbedWindow;
     const posted: Posted[] = [];
+    const room = new Y.Doc();
     const send = (type: string, payload: Record<string, unknown>, requestId: string) =>
       host.conclaveNativeEmbed?.receive(encodeEnvelope(type as never, SCOPE, requestId, payload));
     host.webkit = {
@@ -36,6 +38,12 @@ describe("native wheel embed boot", () => {
           postMessage: (raw: string) => {
             const message = JSON.parse(raw) as Posted;
             posted.push(message);
+            if (message.type === "update") {
+              const update = bytesFromBase64(message.payload.update, 1_000_000);
+              if (!update.ok) throw new Error(update.reason);
+              Y.applyUpdate(room, update.bytes);
+              send("update", message.payload, `room-${message.requestId}`);
+            }
             if (message.type !== "ready") return;
             send("status", { readOnly: false, connection: "live", userId: "me", userName: "Me" }, "n-1");
             send("snapshot", { syncMessage: "", stateVector: "" }, message.requestId);
@@ -64,5 +72,6 @@ describe("native wheel embed boot", () => {
       | { entries: { label: string }[] }
       | undefined;
     expect(status?.entries.map((entry) => entry.label)).toEqual(["Ada"]);
+    room.destroy();
   });
 });

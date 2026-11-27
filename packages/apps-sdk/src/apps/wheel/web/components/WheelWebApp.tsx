@@ -18,7 +18,7 @@ import {
   getRemoveWinnerOnDone,
   recordResult,
   removeEntryById,
-  replaceEntries,
+  reorderEntries,
   setRemoveWinnerOnDone,
   slotLabel,
   startSpin,
@@ -267,7 +267,7 @@ export function WheelWebApp() {
       const j = Math.floor(Math.random() * (i + 1));
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
-    replaceEntries(doc, shuffled);
+    reorderEntries(doc, shuffled);
   }, [doc, isLive]);
 
   const handleSort = useCallback(() => {
@@ -277,7 +277,7 @@ export function WheelWebApp() {
     const sorted = [...current].sort((a, b) =>
       a.label.localeCompare(b.label, undefined, { sensitivity: "base" })
     );
-    replaceEntries(doc, sorted);
+    reorderEntries(doc, sorted);
   }, [doc, isLive]);
 
   const winnerOnWheel = Boolean(

@@ -190,8 +190,8 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
       session.sendStatus({ app: { ...status, ...next } });
       return { ok: true };
     };
-    const handler = (envelope: Envelope<NativeToEmbedType>, repeat: boolean): CommandResult =>
-      runWheelCommand(doc, envelope.type, envelope.payload, {
+    const handler = (envelope: Envelope<NativeToEmbedType>, repeat: boolean, commandDoc: typeof doc): CommandResult =>
+      runWheelCommand(commandDoc, envelope.type, envelope.payload, {
         synced: session.isSynced,
         canEdit: !session.hostStatus.readOnly,
         repeat,
