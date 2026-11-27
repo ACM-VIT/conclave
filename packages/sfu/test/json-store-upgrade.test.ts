@@ -15,12 +15,14 @@ import {
   scheduledWebinarJsonStore,
 } from "../server/scheduledWebinars.js";
 import {
+  clearGoogleCalendarConnection,
   createEventType,
   createSchedulingPersistence,
   createSchedulingStore,
   deleteEventType,
   ensureSchedulingProfile,
   schedulingJsonStore,
+  setGoogleCalendarConnection,
 } from "../server/scheduling.js";
 import type { SchedulingCalendarConnection } from "../types.js";
 
@@ -341,8 +343,29 @@ describe("an SFU in explicit JSON mode combining scheduling records", () => {
     saveThroughTheStore(activePath(scheduling), "current-secret", snapshot);
     saveThroughTheStore(copyPath(scheduling), "current-secret", { ...snapshot, calendars: [] });
 
-    await expect(scheduling.load()).rejects.toThrow(/calendars p1.*possible deletion/);
+    await expect(scheduling.load()).rejects.toThrow(/calendars calendar-p1.*possible deletion/);
     expect(existsSync(copyPath(scheduling))).toBe(true);
+  });
+
+  it.each([true, false])("keeps both files when a calendar was disconnected and reconnected (newer archive: %s)", async (newerArchive) => {
+    const store = createSchedulingStore();
+    const profile = ensureSchedulingProfile(store, { clientId: "conclave", userId: "host", email: "host@example.test" });
+    const snapshot = () => ({ profiles: [profile], eventTypes: [], availability: [], calendars: [...store.calendarByProfileId.values()] });
+    const active = activePath(scheduling);
+    const copy = copyPath(scheduling);
+    const disconnected = setGoogleCalendarConnection(store, profile, { email: "first@example.test", refreshToken: "first" });
+    disconnected.updatedAt = newerArchive ? 200 : 100;
+    saveThroughTheStore(copy, "current-secret", snapshot());
+    clearGoogleCalendarConnection(store, profile);
+    const reconnected = setGoogleCalendarConnection(store, profile, { email: "second@example.test", refreshToken: "second" });
+    reconnected.updatedAt = newerArchive ? 100 : 200;
+    expect(reconnected.id).not.toBe(disconnected.id);
+    saveThroughTheStore(active, "current-secret", snapshot());
+    const originals = [active, copy].map((path) => readFileSync(path, "utf8"));
+
+    await expect(scheduling.load()).rejects.toThrow(new RegExp(`calendars ${disconnected.id}.*possible deletion`));
+    expect([active, copy].map((path) => readFileSync(path, "utf8"))).toEqual(originals);
+    expect(existsSync(`${copy}.adopted`)).toBe(false);
   });
 
   it("treats two saves of the same calendar as one record, though their ciphertext differs", async () => {
@@ -433,7 +456,7 @@ describe("the JSON store merger, for every claim a store declares", () => {
       profiles,
       availability: [],
       eventTypes: profiles.map((profile, n) => createEventType(scheduling, profile, { title: `Event ${n}`, slug: `event-${n}` })),
-      calendars: [],
+      calendars: profiles.map((profile) => setGoogleCalendarConnection(scheduling, profile, {})),
     };
   };
 
@@ -479,7 +502,7 @@ describe("the JSON store merger, for every claim a store declares", () => {
 });
 
 describe("the JSON store merger", () => {
-  type CheckedIndexes = { collections: { [name: string]: { index: string; claims: object } } };
+  type CheckedIndexes = { collections: { [name: string]: { index?: string; claims: object } } };
   const liveStores: Array<{ name: string; store: object; adapter: CheckedIndexes }> = [
     { name: "scheduled meetings", store: createScheduledMeetingStore(), adapter: scheduledMeetingJsonStore },
     { name: "scheduled webinars", store: createScheduledWebinarStore(), adapter: scheduledWebinarJsonStore },
@@ -492,7 +515,7 @@ describe("the JSON store merger", () => {
       .map(([name]) => name)
       .sort();
     const checked = Object.values(adapter.collections)
-      .flatMap((collection) => [collection.index, ...Object.keys(collection.claims)])
+      .flatMap((collection) => [...(collection.index ? [collection.index] : []), ...Object.keys(collection.claims)])
       .sort();
     expect(checked).toEqual(indexes);
   });

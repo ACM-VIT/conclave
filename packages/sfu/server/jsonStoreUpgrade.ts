@@ -9,7 +9,7 @@ export type JsonStoreClaim<Row> = {
 };
 
 export type JsonStoreCollection<Snapshot, Row> = {
-  index: string;
+  index?: string;
   rows: (snapshot: Snapshot) => Row[];
   key: (row: Row) => string;
   stamp: (row: Row, snapshot: Snapshot) => number;
