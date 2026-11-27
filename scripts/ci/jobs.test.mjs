@@ -197,3 +197,19 @@ test("a step added to pnpm check that CI does not run is reported", async () => 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("the backup suite runs with its dependency install and is required by the test check", async () => {
+  const workflow = parse(await readFile(path.join(repoRoot, ".github/workflows/ci.yml"), "utf8"));
+  const assignment = ciTasks.filter(({ task }) => task.script === "test:backup").map(({ job }) => job);
+  assert.deepEqual(assignment, ["test-backup"]);
+  const runner = workflow.jobs["test-backup"];
+  assert.equal(runner?.env.CI_JOB, "test-backup");
+  const installs = runner.steps.filter(({ run }) => run?.includes("apt-get install"));
+  assert.equal(installs.length, 1);
+  assert.equal(installs[0].if, "env.CI_JOB == 'test-backup'");
+  for (const tool of ["age", "psmisc", "redis-server"]) assert.ok(installs[0].run.includes(tool));
+  const gate = workflow.jobs["test-result"];
+  assert.ok(gate.needs.includes("test-backup"));
+  assert.equal(gate.steps[0].env.TEST_BACKUP_RESULT, "${{ needs.test-backup.result }}");
+  assert.match(gate.steps[0].run, /"\$TEST_BACKUP_RESULT" = success/);
+});
