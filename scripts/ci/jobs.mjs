@@ -58,12 +58,17 @@ export const jobs = {
   "test-sfu": {
     budgetSeconds: 110,
     budgetFrom: "run",
-    tasks: [{ dir: "packages/sfu", script: "test" }],
+    tasks: [{ dir: "packages/sfu", script: "test:unit" }],
   },
   "test-backup": {
     budgetSeconds: 300,
     budgetFrom: "run",
     tasks: [{ dir: ".", script: "test:backup" }],
+  },
+  "test-sfu-app-model": {
+    budgetSeconds: 110,
+    budgetFrom: "run",
+    tasks: [{ dir: "packages/sfu", script: "test:apps-room-model" }],
   },
   build: {
     budgetSeconds: 240,
