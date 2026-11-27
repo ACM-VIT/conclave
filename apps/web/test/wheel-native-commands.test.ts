@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { clearEntries as legacyClearEntries, removeEntryById as legacyRemoveEntry } from "./fixtures/wheel-staging-entries";
 import {
   addEntries,
-  getAddedTokens,
   normalizeLabel,
+  readAddRecord,
   removeEntryById,
   clearEntries,
   createWheelDoc,
@@ -43,6 +42,7 @@ const contextWith = (overrides: Partial<WheelCommandContext> = {}): WheelCommand
 const statusOf = (doc: Y.Doc, winner: { spinId: string; label: string } | null = null) =>
   wheelStatus({
     entries: getEntries(doc),
+    waitingCount: 0,
     history: getHistory(doc),
     removeWinner: false,
     sounds: true,
@@ -117,8 +117,7 @@ describe("native wheel commands", () => {
     const names = ["Host", "\u{1F389}".repeat(40), "N".repeat(63) + "\u{1F389}", "Gr\uD83Cace"];
     for (let run = 0; run < 400; run += 1) {
       const doc = createWheelDoc();
-      const entries = new Y.Array<unknown>();
-      doc.getMap("wheel").set("entries", entries);
+      const entries = doc.getArray<unknown>("wheel.entries");
       entries.push(
         Array.from({ length: random(80) }, (_, index) =>
           random(9) === 0 ? null : { id: random(3) === 0 ? ids[random(ids.length)] : `e-${index}`, label: labels[random(labels.length)] }
@@ -154,13 +153,26 @@ const FLOOD_TOKENS = FLOOD.map((_, index) => `flood-${index}`);
 
 describe("native wheel add receipts", () => {
   const RECEIPTS = "wheel.addReceipts";
+  type Receipt = { at: number; floor: number; tokens: string[] };
   const tokensFor = (lines: readonly unknown[]): string[] => lines.map(() => crypto.randomUUID());
+  let clock = 1_800_000_000_000;
+  const sentTimes = new Map<unknown, number>();
+  const sentAtOf = (tokens: unknown): number => {
+    const key: unknown = Array.isArray(tokens) ? tokens[0] : tokens;
+    const known = sentTimes.get(key);
+    if (known !== undefined) return known;
+    clock += 1_000;
+    sentTimes.set(key, clock);
+    return clock;
+  };
   const add = (doc: Y.Doc, lines: unknown[], tokens: unknown = tokensFor(lines), overrides: Partial<WheelCommandContext> = {}) =>
-    runWheelCommand(doc, "addEntries", { labels: lines, tokens }, contextWith(overrides));
+    runWheelCommand(doc, "addEntries", { labels: lines, tokens, sentAt: sentAtOf(tokens) }, contextWith(overrides));
   const outcome = (doc: Y.Doc, tokens: unknown, overrides: Partial<WheelCommandContext> = {}) =>
-    runWheelCommand(doc, "addOutcome", { tokens }, contextWith(overrides));
+    runWheelCommand(doc, "addOutcome", { tokens, sentAt: sentAtOf(tokens) }, contextWith(overrides));
   const labels = (doc: Y.Doc) => getEntries(doc).map((entry) => entry.label);
   const receipts = (doc: Y.Doc) => doc.getArray<unknown>(RECEIPTS);
+  const stored = (doc: Y.Doc): Receipt[] => receipts(doc).toArray() as Receipt[];
+  const receiptOf = (tokens: string[]): Receipt => ({ at: sentAtOf(tokens), floor: 0, tokens });
   const sync = (from: Y.Doc, to: Y.Doc) => Y.applyUpdate(to, Y.encodeStateAsUpdate(from, Y.encodeStateVector(to)));
   const replicaOf = (doc: Y.Doc): Y.Doc => {
     const replica = createWheelDoc();
@@ -169,12 +181,12 @@ describe("native wheel add receipts", () => {
   };
   const sizeOf = (doc: Y.Doc): number => Y.encodeStateAsUpdate(doc).length;
   const receiptBytes = (doc: Y.Doc): number =>
-    (receipts(doc).toArray() as string[][]).reduce((bytes, receipt) => bytes + receipt.reduce((sum, token) => sum + token.length + 2, 2), 0);
+    stored(doc).reduce((bytes, receipt) => bytes + receipt.tokens.reduce((sum, token) => sum + token.length + 2, 32), 0);
   const NOTHING_ADDED = { ok: false, error: "notApplied", added: [] };
+  const CANNOT_TELL = { ok: false, error: "outcomeUnknown" };
 
-  it("finds both adds after two peers add to an empty record before seeing each other", () => {
+  it("finds both adds after two peers add to an empty wheel before seeing each other", () => {
     const base = createWheelDoc();
-    addEntries(base, ["Host"]);
     const ada = replicaOf(base);
     const ben = replicaOf(base);
     const adaTokens = tokensFor(["Ada"]);
@@ -187,24 +199,24 @@ describe("native wheel add receipts", () => {
       expect(outcome(doc, adaTokens)).toEqual({ ok: true, added: [0] });
       expect(outcome(doc, benTokens)).toEqual({ ok: true, added: [0] });
       expect(add(doc, ["Ada"], adaTokens)).toEqual({ ok: true, added: [0] });
-      expect(labels(doc).sort()).toEqual(["Ada", "Ben", "Host"]);
+      expect(labels(doc).sort()).toEqual(["Ada", "Ben"]);
     }
   });
 
-  it.each(["remove", "clear"] as const)("still answers added after a staging client uses %s, on a replica that never ran the add", (change) => {
+  it.each(["remove", "clear"] as const)("still answers added after another editor uses %s, on a replica that never ran the add", (change) => {
     const origin = createWheelDoc();
     const updates: Uint8Array[] = [];
     origin.on("update", (update: Uint8Array) => updates.push(update));
     const tokens = tokensFor(["Ada", "", "Bo"]);
     expect(add(origin, ["Ada", "", "Bo"], tokens)).toEqual({ ok: true, added: [0, 2] });
     expect(updates).toHaveLength(1);
-    const legacy = createWheelDoc();
-    Y.applyUpdate(legacy, updates[0]);
+    const editor = createWheelDoc();
+    Y.applyUpdate(editor, updates[0]);
 
-    if (change === "remove") legacyRemoveEntry(legacy, getEntries(origin)[0].id);
-    else legacyClearEntries(legacy);
+    if (change === "remove") removeEntryById(editor, getEntries(origin)[0].id);
+    else clearEntries(editor);
 
-    const reloaded = replicaOf(legacy);
+    const reloaded = replicaOf(editor);
     const survivors = change === "remove" ? ["Bo"] : [];
     expect(labels(reloaded)).toEqual(survivors);
     expect(outcome(reloaded, tokens)).toEqual({ ok: true, added: [0, 2] });
@@ -276,7 +288,7 @@ describe("native wheel add receipts", () => {
     expect(runWheelCommand(doc, "addEntries", { labels: ["Ada", "Bo"] }, contextWith())).toEqual({ ok: true, added: [0, 1] });
     expect(labels(doc)).toEqual(["Ada", "Bo"]);
     expect(receipts(doc).length).toBe(0);
-    expect(getAddedTokens(doc).size).toBe(0);
+    expect(readAddRecord(doc, 1)).toEqual({ added: new Set(), reachesBack: true });
   });
 
   it("never runs a repeated request a second time", () => {
@@ -304,6 +316,21 @@ describe("native wheel add receipts", () => {
     }
   });
 
+  it("refuses an add or a question that does not say when the names were sent", () => {
+    const doc = createWheelDoc();
+    for (const sentAt of [undefined, null, 0, -1, "1800000000000", Number.NaN, Number.POSITIVE_INFINITY, 2 ** 60]) {
+      const tokens = tokensFor(["Ada"]);
+      expect(runWheelCommand(doc, "addEntries", { labels: ["Ada"], tokens, sentAt }, contextWith()), String(sentAt)).toEqual({
+        ok: false,
+        error: "badRequest",
+        added: [],
+      });
+      expect(runWheelCommand(doc, "addOutcome", { tokens, sentAt }, contextWith()), String(sentAt)).toEqual({ ok: false, error: "badRequest" });
+    }
+    expect(labels(doc)).toEqual([]);
+    expect(receipts(doc).length).toBe(0);
+  });
+
   it("refuses a paste longer than the line limit before adding anything", () => {
     const doc = createWheelDoc();
     const flood = [...Array.from({ length: 4_096 }, () => "​"), "Ada"];
@@ -328,7 +355,13 @@ describe("native wheel add receipts", () => {
       const victim = createWheelDoc();
       const attacker = replicaOf(victim);
       const guesses = Array.from({ length: 64 }, (_, index) => `h-${index + 1}`);
-      receipts(attacker).push([guesses, guesses.map((guess) => `app-5b1d7a2e:${guess}`), ["full"], ["noNames"]]);
+      receipts(attacker).push([
+        guesses,
+        ["full"],
+        receiptOf(guesses),
+        receiptOf(guesses.map((guess) => `app-5b1d7a2e:${guess}`)),
+        { at: 9e15, floor: 9e15, tokens: ["from-the-future"] },
+      ]);
       sync(attacker, victim);
       const oldFormat = replicaOf(victim);
       for (const guess of guesses) oldFormat.getMap(RECEIPTS).set(`app-5b1d7a2e/${guess}`, "full");
@@ -344,10 +377,13 @@ describe("native wheel add receipts", () => {
       const tokens = tokensFor(["Ada", "Bo", "​"]);
       expect(add(victim, ["Ada", "Bo", "​"], tokens)).toEqual({ ok: true, added: [0] });
       const attacker = replicaOf(victim);
-      const seen = (receipts(attacker).toArray() as string[][]).flat();
+      const seen = stored(attacker).flatMap((receipt) => receipt.tokens);
       expect(seen).toEqual([tokens[0]]);
       receipts(attacker).delete(0, receipts(attacker).length);
-      receipts(attacker).push([[...seen, "h-2", "slot-1", `${tokens[0]}1`], seen.map((token) => token.toUpperCase())]);
+      receipts(attacker).push([
+        { at: sentAtOf(tokens), floor: 0, tokens: [...seen, "h-2", "slot-1", `${tokens[0]}1`] },
+        receiptOf(seen.map((token) => token.toUpperCase())),
+      ]);
       sync(attacker, victim);
       const reloaded = replicaOf(victim);
       expect(outcome(reloaded, tokens)).toEqual({ ok: true, added: [0] });
@@ -360,7 +396,15 @@ describe("native wheel add receipts", () => {
       expect(add(victim, ["Ada"], tokens)).toEqual({ ok: true, added: [0] });
       const attacker = replicaOf(victim);
       receipts(attacker).delete(0, receipts(attacker).length);
-      receipts(attacker).push([["full"], [7], "full", [], Array.from({ length: 65 }, (_, index) => `t-${index}`)]);
+      receipts(attacker).push([
+        ["full"],
+        "full",
+        { at: 1, floor: 0, tokens: [] },
+        { at: 1, floor: 0, tokens: [7] },
+        { at: "1", floor: 0, tokens: ["t-1"] },
+        { at: 1, tokens: ["t-1"] },
+        { at: 1, floor: 0, tokens: Array.from({ length: 65 }, (_, index) => `t-${index}`) },
+      ]);
       sync(attacker, victim);
       expect(outcome(replicaOf(victim), tokens)).toEqual(NOTHING_ADDED);
       expect(labels(victim)).toEqual(["Ada"]);
@@ -372,19 +416,24 @@ describe("native wheel add receipts", () => {
       const doc = createWheelDoc();
       const first = tokensFor(["Ada"]);
       add(doc, ["Ada"], first);
-      const stale = Array.from({ length: 400 }, (_, index) => [`stale-${index}`]);
+      const stale = Array.from({ length: 400 }, (_, index) => receiptOf([`stale-${index}`]));
       receipts(doc).push(stale);
       expect(receipts(doc).length).toBe(401);
-      expect(getAddedTokens(doc).size).toBe(WHEEL_RECEIPT_LIMITS.count);
-      expect(outcome(doc, first)).toEqual(NOTHING_ADDED);
+      expect(readAddRecord(doc, clock).added.size).toBe(WHEEL_RECEIPT_LIMITS.count);
+      expect(outcome(doc, first)).toEqual(CANNOT_TELL);
+      expect(outcome(doc, ["stale-279"])).toEqual(CANNOT_TELL);
       expect(outcome(doc, ["stale-399"])).toEqual({ ok: true, added: [0] });
+      expect(outcome(doc, tokensFor(["Never sent"]))).toEqual(NOTHING_ADDED);
       clearEntries(doc);
       const latest = tokensFor(["Bo"]);
       expect(add(doc, ["Bo"], latest)).toEqual({ ok: true, added: [0] });
       expect(receipts(doc).length).toBe(WHEEL_RECEIPT_LIMITS.count);
-      expect(receipts(doc).get(receipts(doc).length - 1)).toEqual(latest);
-      expect(outcome(doc, ["stale-280"])).toEqual(NOTHING_ADDED);
+      expect(stored(doc).at(-1)).toEqual({ at: sentAtOf(latest), floor: sentAtOf(["stale-280"]), tokens: latest });
+      expect(outcome(doc, first)).toEqual(CANNOT_TELL);
+      expect(outcome(doc, ["stale-280"])).toEqual(CANNOT_TELL);
       expect(outcome(doc, ["stale-281"])).toEqual({ ok: true, added: [0] });
+      expect(outcome(replicaOf(doc), ["stale-280"])).toEqual(CANNOT_TELL);
+      expect(outcome(doc, tokensFor(["Never sent"]))).toEqual(NOTHING_ADDED);
     });
 
     it("keeps the receipts within the byte limit when every add is a full wheel of the longest tokens", () => {

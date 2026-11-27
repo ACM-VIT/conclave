@@ -17,6 +17,7 @@ import { GHOST_BUTTON, ICON_BUTTON, SECONDARY_BUTTON } from "./buttons";
 export type WheelPanelProps = {
   fill: boolean;
   entries: WheelEntry[];
+  waitingCount: number;
   history: WheelResult[];
   canEdit: boolean;
   locked: boolean;
@@ -115,6 +116,7 @@ function TabButton({
 export function WheelPanel({
   fill,
   entries,
+  waitingCount,
   history,
   canEdit,
   locked,
@@ -237,7 +239,7 @@ export function WheelPanel({
                   {confirmClear ? (
                     <>
                       <span className="min-w-0 flex-1 truncate text-[13px] text-[#fafafa]/75">
-                        Clear all {entries.length} names?
+                        Clear all {entries.length + waitingCount} names?
                       </span>
                       <button
                         type="button"
@@ -362,9 +364,11 @@ export function WheelPanel({
                 ))}
               </ol>
             )}
-            {full && canEdit && (
-              <p className="pt-2 text-[12px] text-[#fafafa]/45">
+            {(waitingCount > 0 || (full && canEdit)) && (
+              <p data-wheel-capacity className="pt-2 text-[12px] text-[#fafafa]/45">
                 The wheel holds up to {MAX_WHEEL_ENTRIES} names.
+                {waitingCount > 0 &&
+                  ` ${waitingCount} more ${waitingCount === 1 ? "is" : "are"} waiting for a place.`}
               </p>
             )}
           </div>

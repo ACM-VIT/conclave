@@ -526,6 +526,115 @@ struct ACT8WheelWatchTests {
         #expect(!presenter.wheelDraft.isUnconfirmed, "the notice goes once the person edits the names")
     }
 
+    @Test func anOutcomeTheWheelCanNoLongerTellReturnsTheNamesWithTheNoticeAtOnce() throws {
+        for path in ["question", "add reply", "late add reply"] {
+            let wire = Wire()
+            let (presenter, relay) = wheelReady(wire)
+            presenter.editWheelDraft("Ada\nBo\n")
+            presenter.editWheelDraft("Cy")
+            let add = try #require(addRequests(wire).first)
+            switch path {
+            case "question":
+                presenter.fireCommandTimeout(requestId: add.id)
+                let query = try #require(outcomeQueries(wire).last)
+                send(relay, "ack", ["ok": false, "error": "outcomeUnknown"], id: query.id)
+            case "add reply":
+                send(relay, "ack", ["ok": false, "error": "outcomeUnknown"], id: add.id)
+            default:
+                presenter.fireCommandTimeout(requestId: add.id)
+                #expect(presenter.wheel.isPending(.addOutcome, target: add.id))
+                send(relay, "ack", ["ok": false, "error": "outcomeUnknown"], id: add.id)
+            }
+            #expect(presenter.wheelDraft.text == "Ada\nBo\nCy" && presenter.wheelDraft.sent.isEmpty, "\(path)")
+            #expect(presenter.wheelDraft.isUnconfirmed, "\(path): the wheel may hold these names, so the notice shows")
+            #expect(presenter.wheel.pendingKinds.isEmpty, "\(path)")
+            let asked = outcomeQueries(wire).count
+            presenter.fireCommandTimeout(requestId: add.id)
+            presenter.fireAddDeadline(requestId: add.id)
+            presenter.apply(event: ActiveAppEvent.make(kind: .ready, appSessionId: relay.appSessionId, lifecycle: .ready, bundleVersion: "1.0.0"))
+            #expect(outcomeQueries(wire).count == asked && addRequests(wire).count == 1, "\(path): nothing more is asked or sent")
+            #expect(presenter.wheelDraft.text == "Ada\nBo\nCy" && presenter.wheelDraft.isUnconfirmed, "\(path)")
+        }
+        #expect(AppBridgeProtocol.addOutcomeUnknown == "outcomeUnknown")
+    }
+
+    @Test func anAddAndEveryQuestionAboutItCarryTheTimeItWasSent() throws {
+        let wire = Wire()
+        let (presenter, _) = wheelReady(wire)
+        var now = 1_800_000_000_123.75
+        presenter.nowMillis = { now }
+        presenter.editWheelDraft("Ada\n")
+        let add = try #require(addRequests(wire).first)
+        let stamp = try #require(sentAt(wire, add.id))
+        #expect(stamp == 1_800_000_000_123.0, "whole milliseconds, so the number reads the same on every platform")
+        #expect(presenter.wheelDraft.sent.first?.sentAtMillis == stamp)
+        now += 12_000.0
+        presenter.fireCommandTimeout(requestId: add.id)
+        let first = try #require(outcomeQueries(wire).last)
+        presenter.fireCommandTimeout(requestId: first.id)
+        let second = try #require(outcomeQueries(wire).last)
+        #expect(first.id != second.id)
+        #expect(sentAt(wire, first.id) == stamp && sentAt(wire, second.id) == stamp, "every question names the same send")
+        #expect(presenter.addEveryoneToWheel() == .dispatched)
+        #expect(wire.lastPayload()["sentAt"] == nil, "an add nobody asks about carries no send time")
+    }
+
+    @Test func theNamesPageKnowsHowManyAcceptedNamesWaitForAPlace() throws {
+        let wire = Wire()
+        let (presenter, relay) = wheelReady(wire)
+        #expect(presenter.wheel.waitingNames == 0)
+        var full = Self.wheelApp(Self.names(64))
+        full["waiting"] = 3
+        send(relay, "status", ["app": full], id: "e-3")
+        #expect(presenter.wheel.isFull && presenter.wheel.waitingNames == 3)
+        let revision = presenter.wheel.revision
+        full["waiting"] = 2
+        send(relay, "status", ["app": full], id: "e-4")
+        #expect(presenter.wheel.waitingNames == 2 && presenter.wheel.revision == revision + 1, "a change in the count redraws the page")
+        send(relay, "status", ["app": Self.wheelApp(Self.names(64))], id: "e-5")
+        #expect(presenter.wheel.isFull && presenter.wheel.waitingNames == 0, "a status without the count means none wait")
+        #expect(AppEmbedAppCodec.parse(["kind": "wheel", "waiting": AppWheelLimits.waiting])?.waiting == AppWheelLimits.waiting)
+        #expect(AppEmbedAppCodec.parse(["kind": "wheel", "waiting": AppWheelLimits.waiting + 1]) == nil)
+    }
+
+    @Test func theNamesPageShowsEveryNoticeThatApplies() {
+        #expect(AppPagePolicy.wheelNotices(canEdit: true, isFull: true, waitingNames: 0, isUnconfirmed: true) == [.unconfirmed, .full])
+        #expect(AppPagePolicy.wheelNotices(canEdit: true, isFull: true, waitingNames: 2, isUnconfirmed: true) == [.unconfirmed, .waiting])
+        #expect(AppPagePolicy.wheelNotices(canEdit: true, isFull: false, waitingNames: 0, isUnconfirmed: true) == [.unconfirmed])
+        #expect(AppPagePolicy.wheelNotices(canEdit: true, isFull: true, waitingNames: 0, isUnconfirmed: false) == [.full])
+        #expect(AppPagePolicy.wheelNotices(canEdit: true, isFull: true, waitingNames: 1, isUnconfirmed: false) == [.waiting])
+        #expect(AppPagePolicy.wheelNotices(canEdit: false, isFull: true, waitingNames: 3, isUnconfirmed: true) == [.waiting])
+        #expect(AppPagePolicy.wheelNotices(canEdit: false, isFull: true, waitingNames: 0, isUnconfirmed: true).isEmpty)
+        #expect(AppPagePolicy.wheelNotices(canEdit: true, isFull: false, waitingNames: 0, isUnconfirmed: false).isEmpty)
+    }
+
+    @Test func aFullWheelStillSaysAnAddCouldNotBeConfirmedAndSomeoneWhoCannotEditStillSeesNamesWaiting() throws {
+        let wire = Wire()
+        let (presenter, relay) = wheelReady(wire)
+        presenter.editWheelDraft("Ada\nBo\n")
+        let add = try #require(addRequests(wire).first)
+        var full = Self.wheelApp(Self.names(64))
+        send(relay, "status", ["app": full], id: "e-3")
+        #expect(presenter.wheelNotices == [.full])
+        presenter.fireCommandTimeout(requestId: add.id)
+        let query = try #require(outcomeQueries(wire).last)
+        send(relay, "ack", ["ok": false, "error": "outcomeUnknown"], id: query.id)
+        #expect(presenter.wheel.isFull && presenter.wheelDraft.isUnconfirmed && presenter.wheelDraft.text == "Ada\nBo")
+        #expect(presenter.wheelNotices == [.unconfirmed, .full], "a full wheel does not hide that the add is unconfirmed")
+        full["waiting"] = 2
+        send(relay, "status", ["app": full], id: "e-4")
+        #expect(presenter.wheelNotices == [.unconfirmed, .waiting])
+
+        presenter.apply(AppHostInputs.make(callSession: 1, appId: "wheel", isHost: false, isLocked: true))
+        #expect(!presenter.wheel.canEdit && presenter.wheel.waitingNames == 2)
+        #expect(presenter.wheelNotices == [.waiting], "someone who cannot edit still sees that names wait")
+
+        presenter.apply(AppHostInputs.make(callSession: 1, appId: "wheel", isHost: true))
+        #expect(presenter.wheelNotices == [.unconfirmed, .waiting])
+        presenter.editWheelDraft("Ada\nBob")
+        #expect(presenter.wheelNotices == [.waiting], "the unconfirmed notice goes once the person edits the names")
+    }
+
     @Test func theWindowEndsTheWaitHoweverTheClockMoves() throws {
         for ending in ["deadline timer", "deadline timer while detached", "late wake", "clock ran backwards"] {
             let wire = Wire()
@@ -735,6 +844,16 @@ struct ACT8WheelWatchTests {
             queries.append((id: object["requestId"] as? String ?? "", tokens: payload["tokens"] as? [String] ?? []))
         }
         return queries
+    }
+
+    private func sentAt(_ wire: Wire, _ requestId: String) -> Double? {
+        for raw in wire.delivered {
+            let object = AppBridgeCodec.jsonObject(raw) ?? [:]
+            if object["requestId"] as? String != requestId { continue }
+            let payload = object["payload"] as? [String: Any] ?? [:]
+            return AppBridgeCodec.number(payload["sentAt"])
+        }
+        return nil
     }
 
     private func answerOutcome(_ session: ActiveAppSession, _ queryId: String, applied: [Int]?) {

@@ -598,13 +598,19 @@ const resolveCloudflareTurnIceServers = async (): Promise<IceServer[]> => {
   }
 };
 
-const resolveIceServers = async (): Promise<IceServer[]> => {
+const resolveIceServers = async (): Promise<{
+  iceServers: IceServer[];
+  ttlSeconds?: number;
+}> => {
   const cloudflareTurnIceServers = await resolveCloudflareTurnIceServers();
   if (cloudflareTurnIceServers.length > 0) {
-    return cloudflareTurnIceServers;
+    return {
+      iceServers: cloudflareTurnIceServers,
+      ttlSeconds: resolveCloudflareTurnTtl(),
+    };
   }
 
-  return resolveStunIceServers();
+  return { iceServers: resolveStunIceServers() };
 };
 
 const resolveClientId = (request: Request, body?: JoinRequestBody) => {
@@ -744,12 +750,14 @@ export async function POST(request: Request) {
     { expiresIn: "12h" },
   );
 
-  const iceServers = await iceServersPromise;
+  const { iceServers, ttlSeconds: iceServersTtlSeconds } =
+    await iceServersPromise;
 
   const response = NextResponse.json({
     token,
     sfuUrl: routedSfuUrl,
     ...(iceServers.length > 0 ? { iceServers } : {}),
+    ...(iceServersTtlSeconds ? { iceServersTtlSeconds } : {}),
     minNativeVersion: resolveConclaveMinNativeVersion(process.env),
     ...guest?.issued,
   });

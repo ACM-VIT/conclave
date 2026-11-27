@@ -336,14 +336,14 @@ export const createSfuApp = ({
 
   const forceCloseRoomWithSockets = (
     io: SocketIOServer,
-    roomChannelId: string,
+    room: Room,
     pendingSockets: Array<{ disconnect: (close?: boolean) => void }> = [],
   ): boolean => {
-    io.in(roomChannelId).disconnectSockets(true);
+    io.in(room.channelId).disconnectSockets(true);
     for (const pendingSocket of pendingSockets) {
       pendingSocket.disconnect(true);
     }
-    return forceCloseRoom(state, roomChannelId);
+    return forceCloseRoom(state, room);
   };
 
   const handleUserMediaControl = (
@@ -933,9 +933,12 @@ export const createSfuApp = ({
 
     try {
       // Draining instances keep routing established owners/placements but must
-      // not become the first assignment for a new room.
+      // not become the first assignment for a new room. The deploy canary asks
+      // with allowDraining: it calls a fresh build that stays out of rotation
+      // until that call passes.
       const existing = await state.roomRegistry.getAssignment(channelId);
-      if (state.isDraining && !existing) {
+      const allowDraining = readBoolean(requestBody(req), "allowDraining") === true;
+      if (state.isDraining && !existing && !allowDraining) {
         res.status(409).json({
           error: "Meeting server is draining",
           draining: true,
@@ -1798,7 +1801,7 @@ export const createSfuApp = ({
     const closeNow = () => {
       // A delayed close must not hit a newer room reopened on this channel.
       if (!isCurrentRoom(state, room)) return;
-      forceCloseRoomWithSockets(io, roomChannelId, pendingSockets);
+      forceCloseRoomWithSockets(io, room, pendingSockets);
     };
 
     if (delayMs > 0) {
