@@ -393,6 +393,8 @@ export class CallRig {
   mediaFlows = true;
   outgoingDropped = false;
   droppedSendKinds = new Set<string>();
+  directPathDropsSentRtp = false;
+  relayUrlsDroppingMedia = new Set<string>();
   burstyVideo = false;
   videoQuiet = false;
   dropEveryOtherOwnCountAnswer = false;
@@ -487,6 +489,11 @@ export class CallRig {
     return !this.direct(transport) && transport.allocatedGeneration !== null;
   }
 
+  dropsMedia(transport: FakeTransport): boolean {
+    if (this.direct(transport)) return transport.direction === "send" && this.directPathDropsSentRtp;
+    return transport.allocatedUrl !== null && this.relayUrlsDroppingMedia.has(transport.allocatedUrl);
+  }
+
   scheduleConnect(transport: FakeTransport) {
     const delay = this.direct(transport) ? 100 : this.relayConnectMs;
     window.setTimeout(() => {
@@ -523,7 +530,8 @@ export class CallRig {
     const since = transport.accruedAt ?? now;
     transport.accruedAt = now;
     if (!this.pathWorks(transport) || !transport.hasConsumers) return;
-    if (this.carriesOverRelay(transport) && transport.allocatedGeneration) {
+    const mediaDropped = this.dropsMedia(transport);
+    if (this.carriesOverRelay(transport) && transport.allocatedGeneration && !mediaDropped) {
       transport.relayCarriedMs += now - since;
       if (transport.relayCarriedMs >= 7_500 && !this.provenAt.has(transport.allocatedGeneration)) {
         this.provenAt.set(transport.allocatedGeneration, now);
@@ -544,12 +552,12 @@ export class CallRig {
         stream.packetsSent += packets;
         if (!this.outgoingDropped) {
           stream.reportAt = now;
-          if (!this.droppedSendKinds.has(stream.producer.kind)) stream.sfuPackets += packets;
+          if (!mediaDropped && !this.droppedSendKinds.has(stream.producer.kind)) stream.sfuPackets += packets;
         }
       });
       return;
     }
-    if (this.mediaFlows && this.remoteProducers.some((producer) => this.remoteSending(producer))) {
+    if (this.mediaFlows && !mediaDropped && this.remoteProducers.some((producer) => this.remoteSending(producer))) {
       transport.carriedBytes += Math.round((now - since) * 1.6);
       transport.reportAt = now;
     }
