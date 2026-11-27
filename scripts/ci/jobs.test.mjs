@@ -44,11 +44,13 @@ test("every job has a budget", () => {
   }
 });
 
-test("SFU unit tests and the full app room model have separate runners", async () => {
+test("both SFU unit shards and the full app room model have separate runners", async () => {
   const workflow = parse(await readFile(path.join(repoRoot, ".github/workflows/ci.yml"), "utf8"));
-  assert.deepEqual(jobs["test-sfu"]?.tasks, [{ dir: "packages/sfu", script: "test:unit" }]);
+  assert.deepEqual(jobs["test-sfu"]?.tasks, [{ dir: "packages/sfu", script: "test:unit", args: ["--shard=1/2"] }]);
+  assert.deepEqual(jobs["test-sfu-b"]?.tasks, [{ dir: "packages/sfu", script: "test:unit", args: ["--shard=2/2"] }]);
   assert.deepEqual(jobs["test-sfu-app-model"]?.tasks, [{ dir: "packages/sfu", script: "test:apps-room-model" }]);
   assert.equal(workflow.jobs["test-sfu"].env.CI_JOB, "test-sfu");
+  assert.equal(workflow.jobs["test-sfu-b"].env.CI_JOB, "test-sfu-b");
   assert.equal(workflow.jobs["test-sfu-app-model"].env.CI_JOB, "test-sfu-app-model");
 });
 
@@ -77,7 +79,7 @@ test("the required test check fails unless every test runner succeeds", async ()
   const workflow = parse(await readFile(path.join(repoRoot, ".github/workflows/ci.yml"), "utf8"));
   const gate = workflow.jobs["test-result"];
   assert.equal(gate?.name, "test");
-  assert.deepEqual(gate.needs, ["test-unit", "test-sfu", "test-transcript-oracle", "test-backup", "test-sfu-app-model"]);
+  assert.deepEqual(gate.needs, ["test-unit", "test-sfu", "test-sfu-b", "test-transcript-oracle", "test-backup", "test-sfu-app-model"]);
   assert.equal(gate.if, "${{ always() }}");
   assert.equal("continue-on-error" in gate, false);
   assert.equal(gate.steps.length, 1);
@@ -86,15 +88,17 @@ test("the required test check fails unless every test runner succeeds", async ()
   assert.deepEqual(step.env, {
     TEST_UNIT_RESULT: "${{ needs.test-unit.result }}",
     TEST_SFU_RESULT: "${{ needs.test-sfu.result }}",
+    TEST_SFU_B_RESULT: "${{ needs.test-sfu-b.result }}",
     TEST_TRANSCRIPT_ORACLE_RESULT: "${{ needs.test-transcript-oracle.result }}",
     TEST_BACKUP_RESULT: "${{ needs.test-backup.result }}",
     TEST_SFU_APP_MODEL_RESULT: "${{ needs.test-sfu-app-model.result }}",
   });
-  const results = ["success", "failure", "cancelled", "skipped"];
-  const combinations = Object.keys(step.env).reduce(
-    (rows, name) => rows.flatMap((row) => results.map((status) => ({ ...row, [name]: status }))),
-    [{}],
-  );
+  const names = Object.keys(step.env);
+  const allPassed = Object.fromEntries(names.map((name) => [name, "success"]));
+  const combinations = [
+    allPassed,
+    ...names.flatMap((name) => ["failure", "cancelled", "skipped"].map((status) => ({ ...allPassed, [name]: status }))),
+  ];
   for (const resultEnv of combinations) {
     const check = spawnSync("bash", ["-ec", step.run], { env: { ...process.env, ...resultEnv } });
     assert.ifError(check.error);
@@ -107,7 +111,7 @@ test("test budgets always start with the run step", async () => {
   const bin = await mkdtemp(path.join(tmpdir(), "ci-test-clock-"));
   try {
     await writeFile(path.join(bin, "pnpm"), "#!/bin/sh\nexit 0\n", { mode: 0o700 });
-    for (const job of ["test", "test-web-unit-b", "test-sfu", "test-sfu-app-model"]) {
+    for (const job of ["test", "test-web-unit-b", "test-sfu", "test-sfu-b", "test-sfu-app-model"]) {
       for (const miss of [false, true]) {
         const result = spawnSync(process.execPath, ["scripts/ci/run.mjs", job], {
           cwd: repoRoot,
@@ -136,6 +140,7 @@ test("the workflow runs every job in scripts/ci/jobs.mjs and never skips one", a
     workflow.jobs.ci,
     workflow.jobs["test-unit"],
     workflow.jobs["test-sfu"],
+    workflow.jobs["test-sfu-b"],
     workflow.jobs["test-transcript-oracle"],
     workflow.jobs["test-backup"],
     workflow.jobs["test-sfu-app-model"],

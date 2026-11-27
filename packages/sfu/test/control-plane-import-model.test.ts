@@ -267,43 +267,42 @@ describe.each(modes)("Greptile's import cases on a %s store", (mode) => {
     expect(leftCopies()).toEqual([]);
   });
 
-  it("end an import that crashed at any commit, before or after it landed, with each copy applied once", async () => {
+  it.each(["before", "after"] as const)("end an import that crashed %s any commit with each copy applied once", async (when) => {
+    const after = when === "after";
     const legacy = await legacyRedisFor(mode);
     let crashes = 0;
     try {
-      for (const after of [false, true]) {
-        for (let at = 1; ; at += 1) {
-          usePaths(join(dir, `crash-${after ? "after" : "before"}-${at}`));
-          const state: ContainerState = {
-            meetings: new Map([
-              ["kept", { title: "Kept", stamp: 100 }],
-              ["gone", { title: "Deleted between the copies", stamp: 100 }],
-            ]),
-            calendars: new Map(),
-          };
-          writeSnapshot("sfu-a", "sfu-deploy-1", state);
-          state.meetings.set("late", { title: "Made between the copies", stamp: 200 });
-          state.meetings.delete("gone");
-          writeSnapshot("sfu-a", "sfu-deploy-1", state);
-          const crashed = await importThatCrashes(mode, at, after, legacy.option);
-          const label = `${crashed ? "crashed" : "finished"} ${after ? "after" : "before"} commit ${at}`;
-          for (const replay of ["", ", then a replay of both copies"]) {
-            if (replay) expect(unadopt(), label).toHaveLength(2);
-            const store = await open();
-            expect((await store.read(meetingById("late")))?.title, label + replay).toBe("Made between the copies");
-            expect((await store.read(meetingById("kept")))?.title, label + replay).toBe("Kept");
-            expect(await store.read(meetingById("gone")), label + replay).toBeNull();
-            expect(leftCopies(), label + replay).toEqual([]);
-            await shut(store);
-          }
-          if (!crashed) break;
-          crashes += 1;
+      for (let at = 1; ; at += 1) {
+        usePaths(join(dir, `crash-${after ? "after" : "before"}-${at}`));
+        const state: ContainerState = {
+          meetings: new Map([
+            ["kept", { title: "Kept", stamp: 100 }],
+            ["gone", { title: "Deleted between the copies", stamp: 100 }],
+          ]),
+          calendars: new Map(),
+        };
+        writeSnapshot("sfu-a", "sfu-deploy-1", state);
+        state.meetings.set("late", { title: "Made between the copies", stamp: 200 });
+        state.meetings.delete("gone");
+        writeSnapshot("sfu-a", "sfu-deploy-1", state);
+        const crashed = await importThatCrashes(mode, at, after, legacy.option);
+        const label = `${crashed ? "crashed" : "finished"} ${after ? "after" : "before"} commit ${at}`;
+        for (const replay of ["", ", then a replay of both copies"]) {
+          if (replay) expect(unadopt(), label).toHaveLength(2);
+          const store = await open();
+          expect((await store.read(meetingById("late")))?.title, label + replay).toBe("Made between the copies");
+          expect((await store.read(meetingById("kept")))?.title, label + replay).toBe("Kept");
+          expect(await store.read(meetingById("gone")), label + replay).toBeNull();
+          expect(leftCopies(), label + replay).toEqual([]);
+          await shut(store);
         }
+        if (!crashed) break;
+        crashes += 1;
       }
     } finally {
       await legacy.quit();
     }
-    expect(crashes).toBeGreaterThanOrEqual(6);
+    expect(crashes).toBeGreaterThanOrEqual(3);
   });
 
   it("keep every connection a host disconnected deleted, not only the last", async () => {
