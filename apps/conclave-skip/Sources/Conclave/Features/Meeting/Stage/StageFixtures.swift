@@ -261,7 +261,6 @@ enum StageFixtureScript {
                          joinedAtMillis: joinedAtMillis)
     }
 
-    // swiftlint:disable:next cyclomatic_complexity
     static func inputs(for state: StageFixtureState) -> StageInputs {
         switch state {
         case .soloCameraOff, .soloCameraOffAlone:

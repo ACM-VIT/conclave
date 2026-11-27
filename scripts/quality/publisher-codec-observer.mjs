@@ -30,8 +30,6 @@ export function startPublisherCodecObserver({
     senderEncodingSignature: publisherSenderEncodingSignature(
       binding?.parameters,
     ),
-    // This is only the extraction origin for sampledAtMs. Observer lifecycle
-    // metadata comes from the aligned scheduler's actual callbacks.
     observerStartedAtEpochMs: measurementWindow?.startedAtEpochMs,
     measurementWindowId: measurementWindow?.id,
     allowTrackReplacement,
@@ -43,8 +41,6 @@ export function startPublisherCodecObserver({
     ...schedulerOptions,
     observe: async (tick) => {
       const payload = await collectPayload(tick);
-      // Window identity must be present before extraction; adding it after the
-      // matched-path check would make every otherwise healthy sample invalid.
       const observation = extractPublisherCodecObservation(
         {
           ...payload,

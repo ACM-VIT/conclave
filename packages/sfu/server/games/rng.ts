@@ -1,11 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { GameRng } from "./types.js";
 
-/**
- * Small, fast, seedable PRNG (mulberry32). We seed it from crypto so deals and
- * shuffles are unpredictable to clients, but keep it deterministic given a seed
- * so a session could be replayed for debugging.
- */
 const mulberry32 = (seed: number): (() => number) => {
   let a = seed >>> 0;
   return () => {

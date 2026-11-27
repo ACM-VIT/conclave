@@ -111,7 +111,6 @@ describe("collectStuckAudioConsumers", () => {
 
     expect(collectStuckAudioConsumers(room, NOW)).toHaveLength(0);
 
-    // A later resume request clears the intent, making it healable again.
     markConsumerClientPausedIntent(intentional.asConsumer(), false);
     expect(collectStuckAudioConsumers(room, NOW)).toHaveLength(1);
   });
@@ -129,9 +128,6 @@ describe("collectStuckAudioConsumers", () => {
 
 describe("healStuckAudioConsumers", () => {
   it("delivers a published audio stream to every attendee (multi-attendee)", async () => {
-    // One speaker, three attendees. One attendee's resumeConsumer was lost
-    // (rate limit / disconnect blip), leaving their consumer paused while the
-    // other two hear the speaker fine — the exact #177 report.
     const producerId = "speaker-audio";
     const hearing1 = new FakeConsumer({ id: "a1", producerId, paused: false });
     const hearing2 = new FakeConsumer({ id: "a2", producerId, paused: false });
@@ -145,11 +141,9 @@ describe("healStuckAudioConsumers", () => {
     const healed = await healStuckAudioConsumers(room, NOW);
 
     expect(healed).toBe(1);
-    // Every attendee's consumer for the speaker is now delivering audio.
     for (const consumer of [hearing1, hearing2, silent]) {
       expect(consumer.paused).toBe(false);
     }
-    // Only the previously-silent attendee was touched and notified.
     expect(silent.resumeCalls).toBe(1);
     expect(hearing1.resumeCalls).toBe(0);
     expect(attendee3.emitted).toHaveLength(1);

@@ -33,7 +33,6 @@ test("five-level MS-SSIM and BT.709 chroma are perfect for identical frames", ()
 test("equal-luminance hue corruption is caught by chroma evidence", () => {
   const metrics = createVisualMetricToolkit();
   const red = image(64, 48, () => [255, 0, 0]);
-  // 76 green has approximately the same Rec.709 luma as full red.
   const green = image(64, 48, () => [0, 76, 0]);
   const result = metrics.compareImages(green, red);
 

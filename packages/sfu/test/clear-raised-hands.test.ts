@@ -35,8 +35,6 @@ describe("clearAllRaisedHands", () => {
     expect(room.handRaisedByUserId.size).toBe(0);
 
     const snapshot = emitted.find((entry) => entry.event === "handRaisedSnapshot");
-    // Clients apply snapshot entries one by one, so the clear must name every
-    // user it lowers; an empty list would visibly update nobody.
     expect(snapshot?.payload).toEqual({
       users: [
         { userId: "host-1", raised: false },

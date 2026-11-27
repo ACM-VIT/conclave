@@ -1,16 +1,4 @@
 #!/usr/bin/env node
-/**
- * Codegen: SFU_EVENTS (packages/meeting-core/src/sfu-events.ts)
- *        → Swift enum (apps/conclave-skip/Sources/Conclave/Core/Networking/SfuEvents.swift)
- *
- * This makes the TypeScript registry the SINGLE SOURCE OF TRUTH for socket.io
- * event names across web and native. Re-run after editing sfu-events.ts:
- *
- *   node packages/meeting-core/scripts/gen-swift-events.mjs
- *
- * Keep this script plain Node-compatible for CI. It reads the TypeScript source
- * and evaluates only the SFU_EVENTS object literal, avoiding a TS loader.
- */
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -103,13 +91,10 @@ const OUT = resolve(
   "apps/conclave-skip/Sources/Conclave/Core/Networking/SfuEvents.swift",
 );
 
-/** Emit a Swift enum with String raw values from a {key: "wire"} group. */
 function emitEnum(name, group) {
   const lines = [];
   lines.push(`enum ${name}: String {`);
   for (const [key, value] of Object.entries(group)) {
-    // Quote the raw value only when it differs from the case name (it usually
-    // does — wire strings are namespaced like "apps:open").
     lines.push(`    case ${key} = ${JSON.stringify(value)}`);
   }
   lines.push("}");

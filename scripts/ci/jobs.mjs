@@ -9,8 +9,8 @@ export const jobs = {
     budgetSeconds: 150,
     before: [{ dir: "apps/web", exec: "next typegen" }],
     tasks: [
-      { dir: ".", script: "lint:packages" },
-      { dir: "apps/web", script: "lint" },
+      { dir: ".", script: "lint:workspace" },
+      { dir: "apps/web", script: "lint", args: ["--pass-on-unpruned-suppressions"] },
       { dir: ".", script: "konsistent" },
     ],
   },
@@ -95,7 +95,10 @@ export const jobs = {
 
   checks: {
     budgetSeconds: 100,
+    budgetFrom: "run",
     tasks: [
+      { dir: ".", script: "lint:comments" },
+      { dir: ".", script: "test:comments" },
       { dir: ".", script: "test:quality-harness" },
       { dir: ".", script: "test:cloudflare-manifests" },
       { dir: ".", script: "test:docker-context" },

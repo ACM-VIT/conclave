@@ -146,8 +146,6 @@ const endpointSnapshotsAt = (offset, codec) => {
       : recoveryFull || offset < 24_000
         ? "good"
         : "fair",
-    // A failed capture downshift preserves the live high-quality track; the
-    // sender's encoded raster below remains the network adaptation authority.
     captureWidth: 1280,
     captureHeight: 720,
     captureFps: 30,
@@ -1713,9 +1711,6 @@ test("frame visibility binds to the adaptation event interval, not proof start",
   const evidence = validEvidence();
   for (const checkpoint of evidence.sampler.checkpoints) {
     if (checkpoint.capturedOffsetMs === 24_500) {
-      // The capture/topology signature can complete one sample before the
-      // connection-quality label catches up. Event timing is bound to the
-      // observable media transition, not that lagging diagnostic label.
       checkpoint.endpointSnapshots.publisher.connectionQuality = "good";
       const primary = checkpoint.endpointSnapshots.primaryReceiver;
       primary.connectionQuality = "fair";

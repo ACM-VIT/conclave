@@ -116,7 +116,6 @@ function Revealer() {
   useEffect(() => {
     const timer = setTimeout(() => doc.getText("t").insert(0, "revealed "), 800);
     return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return null;
 }

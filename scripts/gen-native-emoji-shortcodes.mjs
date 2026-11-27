@@ -1,16 +1,4 @@
 #!/usr/bin/env node
-/**
- * Codegen: EMOJI_SHORTCODES (apps/web/src/app/lib/emoji-shortcodes.ts)
- *        → Swift table (apps/conclave-skip/Sources/Conclave/Features/Meeting/Chat/EmojiShortcodeTable.swift)
- *
- * The web table is the single source of truth for chat :name: shortcuts on web
- * and native. Re-run after editing emoji-shortcodes.ts:
- *
- *   node scripts/gen-native-emoji-shortcodes.mjs
- *
- * `--check` fails when the Swift table is stale, or when the web matching
- * patterns change, because EmojiShortcodes.swift ports those patterns by hand.
- */
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";

@@ -63,8 +63,30 @@ jobs:
           key: next-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
           restore-keys: next-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}-
 
+      - name: Cache the comment parsers
+        if: env.CI_JOB == 'checks'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/conclave/swift-trivia
+            ~/.cache/conclave/kotlin-lexer
+          key: comment-parsers-${{ runner.os }}-${{ hashFiles('scripts/quality/comments/swift-trivia/Package.resolved', 'scripts/quality/comments/tokenizers.mjs') }}
+
+      - name: Check toolchains for the comment ratchet
+        if: env.CI_JOB == 'checks'
+        run: |
+          swift --version
+          python3 -c 'import sys; assert sys.version_info >= (3, 12), sys.version'
+
+      - name: Fetch the comment parsers
+        if: env.CI_JOB == 'checks'
+        run: pnpm comments:tools
+
       - id: run
         run: node scripts/ci/run.mjs "$CI_JOB"
+        env:
+          COMMENT_RATCHET_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || 'origin/staging' }}
+          COMMENT_RATCHET_MODE: ${{ github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000' && 'exact' || 'merge-base' }}
 
       - if: always() && github.event_name == 'push' && env.CI_JOB == 'typecheck' && steps.setup.outcome == 'success' && steps.setup.outputs.modules-hit != 'true'
         uses: actions/cache/save@v6.1.0

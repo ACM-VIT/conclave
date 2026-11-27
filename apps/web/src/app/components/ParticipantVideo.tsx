@@ -50,8 +50,6 @@ interface ParticipantVideoProps {
   isDynamicCropEnabled?: boolean;
   isFullVideoShown?: boolean;
   onToggleFullVideo?: (userId: string) => void;
-  // The grid gave this tile the video's own shape, so portrait video needs no
-  // zoom or blurred fill.
   isTileShapedToVideo?: boolean;
   onVideoAspectChange?: (aspect: number | null) => void;
   tileWidth?: number;
@@ -302,8 +300,6 @@ function ParticipantVideo({
 
   const speakerHighlight = isActiveSpeaker ? "speaking" : "";
   const handRaisedHighlight = participant.isHandRaised ? "!border-amber-400/60" : "";
-  // A viewer who chose the full video keeps the way back after the camera
-  // turns landscape.
   const showFullVideoToggle =
     (isDynamicCropEnabled ||
       ((isPortraitVideo || isFullVideoShown) && !isRenderingScreenShare)) &&

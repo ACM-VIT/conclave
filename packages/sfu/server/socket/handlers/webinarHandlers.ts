@@ -172,9 +172,6 @@ export const registerWebinarHandlers = (context: ConnectionContext): void => {
               webinarConfig.linkVersion += 1;
             }
           } else {
-            // A scheduled webinar's link code belongs to its room, even before
-            // (or after) the scheduler binds it; an ad-hoc room must not take
-            // it and receive that webinar's audience.
             if (
               reservedBy &&
               getRoomChannelId(reservedBy.clientId, reservedBy.roomId) !==

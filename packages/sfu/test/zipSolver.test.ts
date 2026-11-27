@@ -63,7 +63,6 @@ describe("zipSolver", () => {
     });
 
     it("rejects wall/barrier crossing", () => {
-      // Barrier is 1 -> 7 (but 7 is dead anyway)
       const result = validateMove([1], 7, puzzle);
       expect(result.valid).toBe(false);
       expect(result.valid === false && result.reason).toContain("dead cell");
@@ -76,7 +75,6 @@ describe("zipSolver", () => {
     });
 
     it("rejects out-of-order anchor", () => {
-      // Expected anchor is 2 (at cell 2), visiting 15 first
       const result = validateMove([0, 6, 12, 13, 14], 15, puzzle);
       expect(result.valid).toBe(false);
       expect(result.valid === false && result.reason).toContain("order");
@@ -117,7 +115,6 @@ describe("zipSolver", () => {
       const puzzle = generatePuzzle({ size: 6, anchorCount: 8, seed: 123 });
       const path = puzzle.solutionPath;
 
-      // Make an invalid path: start correctly, then deviate to something wrong
       const invalidPath = [path[0], path[1], path[0]];
       const hint = solveForHint(puzzle, invalidPath);
 

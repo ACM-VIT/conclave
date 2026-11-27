@@ -23,7 +23,6 @@ const createAnthropicClient = (options: AiTextOptions): Anthropic =>
     maxRetries: 2,
   });
 
-// The SDK adapts unsupported JSON Schema bounds without mutating the registry.
 const anthropicSchema = (schema: Record<string, unknown>) =>
   jsonSchemaOutputFormat(schema as Parameters<typeof jsonSchemaOutputFormat>[0])
     .schema;
@@ -80,8 +79,6 @@ export const generateAnthropicText = async (
 ): Promise<string> => {
   const client = createAnthropicClient(options);
   let input = options.input;
-  // Search citations and output_config.format cannot share a Claude response.
-  // Research first, then decode the final JSON without citation-enabled tools.
   if (
     options.format &&
     options.tools?.some((tool) => tool.type === "web_search")
@@ -96,8 +93,6 @@ export const generateAnthropicText = async (
       anthropicParams(researchOptions, [{ role: "user", content: input }]),
       requestOptions(options),
     );
-    // A truncated scratchpad is usable evidence, never a final response. The
-    // final structured pass still requires a complete, valid provider result.
     if (research.stop_reason !== "max_tokens")
       assertAnthropicComplete(research.stop_reason);
     const notes = research.content
@@ -120,7 +115,6 @@ export const generateAnthropicText = async (
     .join("");
 };
 
-// Replay complete native blocks, including signed thinking and server search.
 export const createAnthropicTextSession = (
   options: AiTextOptions,
 ): AiTextSession => {

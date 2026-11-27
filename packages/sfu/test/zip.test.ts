@@ -102,7 +102,6 @@ describe("zip game module", () => {
     );
     const solution = playing.solutionPath;
 
-    // Send first two cells of the solution.
     const cells = [solution[0], solution[1]];
     const afterMove = zipModule.onMove(
       playing,
@@ -163,7 +162,6 @@ describe("zip game module", () => {
     );
     const solution = playing.solutionPath;
 
-    // Submit the full solution for alice.
     const afterWin = zipModule.onMove(
       playing,
       { playerId: "alice", type: "move", payload: { cells: solution } },
@@ -365,7 +363,6 @@ describe("zip game module", () => {
     const r1Done = completeRound(r1, 2000, ctx);
     expect(r1Done.phase).toBe("results");
 
-    // Advance to round 2.
     const r2 = zipModule.onMove(
       r1Done,
       { playerId: "host", type: "nextRound", payload: undefined },
@@ -416,7 +413,7 @@ describe("zip game module", () => {
 
     const done = completeRound(playing, 2000);
     expect(done.phase).toBe("results");
-    expect(zipModule.isFinished!(done)).toBe(true); // 1 round, final
+    expect(zipModule.isFinished!(done)).toBe(true);
   });
 
   it("publicView exposes the client puzzle contract without the solution during play", () => {
@@ -444,7 +441,7 @@ describe("zip game module", () => {
     expect(pub.roundStartedAt).toBe(1000);
     expect(pub.roundEndsAt).toBe(181_000);
     expect(pub.standings.length).toBe(3);
-    expect(pub.result).toBeNull(); // Solution not revealed during play.
+    expect(pub.result).toBeNull();
   });
 
   it("playerView reveals only the player's own path", () => {
@@ -471,7 +468,6 @@ describe("zip game module", () => {
     const state = zipModule.setup(context(0));
     const playing = zipModule.onMove(state, { playerId: "host", type: "start", payload: undefined }, context(1000));
     const solution = playing.solutionPath;
-    // Undo as the native board sends it: the full path minus its last cell is a valid prefix.
     const undone = zipModule.onMove(
       zipModule.onMove(playing, { playerId: "alice", type: "move", payload: { cells: [solution[0], solution[1]] } }, context(1500)),
       { playerId: "alice", type: "move", payload: { cells: [solution[0]] } },

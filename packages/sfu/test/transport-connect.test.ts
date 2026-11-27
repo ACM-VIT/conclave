@@ -58,8 +58,6 @@ describe("connectWebRtcTransportOnce", () => {
     ).resolves.toBeUndefined();
     expect(transport.connectCalls).toBe(1);
 
-    // The handshake may remain in progress after connect() accepts the
-    // fingerprint. Repeated signaling must not connect the transport again.
     await connectWebRtcTransportOnce(asTransport(transport), dtlsParameters);
     expect(transport.connectCalls).toBe(1);
   });

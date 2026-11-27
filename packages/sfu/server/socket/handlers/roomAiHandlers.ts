@@ -149,8 +149,6 @@ export const registerRoomAiHandlers = (context: ConnectionContext): void => {
       try {
         const host = member.client instanceof Admin;
         const env = readAiEnvironment(process.env);
-        // A model supplied with a new key is an initial suggestion. Preserve a
-        // choice saved while the contributor's discovery request was in flight.
         const selectModel =
           typeof data.model === "string" &&
           (typeof data.apiKey !== "string" ||

@@ -1298,10 +1298,6 @@ const runProfile = async (profile, repetition) => {
       );
     }
 
-    // Establish the requested receiver topology before waiting for primary
-    // decode. Waiting here would leave a nominal multi-receiver run at one
-    // receiver long enough to trigger the one-to-one producer handoff, making
-    // startup speed decide which topology the harness actually measured.
     for (
       let receiverIndex = 2;
       receiverIndex <= receiverCount;
@@ -1437,8 +1433,6 @@ const runProfile = async (profile, repetition) => {
           requiredStableMs: warmupMs,
           minimumDecodedFrames,
           timeoutMs: Math.max(20_000, warmupMs + 16_000),
-          // Every receiver is bound independently while the shared publisher
-          // must retain its exact configured and active topology.
           expectedActiveSenderEncodings: expectedSenderEncodingCount,
           expectedSenderEncodingCount,
           expectedSenderEncodings:
@@ -1767,9 +1761,6 @@ const runProfile = async (profile, repetition) => {
     }
     publisherStatsEnd.measurementWindowId = measurementWindow.id;
     publisherStatsEnd.measurementBoundary = "end";
-    // Ordered teardown: receiver sampling and its worker drain finish first,
-    // publisher codec observation remains live through that boundary, and the
-    // continuous process envelope is always the final observer to stop.
     const receiverSamplerMeasurements = await Promise.all(
       receiverRuns.map((receiverRun) =>
         evaluate(
@@ -2747,9 +2738,6 @@ const run = async () => {
 };
 
 const exitAfterStdoutFlush = (code) => {
-  // Chromium/CDP or fetch implementations can leave keep-alive handles behind
-  // after every browser process is gone. This is a CLI: once synchronous
-  // reports are written and stdout is flushed, no background work is valid.
   process.stdout.write("", () => process.exit(code));
 };
 

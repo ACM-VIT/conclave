@@ -536,4 +536,3 @@ it("says a question cannot be reopened again when the server refuses one more re
 
   expect(await outcome).toEqual({ ok: false, error: "This question cannot be reopened again" });
 });
-

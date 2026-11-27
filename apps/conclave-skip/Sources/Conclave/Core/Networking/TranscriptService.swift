@@ -67,10 +67,6 @@ final class TranscriptService {
                 throw TranscriptServiceError.invalidURL
             }
 
-            // A retry can open while an earlier socket is still connecting.
-            // Close it first (its callbacks are fenced by generation) so it
-            // cannot stay open beside the new one. Close before connecting:
-            // on Android the bridge holds a single shared socket.
             webSocket?.close()
             webSocket = nil
             let ws = TranscriptWebSocket()

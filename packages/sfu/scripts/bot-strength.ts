@@ -1,4 +1,3 @@
-/* Ad-hoc strength harness for the chess bot (not wired into CI). */
 import { Chess, type Move } from "chess.js";
 import { pickBotMove, type BotLevel } from "../server/games/chessBot.js";
 import type { GameRng } from "../server/games/types.js";
@@ -47,7 +46,6 @@ const material = (game: Chess): number => {
   return sum;
 };
 
-/** Returns "white" | "black" | "draw", plies played, end reason. */
 const playGame = (white: Player, black: Player, rng: GameRng, maxPlies = 240) => {
   const game = new Chess();
   const fens = [game.fen()];
@@ -101,14 +99,10 @@ const tactic = (name: string, fen: string, good: (m: { from: string; to: string 
 
 const rng = mkRng(42);
 
-// Warm the JIT so tactic picks reflect a long-lived server process, not
-// cold-start budget aborts.
 for (let i = 0; i < 5; i += 1) pickBotMove(new Chess().fen(), "hard", rng);
 
 console.log("--- tactics ---");
-// Black queen on d3, capturable by the c2 or e2 pawn.
 tactic("free queen", "rnb1kbnr/pppp1ppp/8/8/8/3q4/PPPPPPPP/RNBQKBNR w KQkq - 0 1", (m) => m.to === "d3");
-// Undefended rook on e5; Rxe5 is the unique clearly-best move.
 tactic("free rook", "k7/8/8/4r3/8/8/4R3/K7 w - - 0 1", (m) => m.from === "e2" && m.to === "e5");
 tactic("mate in 1", "7k/1R6/8/8/8/8/8/R3K3 w - - 0 1", (m) => m.from === "a1" && m.to === "a8");
 

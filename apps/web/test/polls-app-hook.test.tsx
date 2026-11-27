@@ -335,4 +335,3 @@ it("finishes a download from an older server, whose pages carry no rewrite count
   expect(outcome).toEqual({ ok: true });
   expect(csv).toMatch(/Ana,Yes,[^]*Ben,Yes,/);
 });
-

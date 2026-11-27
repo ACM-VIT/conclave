@@ -124,22 +124,10 @@ export const selectRoomWebcamCodec = (
 ): WebcamCodecPolicy["codec"] => {
   if (participants.length === 0) return "vp8";
 
-  // VP9 is deliberately fail closed. A missing/legacy declaration, a receiver
-  // without profile 0, or a potential publisher without continuous L2T1
-  // inter-layer prediction support keeps
-  // the entire room on the interoperable baseline.
-  // VP9 L2T1 offers only a half-resolution floor layer, so a viewer whose
-  // bandwidth falls below it receives no video at all. VP8 simulcast keeps a
-  // small base layer, so it stays the default unless VP9 is explicitly enabled.
   if (vp9Enabled && participantsSupportWebcamCodec(participants, "vp9")) {
     return "vp9";
   }
 
-  // Prefer the common VP8 baseline even when one client reports that H264 is
-  // likely hardware accelerated. Conclave's VP8 path carries receiver-selectable
-  // simulcast layers; the current H264 sender path is single-layer and can force
-  // a constrained participant to decode the full stream. H264 remains the
-  // interoperability fallback when VP8 is genuinely unavailable.
   if (participantsSupportWebcamCodec(participants, "vp8")) {
     return "vp8";
   }
@@ -148,8 +136,6 @@ export const selectRoomWebcamCodec = (
     return "h264";
   }
 
-  // Legacy clients predate capability negotiation and historically publish
-  // VP8. Never infer VP9 from router support or from another participant.
   return "vp8";
 };
 

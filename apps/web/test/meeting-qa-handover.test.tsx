@@ -1025,4 +1025,3 @@ it("keeps one connection token through a webinar's handover to the app and a rej
   expect(afterARejoinOverTheSameSocket).toBe(onTheOldEvents);
   expect(qa.connection).not.toBe(onTheOldEvents);
 });
-

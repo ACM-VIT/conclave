@@ -8,7 +8,6 @@ import type {
   AiEvent,
 } from "#types";
 import { baseUrl, requestOptions } from "#request-options";
-// All OpenAI users, including moderation, share endpoint and retry policy.
 export const createOpenAiClient = (
   env: AiEnvironment,
   apiKey = getProviderApiKey(env, "openai"),
@@ -148,7 +147,6 @@ export const createOpenAiTextSession = (
       if (response.status !== "completed")
         throw new Error("OpenAI did not finish the response.");
       for (const item of response.output) {
-        // SDK parsing adds fields that are not valid Responses input fields.
         if (item.type === "function_call") {
           openAiHistory.push({
             type: "function_call",

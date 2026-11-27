@@ -484,11 +484,6 @@ const webcamConsumerEntry = (debug) => {
   return entries.length === 1 ? entries[0] : null;
 };
 
-/**
- * Convert one page's product debug snapshot into the strict checkpoint shape.
- * Missing or ambiguous product fields intentionally remain null and are later
- * rejected by the schema-13 assessor.
- */
 export function normalizeDynamicNetworkEndpointCheckpoint(
   raw,
   endpoint,
@@ -1288,9 +1283,6 @@ const publisherHasStableVp8PoorCaps = (publisher) => {
   const configuration = publisher?.senderEncodingConfiguration;
   const encodings = configuration?.encodings;
   const maximumBitrates = [80_000, 25_000, 15_000];
-  // A normal good-start live sender preserves its canonical cadence and only
-  // changes bitrate. A sender created while constrained may expose lower
-  // values, which also satisfy these upper bounds.
   const maximumFramerates = [12, 20, 30];
   const scales = [4, 2, 1];
   return (
@@ -1423,10 +1415,6 @@ const codecAndContinuityEvidence = ({ plan, sampler, measurement, bindings }) =>
       requiredSustainedMs: 3_000,
     },
   );
-  // Codec identity is phase evidence, not evidence that the product met an
-  // adaptation milestone. Sample immutable scheduled checkpoints inside each
-  // counter window so a genuine downshift/recovery miss remains a product
-  // failure instead of being misreported as absent harness evidence.
   const pristine = checkpointAt(sampler, 500)?.endpointSnapshots?.publisher;
   const poor = checkpointAt(sampler, 35_500)?.endpointSnapshots?.publisher;
   const recovered = checkpointAt(sampler, 102_500)?.endpointSnapshots?.publisher;
@@ -1619,9 +1607,6 @@ export function buildDynamicNetworkTransitionEvidence({
 }
 
 export const sleepUntil = async ({ targetEpochMs, now, setTimer }) => {
-  // Timers are allowed to wake slightly early. The transition ledger is bound
-  // to absolute epochs, so never apply a mutation until that epoch is actually
-  // reached; otherwise an accurate run can invalidate itself by 1-2ms.
   while (now() < targetEpochMs) {
     await new Promise((resolve) => {
       const timer = setTimer(
@@ -1633,11 +1618,6 @@ export const sleepUntil = async ({ targetEpochMs, now, setTimer }) => {
   }
 };
 
-/**
- * Arm CDP/hints after the joined product debug hook exists, but before one
- * immutable future epoch. All later mutations and samples use absolute epoch
- * targets; no callback-relative drift or deprecated CDP fallback is allowed.
- */
 export async function startDynamicNetworkTransitionController({
   plan,
   endpoints,

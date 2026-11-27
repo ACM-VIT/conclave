@@ -24,17 +24,10 @@ import { createChatImageUploadToken } from "../../chatImages.js";
 
 const AT_DIRECT_MESSAGE_PATTERN = /^@(\S+)\s+([\s\S]+)$/;
 const DM_COMMAND_PATTERN = /^\/dm\s+(\S+)\s+([\s\S]+)$/i;
-// "@Conclave …" summons the room AI. It must stay a public message (never a DM),
-// so we detect it before direct-message parsing. The mention may appear anywhere
-// ("Hey @Conclave …"); the (^|\s) boundary avoids matching emails like
-// "foo@conclave.ai".
 const CONCLAVE_MENTION_PATTERN = /(^|\s)@conclave\b/i;
 const CONCLAVE_BOT_USER_ID = "conclave-assistant";
 const CONCLAVE_BOT_DISPLAY_NAME = "Conclave";
 const MAX_CONCLAVE_CONTENT_LENGTH = AI_GENERATION_LIMITS.relayContentChars;
-// Caps for the assistant process state (reasoning trace + tool steps) relayed
-// alongside the answer. Must stay in sync with the web assistant API route,
-// which clamps to the same limits before signing.
 const MAX_CONCLAVE_REASONING_LENGTH = AI_GENERATION_LIMITS.relayReasoningChars;
 const MAX_CONCLAVE_TASKS = 32;
 const MAX_CONCLAVE_TASK_ID_LENGTH = 120;
@@ -59,8 +52,6 @@ const MAX_GIF_URL_LENGTH = 2048;
 const MAX_REPLY_CONTENT_LENGTH = 280;
 const MAX_REPLY_NAME_LENGTH = 120;
 const MAX_TTS_VOICE_TOKEN_LENGTH = 2048;
-// Mirrors TTS_MAX_TEXT_LENGTH in @conclave/meeting-core (the SFU stays
-// dependency-free of it) and the web /api/tts/speech endpoint.
 const MAX_TTS_TEXT_LENGTH = 500;
 const TTS_VOICE_TOKEN_PATTERN = /^[A-Za-z0-9._~-]+$/;
 const KLIPY_MEDIA_HOSTS = new Set(["static.klipy.com"]);
@@ -145,8 +136,6 @@ const normalizeChatGifAttachment = (
     candidate.kind === "gif"
       ? candidate.kind
       : undefined;
-  // Clips carry an MP4 alongside the GIF fallback in `url`; only clips may
-  // declare one, and it must live on the same trusted Klipy media host.
   const videoUrl =
     kind === "clip"
       ? (normalizeHttpsUrl(candidate.videoUrl, KLIPY_MEDIA_HOSTS) ?? undefined)
@@ -210,10 +199,6 @@ interface ReplyNormalizeOptions {
   dmTargetUserId?: string | null;
 }
 
-// Resolve public quoted messages from broadcast history so a reply cannot put
-// fabricated words in someone else's mouth. Direct messages are never retained
-// in public room history, so client snapshots are accepted only for replies
-// that remain in the same private thread.
 const normalizeReplyTo = (
   value: unknown,
   room: Room,
@@ -335,8 +320,6 @@ type ConclaveAnswerData = {
   signature?: unknown;
 };
 
-// One step of the assistant's process timeline (thinking, web search,
-// transcript read, GitHub issue, answer writing) relayed to the room.
 type ConclaveAnswerTask = {
   id: string;
   kind: string;
@@ -371,9 +354,6 @@ const relaySigningInput = (packet: ConclaveRelayPacketFields): string =>
     done: packet.done,
     timestamp: packet.timestamp,
     expiresAt: packet.expiresAt,
-    // Optional process-state fields. `undefined` values are dropped by
-    // JSON.stringify, so legacy packets without them keep the exact signing
-    // input they were signed with. Must match the web assistant API route.
     reasoning: packet.reasoning || undefined,
     reasoningDone: packet.reasoningDone === true ? true : undefined,
     tasks: packet.tasks?.length
@@ -399,9 +379,6 @@ const safeSignatureEquals = (left: string, right: string): boolean => {
   return timingSafeEqual(leftBuffer, rightBuffer);
 };
 
-// Validates the relayed task list without altering any value (a mutated value
-// would fail the signature check anyway). Returns undefined when absent and
-// null when malformed, in which case the whole packet is dropped.
 const normalizeConclaveTasks = (
   value: unknown,
 ): ConclaveAnswerTask[] | null | undefined => {
@@ -715,8 +692,6 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
         return;
       }
 
-      // No safety-model gate here: the upload endpoint runs the image safety
-      // check when one is configured and accepts the image when none is.
 
       const forwardedProtocol = socket.handshake.headers["x-forwarded-proto"];
       const forwardedHost = socket.handshake.headers["x-forwarded-host"];
@@ -770,7 +745,6 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
           respond(callback, { error });
         };
 
-        // Throttle: drop over-budget messages (ack an error, do not process).
         if (!takeToken(socket, "sendChat", RATE_LIMITS.chat)) {
           rejectMessage("You are sending messages too quickly");
           return;
@@ -816,8 +790,6 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
           return;
         }
 
-        // "@Conclave …" is always a public message so the whole room sees the
-        // question; skip the direct-message path it would otherwise match.
         const directMessageIntent = isConclaveMention(content)
           ? null
           : parseDirectMessageIntent(content);
@@ -866,8 +838,6 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
           messageContent = image.fileName;
         }
 
-        // Any whitespace after /tts counts (matches meeting-core's parser),
-        // so tab-separated messages cannot bypass the host toggle or cap.
         const isTtsMessage =
           !directMessageIntent && /^\/tts(\s|$)/i.test(messageContent);
         if (isTtsMessage) {
@@ -1024,9 +994,6 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
     },
   );
 
-  // The web app signs every streamed assistant packet after it has generated it
-  // from an SFU-issued token. The SFU only fans out packets that match the
-  // current room/client and have not been tampered with.
   socket.on(
     "conclaveAnswer",
     (data: ConclaveAnswerData) => {
@@ -1075,8 +1042,6 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
           timestamp: packet.timestamp,
         };
 
-        // Fan out the process state too so every participant renders the same
-        // thinking/actions flow the asker sees.
         socket.to(room.channelId).emit("conclaveMessage", {
           ...message,
           done: packet.done,

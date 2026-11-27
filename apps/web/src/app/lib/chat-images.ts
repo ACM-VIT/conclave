@@ -39,12 +39,6 @@ const CHAT_IMAGE_EXTENSION_TYPES: Record<
   avif: "image/avif",
 };
 
-/**
- * Returns the upload MIME type for a file, or null when it is not one of the
- * supported chat image formats. Clipboards and some file managers report
- * nonstandard aliases (`image/jpg`) or no type at all, so those fall back to
- * the file extension.
- */
 export function resolveChatImageType(
   file: Pick<File, "name" | "type">,
 ): ChatImageAttachment["mimeType"] | null {
@@ -62,11 +56,6 @@ function isClipboardImageCandidate(file: Pick<File, "name" | "type">) {
   return file.type.startsWith("image/") || resolveChatImageType(file) !== null;
 }
 
-/**
- * Picks the image to attach from a paste. Supported formats win over other
- * image types, because macOS clipboards can carry the same picture as both
- * TIFF and PNG.
- */
 export function findClipboardImageFile(
   clipboardData: ClipboardImageData,
 ): File | null {
@@ -132,19 +121,12 @@ async function transcodeImageFile(
         type: "image/jpeg",
       });
     }
-    // Still too large: hand back the PNG so the caller reports the size limit.
     return pngFile;
   } finally {
     bitmap.close();
   }
 }
 
-/**
- * Turns a picked or pasted file into one the upload endpoint accepts: fixes
- * a missing or aliased MIME type, and re-encodes other image formats the
- * browser can decode (such as TIFF from the macOS clipboard) to PNG or JPEG.
- * Returns null when the file cannot be sent as a chat image.
- */
 export async function prepareChatImageFile(file: File): Promise<File | null> {
   const resolvedType = resolveChatImageType(file);
   if (resolvedType) {

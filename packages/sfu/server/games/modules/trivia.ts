@@ -15,14 +15,6 @@ import {
   normalizeGeneratedKey,
 } from "../aiContent.js";
 
-/**
- * Trivia: a Kahoot/Deezer-style scored quiz.
- *
- * Flow: lobby -> (question -> reveal) x N -> results. The server holds the
- * correct answer and only discloses it during the reveal phase. Points reward
- * both correctness and speed. Timers are driven by `onTick` against a deadline.
- */
-
 const QUESTION_MS = 20_000;
 const REVEAL_MS = 6_000;
 const QUESTIONS_PER_GAME = 7;
@@ -159,11 +151,6 @@ const scoreboard = (state: TriviaState, ctx: GameContext) =>
     }))
     .sort((a, b) => b.score - a.score);
 
-/**
- * Typed move contract. Decoded from the untrusted `GameMove` at the top of
- * `onMove`, so the switch below works on validated, correctly-typed fields
- * instead of `payload as` casts.
- */
 export type TriviaMove =
   | { type: "start" }
   | { type: "answer"; choice: number }
@@ -177,8 +164,6 @@ const decodeTriviaMove = (move: GameMove): TriviaMove => {
     case "next":
       return { type: move.type };
     case "answer": {
-      // Validate the shape here; the against-the-board range check stays in the
-      // case (it needs the current question). Both throw "Invalid answer".
       const choice = requireInt(payloadField(move.payload, "choice"), "Invalid answer");
       if (choice < 0) throw new GameMoveError("Invalid answer");
       return { type: "answer", choice };
@@ -410,10 +395,6 @@ export const triviaModule: GameModule<TriviaState> = {
               .length,
         )
       : [];
-    // Per-player tile status for the video-tile overlay. Non-secret: during the
-    // question phase it only says WHO has answered (never their choice); at
-    // reveal it says whether each answerer was right (the correct answer is
-    // already public at reveal) plus the points they gained.
     const tiles: Record<
       string,
       { acted?: boolean; outcome?: "correct" | "wrong"; note?: string }

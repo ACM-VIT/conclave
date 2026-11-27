@@ -203,7 +203,6 @@ describe("remote tile shape reporting", () => {
     const tile = renderTile({ onVideoAspectChange });
     onVideoAspectChange.mockClear();
 
-    // 0.773 and 0.775 sit either side of the 3:4 / 4:5 midpoint.
     tile.receiveFrames(495, 640);
     tile.receiveFrames(124, 160);
     expect(onVideoAspectChange.mock.calls).toEqual([[3 / 4]]);

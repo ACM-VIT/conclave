@@ -1,12 +1,6 @@
 import { getChatMessageSegments } from "./utils";
 
-/**
- * Discord-style `:name:` shortcuts for meeting chat. Names follow Discord's
- * (and GitHub's) common spellings, with the usual aliases. Unknown names are
- * left as typed.
- */
 const EMOJI_SHORTCODES: Readonly<Record<string, string>> = {
-  // Faces
   smile: "😄",
   smiley: "😃",
   grinning: "😀",
@@ -107,7 +101,6 @@ const EMOJI_SHORTCODES: Readonly<Record<string, string>> = {
   saluting_face: "🫡",
   melting_face: "🫠",
   face_holding_back_tears: "🥹",
-  // Hands and people
   thumbsup: "👍",
   "+1": "👍",
   thumbup: "👍",
@@ -143,7 +136,6 @@ const EMOJI_SHORTCODES: Readonly<Record<string, string>> = {
   shrug: "🤷",
   facepalm: "🤦",
   bow: "🙇",
-  // Hearts and symbols
   heart: "❤️",
   orange_heart: "🧡",
   yellow_heart: "💛",
@@ -181,7 +173,6 @@ const EMOJI_SHORTCODES: Readonly<Record<string, string>> = {
   exclamation: "❗",
   bangbang: "‼️",
   interrobang: "⁉️",
-  // Celebration, objects and nature
   tada: "🎉",
   confetti_ball: "🎊",
   balloon: "🎈",
@@ -268,12 +259,8 @@ export function getEmojiForShortcode(name: string): string | undefined {
     : undefined;
 }
 
-/** Converts shortcuts in plain text (no link detection). */
 export function replaceEmojiShortcodesInText(text: string): string {
   if (!text.includes(":")) return text;
-  // Scan with an explicit cursor so a closing colon can open the next
-  // shortcode when the first name is unknown (`:nope:smile:`), while a
-  // recognised one consumes both of its colons.
   let result = "";
   let cursor = 0;
   SHORTCODE_PATTERN.lastIndex = 0;
@@ -290,10 +277,6 @@ export function replaceEmojiShortcodesInText(text: string): string {
   return cursor === 0 ? text : result + text.slice(cursor);
 }
 
-/**
- * Replaces recognised `:name:` shortcuts with their emoji. Links are left
- * untouched so URLs containing colons still work.
- */
 export function replaceEmojiShortcodes(content: string): string {
   if (!content.includes(":")) return content;
   return getChatMessageSegments(content)
@@ -303,15 +286,8 @@ export function replaceEmojiShortcodes(content: string): string {
     .join("");
 }
 
-// A direct message starts with its recipient (`@name …` or `/dm name …`). The
-// server resolves that token against display names, which may contain colons,
-// so it must reach the server exactly as typed.
 const DIRECT_MESSAGE_PREFIX_PATTERN = /^(\s*(?:@\S+|\/dm\s+\S+))([\s\S]*)$/i;
 
-/**
- * Expands shortcuts in an outgoing chat message, leaving a direct-message
- * recipient token untouched.
- */
 export function replaceEmojiShortcodesInMessage(content: string): string {
   const match = content.match(DIRECT_MESSAGE_PREFIX_PATTERN);
   if (!match) return replaceEmojiShortcodes(content);

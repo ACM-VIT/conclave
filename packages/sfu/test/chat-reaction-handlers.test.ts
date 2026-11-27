@@ -16,15 +16,6 @@ type ToggleResult =
   | { ok: true; reactions: ChatMessageReaction[] }
   | { ok: false; reason: "not-found" | "too-many-reactions" };
 
-/**
- * Binds registerChatReactionHandlers to a mock socket/context so the gating and
- * validation — the security-relevant half of the feature — is exercised end to
- * end, not just Room.toggleChatMessageReaction (covered separately).
- *
- * The client is a plain object, deliberately NOT an Admin instance, so the
- * host bypass for chat-lock / kill-switch never applies: this is the ordinary
- * participant path that must be gated.
- */
 const makeHarness = (
   options: {
     isObserver?: boolean;
@@ -201,8 +192,6 @@ describe("registerChatReactionHandlers", () => {
   it("rate-limits a burst once the bucket is drained", () => {
     const { react } = makeHarness();
 
-    // Bucket starts full at capacity 10; the 11th call in a tight loop (no
-    // meaningful refill) must be turned away.
     const responses = Array.from({ length: 11 }, () =>
       call(react, { messageId: "m1", emoji: "👍" }),
     );

@@ -304,4 +304,3 @@ it("keeps a new composer and its draft when a poll launched from a cancelled one
   expect(byTestId("poll-composer")).not.toBeNull();
   expect((byTestId("poll-question-input") as HTMLInputElement).value).toBe("Dinner?");
 });
-

@@ -616,4 +616,3 @@ describe("telling a webinar of old clients about a change", () => {
     ).toBe(true);
   }, 60_000);
 });
-

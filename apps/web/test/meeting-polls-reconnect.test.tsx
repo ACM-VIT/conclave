@@ -331,4 +331,3 @@ it("names each connection of polls by its own token, stable within it and new af
   expect(afterANewView).toBe(first);
   expect(current.connection).not.toBe(first);
 });
-

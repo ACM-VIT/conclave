@@ -103,11 +103,6 @@ const createTranscriptRelayToken = (options: {
   );
 };
 
-/**
- * Read-only transcript access for the operator dashboard: a viewer token with
- * every capability off. The dashboard opens the same worker WebSocket meeting
- * clients use and only ever receives.
- */
 export const createTranscriptSpectatorToken = (
   room: { id: string; clientId: string; channelId: string },
   operator: string,

@@ -284,13 +284,8 @@ export const getTranscriptResponseModelConfig = (
     qaMaxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
   };
 
-// Older selections remain valid, but the built-in picker starts with current models.
 export const AI_RESPONSE_MODELS = TRANSCRIPT_QA_MODELS;
 
-// The OpenAI Models API lists IDs, not endpoint/tool capabilities. Limit discovery
-// to the general-purpose Responses families we support; never infer image/audio
-// compatibility from an arbitrary model ID. Claude lists additionally supply
-// capability metadata, which is checked by the server catalog adapter.
 const responseModelProfile = (
   id: string,
 ): TranscriptResponseModelConfig | null => {
@@ -313,7 +308,6 @@ const responseModelProfile = (
       ? `GPT-${openai[1]} ${family[0].toUpperCase()}${family.slice(1)}${openai[3] ? ` (${openai[3]})` : ""}`
       : id,
     description: "Available from your provider account.",
-    // New IDs use provider defaults until their optional tuning is documented.
     supportsReasoning: false,
     supportsTextVerbosity: false,
     supportsStructuredOutputs: true,

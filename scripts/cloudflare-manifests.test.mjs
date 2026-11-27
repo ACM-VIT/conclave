@@ -36,9 +36,6 @@ test("Cloudflare inlines Next.js preview props and rejects unknown manifests", a
       monorepoRoot: root,
       appBuildOutputPath: path.join(root, "apps/web"),
     });
-    // Patch the real Next.js module (not a hand-written stand-in) so this test
-    // follows both Next.js and the adapter: every manifest read must be
-    // inlined, because the Worker has no filesystem.
     const nextLoadManifest = require.resolve("next/dist/server/load-manifest.external.js", {
       paths: [path.join(import.meta.dirname, "../apps/web")],
     });

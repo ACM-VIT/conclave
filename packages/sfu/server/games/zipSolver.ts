@@ -1,4 +1,3 @@
-/** Pure puzzle generation and validation helpers for the Zip game module. */
 export type CellIndex = number;
 export type AnchorMap = Record<CellIndex, number>;
 
@@ -151,7 +150,6 @@ function applyBackbiteMove(path: CellIndex[], size: SupportedGridSize, random: R
 }
 
 function randomizePath(path: CellIndex[], size: SupportedGridSize, random: RandomSource): void {
-  // Use N^2 moves for proper mixing, where N is the number of cells (size * size)
   const targetMoves = size * size * size * size;
   const maxAttempts = targetMoves * 10;
   let acceptedMoves = 0;
@@ -340,9 +338,6 @@ export function generatePuzzle(config: PuzzleConfig = generateRandomPuzzleConfig
   };
 }
 
-/* ------------------------------------------------------------------ */
-/*  Validation & Solving logic for Game Server                         */
-/* ------------------------------------------------------------------ */
 
 export type ValidationResult =
   | { valid: true }
@@ -450,8 +445,6 @@ export function solveForHint(
   puzzle: GeneratedPuzzle,
   currentPath: CellIndex[]
 ): { validPrefix: CellIndex[]; nextCell: CellIndex } | null {
-  // To keep hint solving fast and robust for the 1D backbite algorithm without DFS,
-  // we align the player's path with the generated solution path.
   let matchLen = 0;
   while (
     matchLen < currentPath.length &&

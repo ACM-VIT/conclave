@@ -6,7 +6,6 @@ if [ -z "${VIDEO_TARGET_IP}" ] || [ -z "${VIDEO_TARGET_PORT}" ]; then
   tail -f /dev/null
 fi
 
-# Wait for Xvfb to be ready
 for i in {1..30}; do
   if xdpyinfo -display :99 >/dev/null 2>&1; then
     echo "[Video] Xvfb is ready"

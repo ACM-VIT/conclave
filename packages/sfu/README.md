@@ -181,7 +181,7 @@ starts after the actual worker ports.
 ```sh
 pnpm -C packages/sfu exec tsc --noEmit   # typecheck
 pnpm -C packages/sfu test                # vitest unit tests
-pnpm run lint:packages                   # workspace lint (from repo root)
+pnpm run lint:workspace                  # workspace lint (from repo root)
 ```
 
 Untrusted network input (express `req.body`, socket payloads) is narrowed

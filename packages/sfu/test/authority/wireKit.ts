@@ -231,4 +231,3 @@ export const field = (value: Json | null, ...path: string[]): Json | null => {
   }
   return node;
 };
-
