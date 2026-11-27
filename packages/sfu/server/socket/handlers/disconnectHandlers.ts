@@ -73,7 +73,6 @@ export const registerDisconnectHandlers = (
         Logger.info(`User ${userId} left room ${roomId}`);
       };
 
-
       if (shouldDelay) {
         room.scheduleDisconnect(
           userId,

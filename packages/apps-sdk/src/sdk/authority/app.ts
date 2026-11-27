@@ -12,8 +12,11 @@ export type AuthorityApp<C extends AuthorityContract = AuthorityContract> = {
   description?: string;
   icon?: React.ReactNode;
   contract: C;
-  /** The panel's content. It reads the app through `useAuthority(contract)`. */
-  panel: React.ComponentType;
+  /**
+   * The panel's content, reading the app through `useAuthority(contract)`.
+   * An app that ships hooks for the host to render with may leave it out.
+   */
+  panel?: React.ComponentType;
 };
 
 export const defineAuthorityApp = <C extends AuthorityContract>(

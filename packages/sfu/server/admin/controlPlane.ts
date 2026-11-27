@@ -17,6 +17,7 @@ import type { SfuState } from "../state.js";
 import {
   emitWebinarAttendeeCountChanged,
   emitWebinarFeedChanged,
+  grantWebinarQaList,
 } from "../webinarNotifications.js";
 import { getSocketContext, type ConnectionContext } from "../socket/context.js";
 import { emitChatHistorySnapshot } from "../socket/handlers/chatHistory.js";
@@ -180,6 +181,13 @@ const activateHostSeat = (room: Room, seat: Admin, joining: ConnectionContext | 
   emitChatHistorySnapshot(seat.socket, room);
   seat.socket.emit("roomLockChanged", { locked: room.isLocked, roomId });
   emitToHost(seat, "admin:roomStateChanged", { roomId, snapshot: toRoomSnapshot(room) });
+  if (seatContext) {
+    const { state } = seatContext;
+    if (state.webinarConfigs.get(room.channelId)?.enabled) {
+      emitToHost(seat, "webinar:handQueueChanged", { roomId, queue: room.getWebinarHandQueue() });
+    }
+    grantWebinarQaList(state, room, seat);
+  }
 };
 
 export const applyHostGrant = (

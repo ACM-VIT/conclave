@@ -29,8 +29,8 @@ import {
   type AuthorityFrame,
   type AuthoritySession,
 } from "@conclave/apps-sdk/authority";
-import { pollsContract } from "../test/authority/fixtures/polls.js";
-import { qaContract } from "../test/authority/fixtures/qa.js";
+import { pollsContract } from "@conclave/apps-sdk/polls/core";
+import { qaContract } from "@conclave/apps-sdk/qa/core";
 import { LoadAudit } from "./authority-load-audit.js";
 import { loadTestClientPolicies } from "./load-test-policy.js";
 

@@ -6,6 +6,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   APP_ID_MAX_LENGTH,
+  CONTRACT_MAX_ACTIONS,
+  CONTRACT_MAX_QUERIES,
   appIdProblem,
   appIdSchema,
   defineContract,
@@ -13,13 +15,14 @@ import {
   SchemaError,
   type Json,
 } from "@conclave/apps-sdk/authority";
-import { DISPLAY_NAME_MAX_LENGTH, key } from "@conclave/apps-sdk/authority/server";
+import { DISPLAY_NAME_MAX_LENGTH, defineAuthority, key, table } from "@conclave/apps-sdk/authority/server";
 import { Client } from "../../config/classes/Client.js";
 import { DEFAULT_AUTHORITY_LIMITS } from "../../server/apps/authority/limits.js";
 import { AuthorityStore } from "../../server/apps/authority/store.js";
 import { answer } from "./answer.js";
 import { Harness, person } from "./harness.js";
-import { pollsAuthority, pollsContract } from "./fixtures/polls.js";
+import { pollsContract } from "@conclave/apps-sdk/polls/core";
+import { pollsAuthority } from "@conclave/apps-sdk/polls/server";
 import { probeAuthority, probeContract } from "./fixtures/probe.js";
 import { applyHostGrant } from "../../server/admin/controlPlane.js";
 
@@ -482,5 +485,73 @@ describe("names", () => {
     expect(exported.ok).toBe(true);
     expect(name.length).toBe(DISPLAY_NAME_MAX_LENGTH);
     expect(email.startsWith(name)).toBe(true);
+  });
+});
+
+describe("a contract's grant list", () => {
+  const named = (count: number, length: number, prefix: string) =>
+    Array.from({ length: count }, (_, index) => `${prefix}${index}`.padEnd(length, "x"));
+  const contractWith = (actions: string[], queries: string[] = []) =>
+    defineContract({
+      id: "wide",
+      major: 1,
+      surface: "panel",
+      actions: Object.fromEntries(actions.map((name) => [name, { input: s.null(), receipt: s.null() }])),
+      queries: Object.fromEntries(queries.map((name) => [name, { input: s.null(), output: s.null() }])),
+      views: { items: s.object({ n: s.int({ min: 0 }) }) },
+    });
+
+  it("refuses more actions or more queries than a contract may name", () => {
+    expect(() => contractWith(named(CONTRACT_MAX_ACTIONS, 4, "a"))).not.toThrow();
+    expect(() => contractWith(named(CONTRACT_MAX_ACTIONS + 1, 4, "a"))).toThrow(/actions/);
+    expect(() => contractWith([], named(CONTRACT_MAX_QUERIES + 1, 4, "q"))).toThrow(/queries/);
+  });
+
+  it("refuses names that together would take a grant list past its bytes", () => {
+    // Every name as long as a name may be: the count is within its cap, the
+    // bytes are not.
+    expect(() => contractWith(named(CONTRACT_MAX_ACTIONS, 48, "a"), named(CONTRACT_MAX_QUERIES, 48, "q"))).toThrow(
+      /bytes/,
+    );
+  });
+
+  it("keeps the first part's whole frame within the part size for a contract at the cap", async () => {
+    // As many of the longest names as the bytes allow.
+    const actions = named(CONTRACT_MAX_ACTIONS, 48, "a");
+    const queries = named(60, 48, "q");
+    const contract = contractWith(actions, queries);
+    const authority = defineAuthority({
+      contract,
+      tables: { items: table<{ n: number }>({ maxRows: 10 }) },
+      timers: {},
+      canView: () => true,
+      actions: Object.fromEntries(
+        actions.map((name) => [
+          name,
+          { roles: ["moderator", "member"] as const, identity: "any" as const, rate: { burst: 10, perSecond: 1 }, run: () => null },
+        ]),
+      ),
+      queries: Object.fromEntries(
+        queries.map((name) => [
+          name,
+          { roles: ["moderator", "member"] as const, rate: { burst: 10, perSecond: 1 }, read: () => null },
+        ]),
+      ),
+      onTimer: {},
+      views: {
+        items: { kind: "shared", source: "items", project: (row: { n: number }) => ({ key: `${row.n}`, value: row }) },
+      },
+    } as never);
+    const room = new Harness([authority]);
+    const tab = await room.open(host, contract as never);
+
+    const first = tab.frames.find((frame) => frame.kind === "replace" && frame.part === 0);
+    const grants = first && "grants" in first ? first.grants : undefined;
+    const bytes = Buffer.byteLength(JSON.stringify(first));
+
+    expect(grants?.actions.length).toBe(CONTRACT_MAX_ACTIONS);
+    expect(grants?.queries.length).toBe(60);
+    // The grants fit with room to spare: at least half the part is left for rows.
+    expect(bytes).toBeLessThanOrEqual(DEFAULT_AUTHORITY_LIMITS.chunkBytes / 2);
   });
 });

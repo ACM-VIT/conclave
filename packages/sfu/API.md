@@ -81,9 +81,11 @@ A guest identity that enters a room with no `guestProof` stays unbound in that r
 A token minted by another service for a guest should carry a `guestProof` that only the owner of that guest identity can obtain.
 ## Authority Apps
 
-`SFU_APPS_AUTHORITY_ENABLED=1` turns on the server-authoritative app runtime (`server/apps/authority`). It is off by default. With it off, no `apps:authority:*` event has a listener and the SFU answers like one that predates the runtime. The value is read once at startup: changing it needs a restart, and a process that is still running keeps the mode it started with for its rooms.
+`SFU_APPS_AUTHORITY_ENABLED=1` turns on the server-authoritative app runtime (`server/apps/authority`). It is off by default. With it off, the SFU answers `apps:authority:capabilities` at once with `unsupported` and has no listener for any other `apps:authority:*` event, so clients hide the apps that need the runtime without waiting. An SFU that predates the runtime does not answer that request at all, and clients give up after their 5 s ack timeout. The value is read once at startup: changing it needs a restart, and a process that is still running keeps the mode it started with for its rooms.
 
 The runtime runs only the modules imported in `server/apps/authority/registry.ts`. It resolves each connection against the live room on every request and before every frame, so a removed or replaced seat receives nothing more. The wire, the guarantees and the limits are in `packages/apps-sdk/docs/reference/authority-runtime.md`.
+
+The registry runs Polls and Q&A. In a room that runs Q&A, `webinar:qa:submit`, `webinar:qa:upvote` and `webinar:qa:moderate` act on the app's book, and `webinar:qaSnapshot` and `webinar:qaChanged` are sent from it, so clients on the old events and clients on the new transport share one list of questions. A connection is sent the old events until it holds its own subscription to the Q&A app, and again once that ends. With the flag off those events are served by the webinar Q&A code as before.
 
 ## HTTP Admin Endpoints
 

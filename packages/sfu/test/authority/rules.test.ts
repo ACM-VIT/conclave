@@ -11,8 +11,10 @@ import {
   type Json,
 } from "@conclave/apps-sdk/authority";
 import { Harness, person, type Sent, type Tab } from "./harness.js";
-import { pollsAuthority, pollsContract } from "./fixtures/polls.js";
-import { qaAuthority, qaContract } from "./fixtures/qa.js";
+import { pollsContract } from "@conclave/apps-sdk/polls/core";
+import { pollsAuthority } from "@conclave/apps-sdk/polls/server";
+import { qaContract } from "@conclave/apps-sdk/qa/core";
+import { qaAuthority } from "@conclave/apps-sdk/qa/server";
 import { quizAuthority, quizContract } from "./fixtures/quiz.js";
 import { wheelAuthority, wheelContract } from "./fixtures/wheel.js";
 import { applyHostGrant } from "../../server/admin/controlPlane.js";
@@ -122,16 +124,16 @@ describe("polls", () => {
       "a private vote reaches hosts as a tally and the voter as their own ballot, and nobody else",
     ).toEqual({
       receivers: 3,
-      host: ["polls"],
+      host: ["results"],
       voter: ["myVotes"],
       voterOtherTab: ["myVotes"],
     });
     expect(
-      at(hostTab.row("polls", pollId), "results", "votes", "o1"),
+      at(hostTab.row("results", pollId), "votes", "o1"),
       "the host sees the tally",
     ).toBe(1);
     expect(
-      at(raviTab.row("polls", pollId), "results"),
+      raviTab.row("results", pollId),
       "participants see no results until they are shared",
     ).toBeNull();
     expect(
@@ -145,7 +147,7 @@ describe("polls", () => {
     const retried = await priyaTab.actWith(operation, "vote", { pollId, optionIds: ["o1"] });
     await room.deliver();
     expect(
-      [retried.ok, at(hostTab.row("polls", pollId), "results", "voterCount")],
+      [retried.ok, at(hostTab.row("results", pollId), "voterCount")],
       "a retry of the same attempt returns the first answer and counts once",
     ).toEqual([true, 1]);
 
@@ -153,14 +155,14 @@ describe("polls", () => {
     applyHostGrant(room.room, { userKey: room.room.userKeysById.get(raviTab.seat.id)!, basis: "promoted" });
     await room.deliver();
     expect(
-      at(raviTab.row("polls", pollId), "results", "voterCount"),
+      at(raviTab.row("results", pollId), "voterCount"),
       "a participant promoted to host gets the tallies at once (review: new hosts see wrong totals)",
     ).toBe(1);
 
     await hostTab.act("share", { pollId, shared: true });
     await room.deliver();
     expect(
-      at(priyaSecondTab.row("polls", pollId), "results", "votes", "o1"),
+      at(priyaSecondTab.row("results", pollId), "votes", "o1"),
       "shared results reach people who have not voted (review: shared results stay hidden)",
     ).toBe(1);
 
@@ -189,7 +191,7 @@ describe("polls", () => {
     expect(
       [
         at(late.row("polls", pollId), "status"),
-        at(late.row("polls", pollId), "results", "voterCount"),
+        at(late.row("results", pollId), "voterCount"),
       ],
       "a late joiner gets the ended poll with its shared results",
     ).toEqual(["ended", 1]);
@@ -239,7 +241,7 @@ describe("Q&A", () => {
     await raviTab.act("upvote", { id, value: true });
     await room.deliver();
     expect(
-      [at(hostTab.row("questions", id), "upvotes"), raviTab.row("myUpvotes", id)],
+      [at(hostTab.row("votes", id), "upvotes"), raviTab.row("myUpvotes", id)],
       "an upvote counts once per person however often it is sent",
     ).toEqual([1, {}]);
 
@@ -254,12 +256,13 @@ describe("Q&A", () => {
       "a dismissed question leaves everyone else's list",
     ).toBeNull();
     expect(
-      [
-        at(priyaTab.row("myQuestions", id), "hidden", "status"),
-        at(hostTab.row("questions", id), "status"),
-      ],
-      "the asker and the host still see it",
-    ).toEqual(["dismissed", "dismissed"]);
+      [priyaTab.row("questions", id), priyaTab.row("myQuestions", id)],
+      "it leaves its asker's list too, with nothing left of it",
+    ).toEqual([null, null]);
+    expect(
+      at(hostTab.row("questions", id), "status"),
+      "the host still sees it, to bring it back",
+    ).toBe("dismissed");
     expect(
       rejectedWith(await raviTab.act("upvote", { id, value: true }), "not-found"),
       "a hidden question cannot be upvoted",
@@ -275,6 +278,31 @@ describe("Q&A", () => {
       "a fourth open question from one person is refused",
     ).toBe(true);
     expect(await room.converged(), "every tab's patched copy matches the server").toBe(true);
+  });
+
+  it("lets a host reopen a question sixteen times, and close it at any time", async () => {
+    const room = new Harness([qaAuthority]);
+    const hostTab = await room.open(host, qaContract);
+    const priyaTab = await room.open(priya, qaContract);
+    const asked = await priyaTab.act("ask", { text: "Can we revisit this?" });
+    const id = asked.ok ? (at(asked.value, "id") as string) : "";
+    const reopened: boolean[] = [];
+    for (let round = 0; round < 16; round += 1) {
+      await hostTab.act("moderate", { id, action: "answered" });
+      reopened.push((await hostTab.act("moderate", { id, action: "reopen" })).ok);
+    }
+    const closedAtTheCap = (await hostTab.act("moderate", { id, action: "dismissed" })).ok;
+    const oneMore = await hostTab.act("moderate", { id, action: "reopen" });
+    const answeringOnceMore = await hostTab.act("moderate", { id, action: "answering" });
+    await room.deliver();
+
+    expect(reopened.every(Boolean), "sixteen reopens are kept").toBe(true);
+    expect(closedAtTheCap, "closing is always allowed").toBe(true);
+    expect(
+      [rejectedWith(oneMore, "reopened-too-often"), rejectedWith(answeringOnceMore, "reopened-too-often")],
+      "a seventeenth reopen is refused, however it is asked for",
+    ).toEqual([true, true]);
+    expect(at(hostTab.row("questions", id), "status"), "the question stays closed").toBe("dismissed");
   });
 
   it("keeps every webinar rule", async () => {
@@ -296,7 +324,7 @@ describe("Q&A", () => {
     expect(
       [
         at(stageHost.row("questions", qid), "status"),
-        at(asker.row("myQuestions", qid), "hidden", "status"),
+        at(asker.row("myQuestions", qid), "hidden", "question", "status"),
         otherViewer.row("questions", qid),
         panelist.row("questions", qid),
       ],
@@ -331,9 +359,31 @@ describe("Q&A", () => {
     webinar.setWebinar(false);
     await webinar.deliver();
     expect(
+      [panelist.row("questions", qid), panelist.row("votes", qid), at(stageHost.row("questions", qid), "status")],
+      "turning webinar mode off keeps a question asked in the webinar from the room while it waits",
+    ).toEqual([null, null, "pending"]);
+
+    await stageHost.act("moderate", { id: qid, action: "answering" });
+    await webinar.deliver();
+    expect(
       at(panelist.row("questions", qid), "status"),
-      "turning webinar mode off republishes pending questions to everyone",
-    ).toBe("pending");
+      "answering it is what makes it public",
+    ).toBe("answering");
+
+    const member = await webinar.open(ravi, qaContract);
+    const inTheMeeting = await panelist.act("ask", { text: "Asked in the meeting" });
+    const mid = inTheMeeting.ok ? (at(inTheMeeting.value, "id") as string) : "";
+    await webinar.deliver();
+    const seenInTheMeeting = at(member.row("questions", mid), "status");
+    webinar.setWebinar(true, true);
+    await webinar.deliver();
+    const seenInTheWebinar = [member.row("questions", mid), otherViewer.row("questions", mid)];
+    webinar.setWebinar(false);
+    await webinar.deliver();
+    expect(
+      [seenInTheMeeting, seenInTheWebinar, at(member.row("questions", mid), "status")],
+      "a question asked in the meeting waits unseen while the room is a webinar, and comes back after",
+    ).toEqual(["pending", [null, null], "pending"]);
     expect(await webinar.converged(), "every tab's patched copy matches the server").toBe(true);
   });
 });

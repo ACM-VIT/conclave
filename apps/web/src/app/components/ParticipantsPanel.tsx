@@ -20,6 +20,7 @@ import {
 import { memo, useEffect, useMemo, useState } from "react";
 import type { Socket } from "socket.io-client";
 import { Avatar } from "@conclave/ui-tokens/web";
+import { useConnectionRequest } from "../hooks/useConnectionRequest";
 import { useMeetVolume } from "../hooks/useMeetVolume";
 import type {
   Participant,
@@ -35,6 +36,7 @@ import {
   denyPendingUser,
 } from "../lib/admissions";
 import PanelNoticeSlot from "./PanelNoticeSlot";
+import { QaModerationActions } from "./qa/QaPanel";
 
 interface ParticipantsPanelProps {
   participants: Map<string, Participant>;
@@ -64,6 +66,8 @@ interface ParticipantsPanelProps {
   onDemoteWebinarParticipant?: (
     userId: string,
   ) => Promise<{ ok: boolean; error?: string }>;
+  webinarQaWaiting?: boolean;
+  webinarQaConnection?: unknown;
 }
 
 const ICON = 18;
@@ -102,6 +106,8 @@ function ParticipantsPanel({
   onModerateWebinarQuestion,
   onPromoteWebinarAttendee,
   onDemoteWebinarParticipant,
+  webinarQaWaiting = false,
+  webinarQaConnection,
 }: ParticipantsPanelProps & {
   socket: Socket | null;
   isAdmin?: boolean | null;
@@ -175,6 +181,15 @@ function ParticipantsPanel({
         );
       });
   }, [webinarEnabled, webinarQaEntries]);
+  // A question a host hid stays here, after the open ones, so whoever
+  // moderates the webinar can bring it back.
+  const hostWebinarQuestions = useMemo(() => {
+    if (!webinarEnabled) return [];
+    const hidden = webinarQaEntries
+      .filter((entry) => entry.status === "dismissed")
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+    return [...openWebinarQuestions, ...hidden];
+  }, [openWebinarQuestions, webinarEnabled, webinarQaEntries]);
 
   const runWebinarAction = async (
     key: string,
@@ -193,6 +208,15 @@ function ParticipantsPanel({
     } finally {
       setBusyWebinarActionKey(null);
     }
+  };
+  const moderatingQa = useConnectionRequest(webinarQaConnection);
+  const moderateQuestion = async (
+    id: string,
+    action: () => Promise<{ ok: boolean; error?: string }>,
+  ) => {
+    setHostActionError(null);
+    const result = await moderatingQa.run(id, action);
+    if (result && !result.ok) setHostActionError(result.error ?? "Webinar action failed");
   };
   const effectiveHostUserId = hostUserId ?? (isAdmin ? currentUserId : null);
   const effectiveHostUserIds = new Set<string>(
@@ -605,94 +629,65 @@ function ParticipantsPanel({
           </button>
           {isQaSectionExpanded && (
             <div className="px-4 pb-3">
-              {openWebinarQuestions.length === 0 ? (
+              {hostWebinarQuestions.length === 0 ? (
                 <p className="text-[12px] leading-snug text-[#71717a]">
                   Attendee questions land here for you to answer live or
-                  dismiss.
+                  hide.
                 </p>
               ) : (
                 <div className="max-h-56 space-y-1.5 overflow-y-auto">
-                  {openWebinarQuestions.map((entry) => {
+                  {hostWebinarQuestions.map((entry) => {
                     const isAnswering = entry.status === "answering";
-                    const isAnswered = entry.status === "answered";
+                    const isHidden = entry.status === "dismissed";
                     return (
                       <div
                         key={entry.id}
+                        data-testid="webinar-host-question"
                         className={`rounded-lg border px-2.5 py-2 ${
                           isAnswering
                             ? "border-[#F95F4A]/40 bg-[#F95F4A]/[0.06]"
-                            : "border-white/10 bg-black/20"
+                            : isHidden
+                              ? "border-white/[0.06] bg-transparent"
+                              : "border-white/10 bg-black/20"
                         }`}
                       >
                         <div className="flex items-center justify-between gap-2">
-                          <span className="truncate text-[11.5px] font-medium text-[#a1a1aa]">
-                            {formatDisplayName(entry.displayName)}
+                          <span className="flex min-w-0 items-center gap-1.5">
+                            <span className="truncate text-[11.5px] font-medium text-[#a1a1aa]">
+                              {formatDisplayName(entry.displayName)}
+                            </span>
+                            {isHidden && (
+                              <span className="shrink-0 rounded-full border border-white/[0.12] px-2 py-0.5 text-[9.5px] font-medium uppercase tracking-[0.08em] text-[#fafafa]/50">
+                                Hidden
+                              </span>
+                            )}
                           </span>
                           <span className="inline-flex shrink-0 items-center gap-1 text-[11px] tabular-nums text-[#71717a]">
                             <ChevronUp size={12} strokeWidth={STROKE} />
                             {entry.upvotes}
                           </span>
                         </div>
-                        <p className="mt-1 text-[13px] leading-snug text-[#fafafa]">
+                        <p
+                          className={`mt-1 text-[13px] leading-snug ${
+                            isHidden ? "text-[#fafafa]/50" : "text-[#fafafa]"
+                          }`}
+                        >
                           {entry.question}
                         </p>
                         {onModerateWebinarQuestion && (
-                          <div className="mt-2 flex flex-wrap gap-1.5">
-                            {!isAnswering && !isAnswered && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  void runWebinarAction(
-                                    `qa-${entry.id}`,
-                                    () =>
-                                      onModerateWebinarQuestion({
-                                        id: entry.id,
-                                        action: "answering",
-                                      }),
-                                  )
-                                }
-                                disabled={busyWebinarActionKey === `qa-${entry.id}`}
-                                className={hostActionClass}
-                              >
-                                Answer live
-                              </button>
-                            )}
-                            {!isAnswered && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  void runWebinarAction(
-                                    `qa-${entry.id}`,
-                                    () =>
-                                      onModerateWebinarQuestion({
-                                        id: entry.id,
-                                        action: "answered",
-                                      }),
-                                  )
-                                }
-                                disabled={busyWebinarActionKey === `qa-${entry.id}`}
-                                className={neutralActionClass}
-                              >
-                                {isAnswering ? "Done" : "Mark answered"}
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() =>
-                                void runWebinarAction(
-                                  `qa-${entry.id}`,
-                                  () =>
-                                    onModerateWebinarQuestion({
-                                      id: entry.id,
-                                      action: "dismissed",
-                                    }),
+                          <div className="mt-2">
+                            <QaModerationActions
+                              status={entry.status}
+                              disabled={webinarQaWaiting || moderatingQa.busy === entry.id}
+                              onAction={(action) =>
+                                void moderateQuestion(entry.id, () =>
+                                  onModerateWebinarQuestion({
+                                    id: entry.id,
+                                    action,
+                                  }),
                                 )
                               }
-                              disabled={busyWebinarActionKey === `qa-${entry.id}`}
-                              className={neutralActionClass}
-                            >
-                              Dismiss
-                            </button>
+                            />
                           </div>
                         )}
                       </div>

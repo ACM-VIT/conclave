@@ -16,6 +16,7 @@ import type { JoinInfoAnswer } from "./lib/join-info-request";
 import { shouldRetainMeetingSurface } from "./lib/meeting-surface-policy";
 import {
   AppsProvider,
+  AuthorityProvider,
   GameProvider,
 } from "@conclave/apps-sdk";
 import { devPlaygroundApp } from "@conclave/apps-sdk/dev-playground/web";
@@ -639,6 +640,8 @@ export default function MeetsClient({
     setWebinarSpeakerUserId,
     webinarQaEntries,
     setWebinarQaEntries,
+    webinarQaListFromThisConnection,
+    setWebinarQaListFromThisConnection,
     webinarHandQueue,
     setWebinarHandQueue,
     isWebinarHandRaised,
@@ -2425,6 +2428,7 @@ export default function MeetsClient({
     setWebinarRole,
     setWebinarSpeakerUserId,
     setWebinarQaEntries,
+    setWebinarQaListFromThisConnection,
     setWebinarHandQueue,
     setIsWebinarHandRaised,
     setWebinarStageInvite,
@@ -2491,6 +2495,11 @@ export default function MeetsClient({
   }, [webinarStagePath]);
 
   const declineWebinarStageInvite = socket.declineWebinarStageInvite;
+  const forgetWebinarQaEntries = useCallback(
+    () => setWebinarQaEntries(null),
+    [setWebinarQaEntries],
+  );
+
   const handleDismissWebinarStageInvite = useCallback(() => {
     setWebinarStageInvite(null);
     declineWebinarStageInvite();
@@ -3206,12 +3215,17 @@ export default function MeetsClient({
           isAdmin={canModerateMeeting}
           isReadOnly={isReadOnlyObserver}
         >
-          <MeetVolumeProvider
-            meetVolume={meetVolume}
-            setMeetVolume={setMeetVolume}
+          <AuthorityProvider
+            socket={appsSocket}
+            joined={connectionState === "joined"}
           >
-            {content}
-          </MeetVolumeProvider>
+            <MeetVolumeProvider
+              meetVolume={meetVolume}
+              setMeetVolume={setMeetVolume}
+            >
+              {content}
+            </MeetVolumeProvider>
+          </AuthorityProvider>
         </GameProvider>
       </AppsProvider>
       <MeetingEnterOverlay
@@ -3565,6 +3579,8 @@ export default function MeetsClient({
         webinarLink={webinarLink}
         webinarTitle={webinarTitle}
         webinarQaEntries={webinarQaEntries}
+        webinarQaListFromThisConnection={webinarQaListFromThisConnection}
+        onForgetWebinarQaEntries={forgetWebinarQaEntries}
         webinarHandQueue={webinarHandQueue}
         isWebinarHandRaised={isWebinarHandRaised}
         webinarStageInvite={webinarStageInvite}

@@ -323,9 +323,9 @@ const routerMediaCodecs: RouterRtpCodecCapability[] = [
 
 export const config = {
   webcamVp9Enabled: process.env.SFU_WEBCAM_VP9_ENABLED === "1",
-  // Server-authoritative in-call apps. Off by default: with it off no
-  // authority event is registered, so the SFU answers like one that predates
-  // the runtime and clients hide the apps that need it. Read once at startup:
+  // Server-authoritative in-call apps. Off by default: with it off the only
+  // authority event answered is the capability request, as unsupported, so
+  // clients hide the apps that need it at once. Read once at startup:
   // changing it needs a restart.
   appsAuthority: {
     enabled: toBoolean(process.env.SFU_APPS_AUTHORITY_ENABLED),

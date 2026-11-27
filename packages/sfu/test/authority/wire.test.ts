@@ -3,252 +3,54 @@
  * SFU's auth and every handler it registers, real client connections that
  * join through `joinRoom`, and the real client session on each.
  */
-import { createServer, type Server as HttpServer } from "node:http";
-import type { AddressInfo } from "node:net";
-import jwt from "jsonwebtoken";
-import type { Router } from "mediasoup/types";
-import type { Server as SocketIOServer } from "socket.io";
-import { io as connectSocket, type Socket as ClientSocket } from "socket.io-client";
+import type { Socket as ClientSocket } from "socket.io-client";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   AUTHORITY_EVENTS,
-  AuthorityClient,
-  type AuthorityContract,
   type AuthorityFrame,
   type AuthorityResult,
-  type AuthoritySession,
   type Json,
 } from "@conclave/apps-sdk/authority";
-import type { AuthorityModule } from "@conclave/apps-sdk/authority/server";
-import { config } from "../../config/config.js";
+import { pollsContract } from "@conclave/apps-sdk/polls/core";
+import { pollsAuthority } from "@conclave/apps-sdk/polls/server";
+import { qaAuthority } from "@conclave/apps-sdk/qa/server";
 import { answer } from "./answer.js";
-import { Room } from "../../config/classes/Room.js";
 import {
-  createAppsAuthorityRuntime,
   getRoomAuthority,
   socketPressure,
 } from "../../server/apps/authority/index.js";
-import {
-  DEFAULT_AUTHORITY_LIMITS,
-  type AuthorityLimits,
-} from "../../server/apps/authority/limits.js";
-import { LocalRoomRegistry } from "../../server/roomRegistry.js";
 import { forceCloseRoom } from "../../server/rooms.js";
-import { createSfuSocketServer } from "../../server/socket/createSocketServer.js";
-import { createSfuState, type SfuState } from "../../server/state.js";
 import {
   getOrCreateWebinarRoomConfig,
   setCustomWebinarLinkSlug,
 } from "../../server/webinar.js";
 import { emitWebinarConfigChanged } from "../../server/webinarNotifications.js";
-import { pollsAuthority, pollsContract } from "./fixtures/polls.js";
 import { probeAuthority, probeContract } from "./fixtures/probe.js";
-import { qaAuthority } from "./fixtures/qa.js";
+import {
+  HOST,
+  ROOM_ID,
+  addRoom,
+  ask,
+  closeAll,
+  connect,
+  field,
+  open,
+  row,
+  rows,
+  start,
+  until,
+  wait,
+  type Peer,
+} from "./wireKit.js";
 
-const CLIENT_ID = "conclave";
-const ROOM_ID = "wire";
-const HOST = "asha@example.com";
-
-type Stack = {
-  state: SfuState;
-  io: SocketIOServer;
-  http: HttpServer;
-  room: Room;
-  url: string;
-};
-
-type Peer<C extends AuthorityContract> = {
-  socket: ClientSocket;
-  seatId: string;
-  client: AuthorityClient;
-  session: AuthoritySession<C>;
-  /** Every authority frame this socket received, in order. */
-  frames: AuthorityFrame[];
-};
-
-const stacks: Stack[] = [];
-const sockets: ClientSocket[] = [];
-
-afterEach(async () => {
-  for (const socket of sockets.splice(0)) socket.disconnect();
-  for (const stack of stacks.splice(0)) {
-    await stack.io.close();
-    stack.http.close();
-  }
-});
-
-const until = async (check: () => boolean, label: string, timeoutMs = 4_000) => {
-  const started = Date.now();
-  while (!check()) {
-    if (Date.now() - started > timeoutMs) throw new Error(`Timed out: ${label}`);
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-};
-
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/** A room with a stand-in router, registered as the SFU would register it. */
-const addRoom = (state: SfuState, id: string): Room => {
-  const router = {
-    closed: false,
-    rtpCapabilities: { codecs: [], headerExtensions: [] },
-    close: () => {
-      router.closed = true;
-    },
-  };
-  const room = new Room({
-    id,
-    clientId: CLIENT_ID,
-    workerPid: null,
-    router: router as unknown as Router,
-  });
-  room.grantHost(HOST, "fallback");
-  room.makePrimaryHost(HOST);
-  state.rooms.set(room.channelId, room);
-  return room;
-};
-
-const start = async (
-  modules: readonly AuthorityModule[] | null,
-  limits: Partial<AuthorityLimits> = {},
-): Promise<Stack> => {
-  const state = createSfuState({
-    roomRegistry: new LocalRoomRegistry({
-      instanceId: "authority-wire",
-      instanceUrl: "http://localhost",
-      ttlMs: 45_000,
-    }),
-    appsAuthority: modules
-      ? createAppsAuthorityRuntime({
-          modules,
-          verifyViews: true,
-          limits: { ...DEFAULT_AUTHORITY_LIMITS, ...limits },
-        })
-      : null,
-  });
-  const http = createServer();
-  const io = createSfuSocketServer(http, { state });
-  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
-  const room = addRoom(state, ROOM_ID);
-  const stack = {
-    state,
-    io,
-    http,
-    room,
-    url: `http://127.0.0.1:${(http.address() as AddressInfo).port}`,
-  };
-  stacks.push(stack);
-  return stack;
-};
-
-const ask = <Reply>(socket: ClientSocket, event: string, payload?: unknown) =>
-  new Promise<Reply>((resolve) => {
-    if (payload === undefined) socket.emit(event, resolve);
-    else socket.emit(event, payload, resolve);
-  });
-
-/** A real connection that authenticates and joins the room. */
-const connect = async (
-  stack: Stack,
-  who: { email: string; name: string; session: string },
-  options: {
-    join?: { roomId: string; joinMode?: string };
-    reconnection?: boolean;
-    transports?: ("polling" | "websocket")[];
-  } = {},
-): Promise<{ socket: ClientSocket; seatId: string; frames: AuthorityFrame[] }> => {
-  stack.room.allowUser(who.email);
-  const token = jwt.sign(
-    {
-      userId: who.email,
-      email: who.email.includes("@") ? who.email : undefined,
-      name: who.name,
-      sessionId: who.session,
-      clientId: CLIENT_ID,
-      joinMode: options.join?.joinMode ?? "meeting",
-    },
-    config.sfuSecret,
-    { algorithm: "HS256" },
-  );
-  const socket = connectSocket(stack.url, {
-    auth: { token },
-    transports: options.transports ?? ["websocket"],
-    forceNew: true,
-    reconnection: options.reconnection ?? false,
-    reconnectionDelay: 20,
-    reconnectionDelayMax: 40,
-  });
-  sockets.push(socket);
-  const frames: AuthorityFrame[] = [];
-  socket.on(AUTHORITY_EVENTS.frame, (frame: AuthorityFrame) => frames.push(frame));
-  await new Promise<void>((resolve, reject) => {
-    socket.once("connect", () => resolve());
-    socket.once("connect_error", reject);
-  });
-  const joined = await ask<{ error?: string; status?: string }>(socket, "joinRoom", {
-    roomId: options.join?.roomId ?? ROOM_ID,
-    sessionId: who.session,
-  });
-  if (joined.error || joined.status === "waiting") {
-    throw new Error(`join failed: ${joined.error ?? joined.status}`);
-  }
-  return { socket, seatId: `${who.email}#${who.session}`, frames };
-};
-
-const open = async <C extends AuthorityContract>(
-  stack: Stack,
-  who: { email: string; name: string; session: string },
-  contract: C,
-  options: {
-    ackTimeoutMs?: number;
-    expectReady?: boolean;
-    reconnection?: boolean;
-    transports?: ("polling" | "websocket")[];
-  } = {},
-): Promise<Peer<C>> => {
-  const connection = await connect(stack, who, {
-    reconnection: options.reconnection,
-    transports: options.transports,
-  });
-  const client = new AuthorityClient({
-    socket: connection.socket,
-    ackTimeoutMs: options.ackTimeoutMs ?? 1_000,
-  });
-  const session = client.open(contract);
-  client.joined();
-  if (options.expectReady !== false) {
-    await until(() => session.getState().kind === "ready", `${who.name} ready`);
-  }
-  return { ...connection, client, session };
-};
-
-const row = <C extends AuthorityContract>(peer: Peer<C>, bucket: string, key: string): Json | null => {
-  const state = peer.session.getState();
-  if (state.kind !== "ready") return null;
-  return (state.view as Record<string, ReadonlyMap<string, Json>>)[bucket]?.get(key) ?? null;
-};
-
-const rows = <C extends AuthorityContract>(peer: Peer<C>, bucket: string): Json[] => {
-  const state = peer.session.getState();
-  if (state.kind !== "ready") return [];
-  return [...((state.view as Record<string, ReadonlyMap<string, Json>>)[bucket]?.values() ?? [])];
-};
-
-const field = (value: Json | null, ...path: string[]): Json | null => {
-  let node: Json | null = value;
-  for (const key of path) {
-    if (node === null || typeof node !== "object" || Array.isArray(node)) return null;
-    node = (node as { readonly [key: string]: Json })[key] ?? null;
-  }
-  return node;
-};
+afterEach(closeAll);
 
 /** Rows in a frame that show poll results. */
 const tallies = (frames: AuthorityFrame[]) =>
   frames.flatMap((frame) =>
     frame.kind === "replace" || frame.kind === "patch"
       ? (frame.kind === "replace" ? frame.rows : frame.put).filter(
-          (entry) => entry.bucket === "polls" && field(entry.value, "results") !== null,
+          (entry) => entry.bucket === "results",
         )
       : [],
   );
@@ -277,7 +79,7 @@ describe("authority transport on real sockets", () => {
 
     const voted = await voter.session.act("vote", { pollId, optionIds: ["o1"] });
     await until(
-      () => field(row(host, "polls", pollId), "results", "voterCount") === 1,
+      () => field(row(host, "results", pollId), "voterCount") === 1,
       "tally reaches the host",
     );
     await wait(120);
@@ -307,7 +109,7 @@ describe("authority transport on real sockets", () => {
     expect([first.ok, second.ok].filter(Boolean).length).toBe(1);
     expect(row(tabA, "myVotes", pollId)).toEqual(row(tabB, "myVotes", pollId));
     await until(
-      () => field(row(host, "polls", pollId), "results", "voterCount") === 1,
+      () => field(row(host, "results", pollId), "voterCount") === 1,
       "one voter counted",
     );
   });
@@ -319,7 +121,7 @@ describe("authority transport on real sockets", () => {
     const pollId = await createPoll(host);
     await ask(host.socket, "promoteHost", { userId: cohost.seatId });
     await until(
-      () => field(row(cohost, "polls", pollId), "results") !== null,
+      () => row(cohost, "results", pollId) !== null,
       "promotion shows the tally",
     );
 
@@ -431,7 +233,7 @@ describe("authority transport on real sockets", () => {
 
     expect(field(row(voter, "myVotes", pollId), "optionIds")).toEqual(["o1"]);
     expect(again).toEqual({ ok: false, code: "rejected", reason: "already-voted" });
-    expect(field(row(host, "polls", pollId), "results", "voterCount")).toBe(1);
+    expect(field(row(host, "results", pollId), "voterCount")).toBe(1);
   });
 
   it("resends an action whose answer was lost, and it runs once", async () => {
@@ -453,7 +255,7 @@ describe("authority transport on real sockets", () => {
 
     const result = await voter.session.act("vote", { pollId, optionIds: ["o1"] });
     await until(
-      () => field(row(host, "polls", pollId), "results", "voterCount") === 1,
+      () => field(row(host, "results", pollId), "voterCount") === 1,
       "the vote counted",
     );
 
@@ -596,14 +398,14 @@ describe("authority transport on real sockets", () => {
     expect(afterClose).toEqual({ ok: false, code: "not-in-room" });
   });
 
-  it("an SFU without the runtime never answers, so the client hides the app", async () => {
+  it("an SFU without the runtime answers the capability request as unsupported at once, so the client hides the app", async () => {
     const stack = await start(null);
-    const host = await open(stack, asha, pollsContract, {
-      ackTimeoutMs: 200,
-      expectReady: false,
-    });
-    await until(() => host.client.capabilities.kind === "unsupported", "client gives up");
+    const startedAt = Date.now();
+    const host = await open(stack, asha, pollsContract, { expectReady: false });
+    await until(() => host.client.capabilities.kind === "unsupported", "client hears unsupported", 1_000);
+    const heardAfterMs = Date.now() - startedAt;
 
+    expect(heardAfterMs).toBeLessThan(1_000);
     expect(host.session.getState()).toEqual({ kind: "unsupported" });
     expect(await host.session.act("create", { question: "Q", options: ["a", "b"] })).toEqual({
       ok: false,

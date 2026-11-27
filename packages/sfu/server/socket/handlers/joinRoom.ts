@@ -49,6 +49,7 @@ import {
 import {
   emitWebinarAttendeeCountChanged,
   emitWebinarFeedChanged,
+  grantWebinarQaList,
 } from "../../webinarNotifications.js";
 import {
   createDefaultWebinarRoomConfig,
@@ -83,12 +84,14 @@ import {
   removeBlockedGuest,
   settleUnclaimedRoom,
   teardownClient,
+  toPendingUserSnapshots,
   withdrawWaitingRequest,
 } from "../../admin/controlPlane.js";
 import type { LostRoom, RecalledRoom } from "../../roomRecoveryLedger.js";
 import { emitToHost } from "../../admin/hostOnlyEvents.js";
 import { getSocketAuthUser } from "../auth.js";
 import type { ConnectionContext } from "../context.js";
+import { attachLegacyQaFeed } from "../../apps/authority/legacyWebinarQa.js";
 import { respond } from "./ack.js";
 import { emitChatHistorySnapshot } from "./chatHistory.js";
 import { emitGameSnapshot } from "./gameHandlers.js";
@@ -1399,12 +1402,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         if (stopped()) return;
 
         if (context.currentClient instanceof Admin && !context.currentClient.isObserver) {
-          const pendingUsers = context.currentRoom.waitingGuests().map((pending) => ({
-            userId: pending.userKey,
-            displayName: pending.displayName || pending.userKey,
-          }));
           emitToHost(context.currentClient, "pendingUsersSnapshot", {
-            users: pendingUsers,
+            users: toPendingUserSnapshots(context.currentRoom),
             roomId: context.currentRoom.id,
           });
         }
@@ -1477,20 +1476,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           emitChatHistorySnapshot(socket, context.currentRoom);
         }
 
-        const isModeratorClient =
-          context.currentClient instanceof Admin &&
-          !context.currentClient.isObserver;
-        if (
-          webinarConfig.enabled &&
-          (isModeratorClient || context.currentClient.isWebinarAttendee)
-        ) {
-          socket.emit("webinar:qaSnapshot", {
-            roomId: context.currentRoom.id,
-            entries: context.currentRoom.getWebinarQaSnapshotFor(
-              userId,
-              isModeratorClient,
-            ),
-          });
+        // A room that runs the Q&A app has one book. There the old Q&A
+        // events are fed from that book for the life of this seat. Elsewhere
+        // a seat joining a webinar is sent the list as its role reads it.
+        if (!attachLegacyQaFeed(context)) {
+          grantWebinarQaList(state, context.currentRoom, context.currentClient);
         }
         if (webinarConfig.enabled && context.currentClient instanceof Admin) {
           emitToHost(context.currentClient, "webinar:handQueueChanged", {
