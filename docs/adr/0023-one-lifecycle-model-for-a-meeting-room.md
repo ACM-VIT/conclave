@@ -37,7 +37,7 @@ A room's stage follows from these: **Opening** (`awaitingOpener` set), **Recover
 
 | Event | Stage | Hosts | Admissions and removals | Ledger, passes, schedule |
 |---|---|---|---|---|
-| A join starts an opening (no room at the code on this server) | No room yet. Each wait of the opening has a deadline, and its last wait renews the lease; the room is published in that same turn, only under a lease still held for the generation its fences landed for. An opening given up publishes nothing | None | None | The two fences, nothing else |
+| A join starts an opening (no room at the code on this server) | No room yet. Each wait has a deadline. The last wait renews the lease. The SFU publishes the room in that same turn only if it still holds the fenced generation's lease and both the worker and router are open. An opening given up publishes nothing | None | None | The two fences, nothing else |
 | A join creates the room | Opening. The claim is released only when a join is seated or queued; when the last join for the room ends without that, the room is settled at once (closed if nobody is in it, else handed to its people), and the 10 s deadline is there for a join that hangs | Restored from the lost call with their reasons, removed ones too (the join keeps them out until a host lets them in). Still unclaimed when the call's window ends, the lost call ends | Restored removals; locked | Nothing |
 | A join claims an Opening room (it created it, may open the code, or is seated as its host) | One claim per room. Running if the claimer may host; Recovering if not. A lost call past its window ends first | The claimer hosts when Running, as a fallback | No change | Running: running record |
 | A join into a claimed room | No change | Host only as the owner, a recorded host who is not removed (keeping their reason), a person who hosts here right now (their new tab gets their live role), someone from a Recovering call, or someone who may open a Lapsed one (both as a fallback). An eligible person seated in a Running room with no host is made host at once | Seated if admitted, invited and not removed, or the room is unlocked and they were not removed; else knocks | Pass if Running |
@@ -66,6 +66,8 @@ A room's stage follows from these: **Opening** (`awaitingOpener` set), **Recover
 ### Two endings
 
 An **abandoned opening** is a room that closes before anyone claims it, or a Recovering room that closes before anyone from its call comes back. It writes nothing and ends nothing: the lost call, its passes and its removals stand until its window ends. A **meeting over** comes only from a Running room emptying, a lapse, or an end for everyone, and it alone clears hosts and removals or voids passes.
+
+When the next room opens on the same SFU, it takes the parked requests and rebuilds the links between passes those tabs still use. It reuses the Room's normal guest grouping and does not import admissions or refusals from the lobby.
 
 ### Removal wins
 
@@ -157,7 +159,7 @@ A reason belongs to a person and a seat to a tab, so one person can hold several
 17. A right never reaches a key a client named itself through the pass its token shows; a removal always does (see "Which proofs carry what").
 18. Every seat that is a host can act as one: its socket's context points at that seat and room and has the admin handlers, whichever path made it a host and whether or not the join that did so finished.
 19. A server that no longer holds a room's lease writes nothing shared about that room: no recovery record, no invitee removal or readmission, no end of the meeting's removals, no recovery pass. Its timers touch only its own memory until a continuous renewal confirms the lease.
-20. No shared write is silently lost: a host's action answers success only once its writes landed, teardown writes before it releases the lease, and a write that waits for the lease is written in order or dropped with an error only when the lease was broken or a newer owner fenced it.
+20. No shared write is silently lost: a host's action answers success only once its writes landed, teardown writes before it releases the lease, and a write that waits for the lease is written in order or dropped with an error only when the lease was broken or a newer owner fenced it. The SFU tracks only unfinished writes. The last settlement removes its own channel entry.
 21. A store never applies a write from an ownership generation older than one that has fenced it, whatever the writer's clock or cached lease says.
 22. No host command crashes or stalls the SFU on arguments it does not take: each is answered with a failure as it arrives. Each command still takes what the apps in the field send it, an absent value sent as null included.
 23. Nobody a host removed gets in by opening the room first: a removed person who creates a room knocks in it, as anywhere else (the code's owner and a configured host excepted). Their knock claims the opening only where the room then waits for a lost call's people, so the room keeps what their knock showed of them; elsewhere the room stays unopened for whoever may open it, and the knock waits for the next meeting.

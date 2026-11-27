@@ -1829,6 +1829,61 @@ describe("a meeting whose last participant leaves while someone is still knockin
     expect(knocksShownTo(reopened)).toEqual([]);
   });
 
+  it.each([
+    ["admitUser", "joinApproved"],
+    ["rejectUser", "joinRejected"],
+  ] as const)("keeps linked waiting tabs together when the next host chooses %s", async (decision, event) => {
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    const state = makeState();
+    const created = await join(state, host);
+    const first = {
+      ...knocker,
+      userId: "guest-gp_AAAAAAAAAAAAAAAAAAAAAA",
+      sessionId: "tab-a",
+      guestRoom: "abc-mnop-xyz",
+      guestProof: "first-browser-pass",
+    };
+    const middle = {
+      ...first,
+      userId: "guest-gp_BBBBBBBBBBBBBBBBBBBBBB",
+      sessionId: "tab-b",
+      guestProof: "second-browser-pass",
+      guestWas: [{ userKey: first.userId, guestProof: first.guestProof }],
+    };
+    const last = {
+      ...first,
+      userId: "guest-gp_CCCCCCCCCCCCCCCCCCCCCC",
+      sessionId: "tab-c",
+      guestProof: "third-browser-pass",
+      guestWas: [{ userKey: middle.userId, guestProof: middle.guestProof }],
+    };
+    const firstTab = await join(state, first);
+    const middleTab = await join(state, middle);
+    const lastTab = await join(state, last);
+    const otherTab = await join(state, knocker);
+    expect([firstTab.status, middleTab.status, lastTab.status, otherTab.status]).toEqual(
+      ["waiting", "waiting", "waiting", "waiting"],
+    );
+    await hangUp(middleTab.peer);
+    await hangUp(created.peer);
+    await vi.advanceTimersByTimeAsync(10 * MINUTE_MS);
+    expect(state.rooms.size).toBe(0);
+
+    const reopened = await join(state, host);
+    expect(knocksShownTo(reopened)).toEqual([first.userId, knocker.userId]);
+    expect(await send(reopened.peer, decision, { userId: first.userId })).toEqual({ success: true });
+    expect(firstTab.peer.emit).toHaveBeenCalledWith(event, { roomId: "abc-mnop-xyz" });
+    expect(lastTab.peer.emit).toHaveBeenCalledWith(event, { roomId: "abc-mnop-xyz" });
+    expect(middleTab.peer.emit).not.toHaveBeenCalledWith(event, expect.anything());
+    expect(otherTab.peer.emit).not.toHaveBeenCalledWith(event, expect.anything());
+    if (decision === "admitUser") {
+      expect((await askAgain(firstTab)).status).toBe("joined");
+      expect((await askAgain(lastTab)).status).toBe("joined");
+    }
+  });
+
   it("keeps a knocker who asks again before the next meeting opens waiting for it", async () => {
     const { state, knocking } = await everyoneLeftButTheKnocker();
     expect((await askAgain(knocking)).status).toBe("waiting");

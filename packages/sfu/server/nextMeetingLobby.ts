@@ -12,7 +12,9 @@ const MEETING_OPENED_ELSEWHERE =
 // Someone waiting for the next meeting at a code. `retryAt` is their own:
 // when the meeting they knocked on stood in for a lost call, the moment that
 // call stops holding the code, from which they may ask again and open it.
-export type LobbyGuest = WaitingRequest & { retryAt: number | null; guestProof?: string };
+type NextMeetingRequest = WaitingRequest & { guestProof?: string; guestIdentity?: string };
+
+export type LobbyGuest = NextMeetingRequest & { retryAt: number | null };
 
 export type NextMeetingLobby = {
   roomId: string;
@@ -73,7 +75,7 @@ const place = (
 export const waitForNextMeeting = (
   state: SfuState,
   room: { channelId: string; id: string },
-  waiting: Array<WaitingRequest & { guestProof?: string }>,
+  waiting: NextMeetingRequest[],
   retryAt: number | null,
 ): void => {
   if (waiting.length === 0) return;

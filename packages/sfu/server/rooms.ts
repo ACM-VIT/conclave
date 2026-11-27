@@ -108,20 +108,17 @@ export const ROOM_WRITE_COMMIT_MS = 5_000;
 export { ROOM_LEASE_UNCONFIRMED_ERROR } from "@conclave/meeting-core/host-commands";
 export { holdsRoomLease };
 
-const commitsInFlight = new WeakMap<SfuState, Map<string, Set<Promise<boolean>>>>();
-const commitsOf = (state: SfuState, channelId: string): Set<Promise<boolean>> => {
-  const byChannel = commitsInFlight.get(state) ?? new Map<string, Set<Promise<boolean>>>();
-  commitsInFlight.set(state, byChannel);
+const trackCommit = (state: SfuState, channelId: string, commit: Promise<boolean>): void => {
+  const byChannel = state.roomCommitsInFlight;
   const commits = byChannel.get(channelId) ?? new Set<Promise<boolean>>();
   byChannel.set(channelId, commits);
-  return commits;
-};
-const trackCommit = (state: SfuState, channelId: string, commit: Promise<boolean>): void => {
-  const commits = commitsOf(state, channelId);
   commits.add(commit);
   runDetached("Tracking a shared room write", () =>
-    commit.then(() => {
+    commit.finally(() => {
       commits.delete(commit);
+      if (commits.size === 0 && byChannel.get(channelId) === commits) {
+        byChannel.delete(channelId);
+      }
     }),
   );
 };
@@ -173,7 +170,7 @@ const releaseRoomLease = (state: SfuState, channelId: string): void => {
     held.releaseAfter = true;
     return;
   }
-  const commits = [...commitsOf(state, channelId)];
+  const commits = [...(state.roomCommitsInFlight.get(channelId) ?? [])];
   if (commits.length === 0) {
     releaseLease(state, channelId);
     return;
@@ -666,6 +663,9 @@ export const getOrCreateRoomWithOrigin = async (
       ) {
         throw new RoomOpeningError(channelId, "its lease was claimed again while it was being made");
       }
+      if (worker.closed || router.closed) {
+        throw new RoomOpeningError(channelId, "its media worker or router closed while it was being made");
+      }
       const createdRoom = new Room({
         id: roomId,
         incarnationId,
@@ -680,6 +680,7 @@ export const getOrCreateRoomWithOrigin = async (
       createdRoom.earlierPassGenerations = [...(record.lost?.passGenerations ?? [])];
       createdRoom.takesOverRecordOf = record.lastWriter;
       createdRoom.awaitingOpener = { lost: record.lost };
+      const waitingPassesByGuest = new Map<string, Set<string>>();
       for (const guest of takeNextMeetingLobby(state, channelId)) {
         createdRoom.addPendingClient(
           guest.userKey,
@@ -688,6 +689,16 @@ export const getOrCreateRoomWithOrigin = async (
           guest.displayName,
           guest.guestProof,
         );
+        if (guest.guestIdentity === undefined || guest.guestProof === undefined) continue;
+        const passes = waitingPassesByGuest.get(guest.guestIdentity) ?? new Set<string>();
+        passes.add(guest.guestProof);
+        waitingPassesByGuest.set(guest.guestIdentity, passes);
+      }
+      for (const passes of waitingPassesByGuest.values()) {
+        const [first, ...others] = passes;
+        if (first !== undefined && others.length > 0) {
+          createdRoom.linkGuestPasses(others.map((guestProof) => ({ guestProof })), first);
+        }
       }
       bindScheduledInvitations(state, createdRoom);
       recordRecoverableChanges(state, createdRoom);
@@ -812,6 +823,7 @@ export const cleanupRoom = (state: SfuState, channelId: string): boolean => {
   const waiting = [...room.pendingClients.values()].map((request) => ({
     ...request,
     guestProof: room.guestProofOf(request.userKey),
+    guestIdentity: room.guestIdentityOf(request.userKey),
   }));
   const retryAt =
     room.restorerState(Date.now()) === "awaited" ? room.restorerDeadline : null;

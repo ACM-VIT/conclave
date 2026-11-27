@@ -69,6 +69,7 @@ export type SfuState = {
   schedulingPersistence: SchedulingPersistence | null;
   roomRegistry: RoomRegistry;
   deferredRoomWrites: Map<string, DeferredRoomWrites>;
+  roomCommitsInFlight: Map<string, Set<Promise<boolean>>>;
   roomRecovery: RoomRecoveryLedger;
   transcriptRelays: TranscriptRelayRegistry;
   /** Null when this SFU does not run authority apps. */
@@ -100,6 +101,7 @@ export const createSfuState = (options?: {
     schedulingPersistence: null,
     roomRegistry: options?.roomRegistry ?? createRoomRegistry(config),
     deferredRoomWrites: new Map(),
+    roomCommitsInFlight: new Map(),
     roomRecovery: createRoomRecoveryLedger(
       options?.roomRecoveryStore ?? createMemoryRoomRecoveryStore(),
     ),

@@ -4,14 +4,14 @@ import type { Server as SocketIOServer, Socket } from "socket.io";
 import { Admin } from "../config/classes/Admin.js";
 import { Client } from "../config/classes/Client.js";
 import { Room } from "../config/classes/Room.js";
-import { LocalRoomRegistry } from "../server/roomRegistry.js";
+import { LocalRoomRegistry, RoomOpeningError } from "../server/roomRegistry.js";
 import type { SfuAuthPayload } from "../server/socket/auth.js";
 import { createConnectionContext } from "../server/socket/context.js";
 import { registerAdminHandlers } from "../server/socket/handlers/adminHandlers.js";
 import { registerDisconnectHandlers } from "../server/socket/handlers/disconnectHandlers.js";
 import { registerJoinRoomHandler } from "../server/socket/handlers/joinRoom.js";
 import { registerTransportHandlers } from "../server/socket/handlers/transportHandlers.js";
-import { getOrCreateRoomWithOrigin } from "../server/rooms.js";
+import { forceCloseRoom, getOrCreateRoomWithOrigin, writeSharedRoomState } from "../server/rooms.js";
 import { createSfuState, type SfuState } from "../server/state.js";
 import { getOrCreateWebinarRoomConfig, setCustomWebinarLinkSlug } from "../server/webinar.js";
 import type { ScheduledWebinar } from "../types.js";
@@ -290,6 +290,49 @@ describe("reconnect grace timer", () => {
 });
 
 describe("concurrent room creation", () => {
+  it.each(["worker", "router"] as const)(
+    "does not publish a room if its %s closes during final lease confirmation",
+    async (closing) => {
+      const router = { closed: false, close: vi.fn() };
+      const worker = { pid: 1, closed: false, createRouter: async () => router };
+      const replacement = {
+        pid: 2,
+        closed: false,
+        createRouter: async () => ({ closed: false, close: vi.fn() }),
+      };
+      const state = makeState([worker, replacement] as unknown as Worker[]);
+      const renew = state.roomRegistry.renewRoom.bind(state.roomRegistry);
+      let confirm!: () => void;
+      let confirming!: () => void;
+      const atConfirmation = new Promise<void>((resolve) => { confirming = resolve; });
+      const confirmLease = new Promise<void>((resolve) => { confirm = resolve; });
+      vi.spyOn(state.roomRegistry, "renewRoom").mockImplementationOnce(async (input) => {
+        confirming();
+        await confirmLease;
+        return renew(input);
+      });
+
+      const opening = getOrCreateRoomWithOrigin(state, "conclave", "room");
+      const rejected = expect(opening).rejects.toBeInstanceOf(RoomOpeningError);
+      await atConfirmation;
+      (closing === "worker" ? worker : router).closed = true;
+      confirm();
+      await rejected;
+
+      expect(state.rooms.has("conclave:room")).toBe(false);
+      expect(state.roomCreations.size).toBe(0);
+      expect(state.workerRoomReservations.size).toBe(0);
+      expect(await state.roomRegistry.getAssignment("conclave:room")).toBeNull();
+      expect(router.close).toHaveBeenCalledOnce();
+
+      worker.closed = true;
+      const { room, created } = await getOrCreateRoomWithOrigin(state, "conclave", "room");
+      expect(created).toBe(true);
+      expect(room.workerPid).toBe(replacement.pid);
+      expect(room.router.closed).toBe(false);
+    },
+  );
+
   it("puts simultaneous new rooms on separate idle workers", async () => {
     let finishedCreatingRouter!: () => void;
     const routersReady = new Promise<void>((resolve) => { finishedCreatingRouter = resolve; });
@@ -419,6 +462,46 @@ describe("concurrent room creation", () => {
     expect(room.hostUserKey).toBe("alice");
     expect(room.isAdminUserKey("bob")).toBe(false);
     expect(room.getAdminUserIds()).toEqual(["alice#a"]);
+  });
+});
+
+describe("shared room write tracking", () => {
+  const open = () => {
+    const worker = {
+      pid: 1,
+      closed: false,
+      createRouter: async () => ({ closed: false, close: vi.fn() }),
+    } as unknown as Worker;
+    const state = makeState([worker]);
+    const opening = getOrCreateRoomWithOrigin(state, "conclave", "room");
+    return { state, opening };
+  };
+
+  it("tracks a channel only while it has an unfinished write", async () => {
+    const { state, opening } = open();
+    const { room } = await opening;
+    const openingWrites = state.roomCommitsInFlight.get(room.channelId);
+    if (openingWrites) await Promise.all(openingWrites);
+
+    let finishFirst!: (landed: boolean) => void;
+    let finishLast!: (landed: boolean) => void;
+    const first = new Promise<boolean>((resolve) => { finishFirst = resolve; });
+    const last = new Promise<boolean>((resolve) => { finishLast = resolve; });
+    const firstCommit = writeSharedRoomState(state, room, "first write", () => first);
+    const lastCommit = writeSharedRoomState(state, room, "last write", () => last);
+    expect(state.roomCommitsInFlight.get(room.channelId)).toEqual(new Set([firstCommit, lastCommit]));
+
+    finishFirst(true);
+    expect(await firstCommit).toBe(true);
+    expect(state.roomCommitsInFlight.get(room.channelId)).toEqual(new Set([lastCommit]));
+
+    finishLast(false);
+    expect(await lastCommit).toBe(false);
+    expect(state.roomCommitsInFlight.has(room.channelId)).toBe(false);
+
+    expect(forceCloseRoom(state, room.channelId)).toBe(true);
+    expect(await state.roomRegistry.getAssignment(room.channelId)).toBeNull();
+    expect(state.roomCommitsInFlight.has(room.channelId)).toBe(false);
   });
 });
 
