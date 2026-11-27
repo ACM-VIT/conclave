@@ -60,6 +60,11 @@ export const jobs = {
     budgetFrom: "run",
     tasks: [{ dir: "packages/sfu", script: "test" }],
   },
+  "test-transcript-oracle": {
+    budgetSeconds: 300,
+    budgetFrom: "run",
+    tasks: [{ dir: "apps/web", script: "test:transcript-oracle" }],
+  },
   "test-backup": {
     budgetSeconds: 300,
     budgetFrom: "run",
