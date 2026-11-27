@@ -253,13 +253,23 @@ it.each(["top-right", "bottom-right", "top-left", "bottom-left"] as const)(
   },
 );
 
-it("drops the floating self-view when a share fills a stage with no rail", () => {
+it("renders the compact self-view on a full share and restores the preview when it fits", () => {
   const render = stageHarness(["bob", "carol"], "floating", "top-right");
   const grid = render("spotlight", DESKTOP, true);
 
   expect(grid.querySelector("[data-meet-stage-main] [data-meet-presentation-tile]")).not.toBeNull();
   expect(host!.querySelector("[data-meet-floating-self-view]")).toBeNull();
-  expect(grid.getAttribute("data-meet-view-self-view-placement")).toBe("none");
+  expect(grid.getAttribute("data-meet-view-self-view-placement")).toBe("pill");
+  const pill = host!.querySelector<HTMLElement>('[data-meet-detached-self-view="pill"]');
+  const { selfView } = published();
+  expect(pill?.getAttribute("aria-label")).toBe("Compact self-view");
+  expect(pill?.style.width).toBe(`${selfView.rect!.width}px`);
+  expect(pill?.style.height).toBe(`${selfView.rect!.height}px`);
+
+  const restored = render("spotlight", DESKTOP);
+  expect(restored.getAttribute("data-meet-view-self-view-requested")).toBe("floating");
+  expect(host!.querySelector("[data-meet-floating-self-view]")).not.toBeNull();
+  expect(host!.querySelector('[data-meet-detached-self-view="pill"]')).toBeNull();
 });
 
 it("names no hidden camera as a focus", () => {

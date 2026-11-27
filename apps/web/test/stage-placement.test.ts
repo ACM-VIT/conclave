@@ -15,6 +15,7 @@ import {
   overlapArea,
   tileControlsRect,
   type StageRect,
+  type StageShare,
 } from "../src/app/lib/stage-overlay";
 import type { Participant } from "../src/app/lib/types";
 
@@ -22,6 +23,7 @@ const remote = (userId: string) => ({ userId }) as Participant;
 const camera = (userId: string) => ({ kind: "remote" as const, participant: remote(userId) });
 
 const CORNERS: MeetSelfViewCorner[] = ["top-left", "top-right", "bottom-left", "bottom-right"];
+const WIDE_SHARE: StageShare = { aspect: 16 / 9, captureControls: false };
 const CHAT_OPEN = 424;
 const STAGE_CHROME = { width: 64, height: 136 };
 const stageSize = (viewportWidth: number, viewportHeight: number, chatOpen: boolean) => ({
@@ -57,6 +59,7 @@ const resolve = (
   size: { width: number; height: number },
   selfView: SelfViewRequest,
   galleryOpen = false,
+  share = WIDE_SHARE,
 ) =>
   resolveMeetingStageLayout({
     size,
@@ -64,12 +67,23 @@ const resolve = (
     preferredCamera: camera(scenario.remotes[0]),
     pinnedCamera: scenario.pinned ? camera(scenario.pinned) : null,
     companionCamera: scenario.companion ? camera(scenario.companion) : null,
-    presenting: scenario.presenting,
+    share: scenario.presenting ? share : null,
     spotlight: scenario.spotlight,
     selfView,
     galleryOpen,
     maxTiles: 8,
   })!;
+
+const pictureOf = (tile: StageRect, aspect: number): StageRect => {
+  const width = Math.min(tile.width, tile.height * aspect);
+  const height = width / aspect;
+  return {
+    x: tile.x + (tile.width - width) / 2,
+    y: tile.y + (tile.height - height) / 2,
+    width,
+    height,
+  };
+};
 
 const placedTiles = (layout: MeetingStageLayout) => {
   const placed: Array<{ tile: MeetingStageTile | "overflow"; rect: StageRect }> = [
@@ -130,19 +144,31 @@ const stageViolations = (
   check(placed.every(({ rect }) => inside(rect)), "tiles stay inside the stage");
 
   const { placement, rect: overlay } = layout.selfView;
+  check(placement !== "none" || !scenario.spotlight, "spotlight keeps the self-view");
   const selfTiles = kinds.filter((kind) => kind === "local").length;
   check(
     selfTiles === (placement === "tile" || placement === "stage" ? 1 : 0),
     "the self-view is placed once",
   );
   check(
-    (overlay !== null) === (placement === "floating" || placement === "minimized"),
+    (overlay !== null) === (placement === "floating" || placement === "minimized" || placement === "pill"),
     "a detached self-view has a rect",
   );
   if (!overlay) return violations;
 
   check(inside(overlay), "the self-view stays inside the stage");
   for (const { tile, rect } of placed) {
+    if (placement === "pill") {
+      if (tile === "overflow" || tile === layout.compactPin) {
+        check(overlapArea(overlay, rect) === 0, "the pill keeps compact pins and overflow reachable");
+      } else if (tile.kind === "presentation") {
+        const topStrip = { ...rect, height: Math.min(rect.height, 48) };
+        check(overlapArea(overlay, topStrip) === 0, "the pill keeps the share controls reachable");
+      } else {
+        check(overlapArea(overlay, tileControlsRect(rect)) === 0, "the pill keeps camera controls reachable");
+      }
+      continue;
+    }
     if (tile !== "overflow" && (tile.kind === "presentation" || tile === layout.compactPin)) {
       check(overlapArea(overlay, rect) === 0, "the self-view covers no share or compact pin");
       continue;
@@ -183,33 +209,71 @@ describe("floating self-view on the stage", () => {
     expect(layout.hints.hiddenIds).toEqual([]);
   });
 
-  it("is not shown when a rail slot would hide another camera", () => {
+  it("shows a compact pill instead of taking a rail slot from another camera", () => {
     const size = stageSize(1280, 300, true);
     const floating = resolve(SCENARIOS[1], size, { mode: "floating", corner: "top-left" });
     const tiled = resolve(SCENARIOS[1], size, { mode: "tile", corner: "top-left" });
 
     expect(tiled.rail.map((tile) => tile.kind)).toEqual(["local"]);
     expect(tiled.overflow).toBe(false);
-    expect(floating.selfView.placement).toBe("none");
+    expect(floating.selfView.placement).toBe("pill");
+    expect(overlapArea(floating.selfView.rect!, floating.rects.overflow!)).toBe(0);
     expect(floating.rail).toEqual([]);
     expect(floating.overflow).toBe(true);
   });
 
-  it("never covers the Auto companion at 1024 x 245 with chat open", () => {
+  it("keeps the Auto companion and a compact self-view at 1024 x 245 with chat open", () => {
     const size = stageSize(1024, 245, true);
     for (const corner of CORNERS) {
       const layout = resolve(SCENARIOS[2], size, { mode: "floating", corner });
       expect(layout.companion).toMatchObject({ participant: { userId: "bob" } });
       expect(layout.hints.visibleRemoteIds).toContain("bob");
-      expect(layout.selfView.rect).toBeNull();
+      expect(layout.selfView.placement).toBe("pill");
+      expect(overlapArea(layout.selfView.rect!, layout.rects.companion!)).toBe(0);
     }
   });
 
-  it("is not shown over a share in spotlight", () => {
+  it("keeps a compact self-view away from share controls in spotlight", () => {
     for (const corner of CORNERS) {
       const layout = resolve(SCENARIOS[3], stageSize(1280, 900, false), { mode: "floating", corner });
-      expect(layout.selfView).toEqual({ placement: "none", corner, rect: null });
+      expect(layout.selfView.placement).toBe("pill");
+      const pill = layout.selfView.rect!;
+      expect(pill.width * pill.height).toBeLessThanOrEqual(144 * 30);
+      expect(overlapArea(pill, { ...layout.rects.main, height: 48 })).toBe(0);
+      expect(overlapArea(pill, pictureOf(layout.rects.main, 16 / 9))).toBe(0);
     }
+  });
+
+  it("makes room for the presenter's zoom controls without covering the share picture", () => {
+    const size = stageSize(1280, 900, false);
+    const layout = resolve(SCENARIOS[3], size, { mode: "floating", corner: "bottom-right" }, false, {
+      ...WIDE_SHARE,
+      captureControls: true,
+    });
+
+    expect(layout.selfView).toMatchObject({ placement: "pill", corner: "bottom-left" });
+    expect(overlapArea(layout.selfView.rect!, pictureOf(layout.rects.main, 16 / 9))).toBe(0);
+  });
+
+  it("leaves the compact pin reachable when the share's shape is unknown", () => {
+    const size = stageSize(640, 260, true);
+    const layout = resolve(pinnedShare, size, { mode: "floating", corner: "bottom-left" }, false, {
+      aspect: null,
+      captureControls: false,
+    });
+
+    expect(layout.selfView).toMatchObject({ placement: "pill", corner: "bottom-right" });
+    expect(overlapArea(layout.selfView.rect!, layout.rects.compactPin!)).toBe(0);
+    expect(layout.hints.visibleRemoteIds).toContain("bob");
+  });
+
+  it("keeps a minimized self-view available even when the regular badge cannot fit", () => {
+    const layout = resolve(SCENARIOS[3], stageSize(1280, 900, false), {
+      mode: "minimized",
+      corner: "top-left",
+    });
+
+    expect(layout.selfView.placement).toBe("pill");
   });
 
   it("keeps the requested corner when it is clear", () => {
@@ -228,6 +292,9 @@ describe("floating self-view on the stage", () => {
         for (const corner of CORNERS) {
           for (const mode of ["floating", "minimized", "tile"] as const) {
             const layout = resolve(scenario, size, { mode, corner });
+            if (mode !== "tile" && layout.selfView.placement === "none") {
+              failures.push(`${width}x${height} chat ${chatOpen} ${mode} ${corner}: self-view missing`);
+            }
             for (const rule of stageViolations(layout, scenario, size)) {
               failures.push(`${width}x${height} chat ${chatOpen} ${mode} ${corner}: ${rule}`);
             }
@@ -289,6 +356,7 @@ describe("floating self-view on the tiled grid", () => {
       tiles,
       hiddenIds: [],
       galleryOpen: false,
+      share: WIDE_SHARE,
       selfView: { mode: "floating", corner },
     });
 
@@ -313,11 +381,52 @@ describe("floating self-view on the tiled grid", () => {
       tiles: full,
       hiddenIds: [],
       galleryOpen: false,
+      share: WIDE_SHARE,
       selfView: { mode: "floating", corner: "bottom-left" },
     });
 
     expect(placement.selfView.corner).toBe("bottom-right");
     expect(overlapArea(placement.selfView.rect!, full[0].rect)).toBe(0);
+  });
+
+  it("keeps a compact pill when no corner fits the floating preview", () => {
+    const size = { width: 320, height: 180 };
+    const cameraRects = ["bob", "carol", "dave", "erin"].map((id, index) => ({
+      id,
+      rect: { x: (index % 2) * 166, y: Math.floor(index / 2) * 96, width: 154, height: 84 },
+    }));
+    for (const corner of CORNERS) {
+      const placement = resolveTiledGridPlacement({
+        size,
+        tiles: cameraRects,
+        hiddenIds: [],
+        galleryOpen: false,
+        share: null,
+        selfView: { mode: "floating", corner },
+      });
+
+      expect(placement.selfView.placement).toBe("pill");
+      for (const { rect } of cameraRects) {
+        expect(overlapArea(placement.selfView.rect!, tileControlsRect(rect))).toBe(0);
+      }
+      expect(placement.hints.visibleRemoteIds).toEqual(["bob", "carol", "dave", "erin"]);
+    }
+  });
+
+  it("switches the overlay footprint when scrolling brings a full share under it", () => {
+    const input = {
+      size: { width: 300, height: 180 },
+      tiles: [{ id: PRESENTATION_TILE_ID, rect: { x: 0, y: 180, width: 300, height: 180 } }],
+      hiddenIds: [],
+      galleryOpen: false,
+      share: WIDE_SHARE,
+      selfView: { mode: "floating", corner: "bottom-right" } as const,
+    };
+
+    expect(resolveTiledGridPlacement(input).selfView.placement).toBe("floating");
+    const scrolled = resolveTiledGridPlacement({ ...input, scrollTop: 180 });
+    expect(scrolled.selfView).toMatchObject({ placement: "pill", corner: "bottom-right" });
+    expect(scrolled.hints.presentation).toEqual({ visible: true, primary: true });
   });
 
   it("reports overflow cameras hidden until the gallery opens", () => {
@@ -331,6 +440,7 @@ describe("floating self-view on the tiled grid", () => {
       tiles: grid,
       hiddenIds: ["carol", "dave"],
       galleryOpen: false,
+      share: null,
       selfView: { mode: "tile", corner: "bottom-right" },
     });
     const open = resolveTiledGridPlacement({
@@ -338,6 +448,7 @@ describe("floating self-view on the tiled grid", () => {
       tiles: grid.slice(0, 2),
       hiddenIds: ["carol", "dave"],
       galleryOpen: true,
+      share: null,
       selfView: { mode: "tile", corner: "bottom-right" },
     });
 

@@ -24,6 +24,7 @@ import {
   type Dispatch,
   type PointerEvent as ReactPointerEvent,
   type SetStateAction,
+  type SyntheticEvent,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -825,6 +826,7 @@ function GridLayout({
   const localGridTileSize = useElementSize(localGridTileRef);
   const localTileChrome = computeTileChrome(localGridTileSize);
   const [isOverflowOpen, setIsOverflowOpen] = useState(false);
+  const [gridScrollTop, setGridScrollTop] = useState(0);
   const [selfViewDragPoint, setSelfViewDragPoint] = useState<{
     x: number;
     y: number;
@@ -886,6 +888,15 @@ function GridLayout({
   const isLocalActiveSpeaker = activeSpeakerId === currentUserId;
   const isLocalPinned = pinnedId === LOCAL_STAGE_ID;
   const hasPresentation = hasLiveVideo(presentationStream);
+  const [presentationFrame, setPresentationFrame] = useState<{
+    stream: MediaStream;
+    aspect: number;
+  } | null>(null);
+  const reportPresentationFrame = useCallback((stream: MediaStream, aspect: number) => {
+    setPresentationFrame((current) =>
+      current?.stream === stream && current.aspect === aspect ? current : { stream, aspect },
+    );
+  }, []);
   const [selfPresentationView, setSelfPresentationView] =
     useState<SelfPresentationView>("placeholder");
   useLayoutEffect(() => {
@@ -903,6 +914,15 @@ function GridLayout({
           state: screenShareControlState,
         }
       : undefined;
+  const presentationAspect =
+    presentationFrame && presentationFrame.stream === presentationStream ? presentationFrame.aspect : null;
+  const hasPresentationZoom = Boolean(
+    presentationCaptureControl?.controller && selfPresentationView === "preview",
+  );
+  const stageShare = useMemo(
+    () => hasPresentation ? { aspect: presentationAspect, captureControls: hasPresentationZoom } : null,
+    [hasPresentation, hasPresentationZoom, presentationAspect],
+  );
   const localVideoTrack = localStream?.getVideoTracks()[0] ?? null;
   const localVideoTrackingRef = useRef<MeetLocalVideoTracking>(
     emptyLocalVideoTracking(),
@@ -1275,10 +1295,10 @@ function GridLayout({
       participants: orderedRemoteParticipants,
       pinnedCamera: isLocalPinned ? local : remoteTile(pinnedParticipant),
       preferredCamera: useFeaturedSelf ? local : remoteTile(preferredRemoteParticipant),
-      companionCamera: renderedViewMode === "sideBySide" && hasPresentation
+      companionCamera: renderedViewMode === "sideBySide" && stageShare
         ? useFeaturedSelf ? local : remoteTile(companionParticipant)
         : null,
-      presenting: hasPresentation,
+      share: stageShare,
       spotlight: renderedViewMode === "spotlight",
       selfView: { mode: effectiveSelfViewMode, corner: requestedSelfViewCorner },
       galleryOpen: isOverflowOpen,
@@ -1289,7 +1309,6 @@ function GridLayout({
     effectiveSelfViewMode,
     gridSize,
     hasFeaturedVideoSpeaker,
-    hasPresentation,
     isLocalFeaturedSpeaker,
     isLocalPinned,
     isOverflowOpen,
@@ -1299,6 +1318,7 @@ function GridLayout({
     preferredRemoteParticipant,
     renderedViewMode,
     requestedSelfViewCorner,
+    stageShare,
     wantsStageLayout,
   ]);
   const usesStageLayout = stageLayout !== null;
@@ -1510,15 +1530,20 @@ function GridLayout({
         })),
         hiddenIds: hiddenParticipants.map((participant) => participant.userId),
         galleryOpen: isOverflowOpen,
+        share: stageShare,
+        scrollTop: isMobilePortraitGrid ? gridScrollTop : 0,
         selfView: { mode: effectiveSelfViewMode, corner: requestedSelfViewCorner },
       }),
     [
       effectiveSelfViewMode,
+      gridScrollTop,
       gridUsableHeight,
       gridUsableWidth,
       hiddenParticipants,
+      isMobilePortraitGrid,
       isOverflowOpen,
       requestedSelfViewCorner,
+      stageShare,
       tiledGridPositionById,
       tiledGridTileIds,
     ],
@@ -1855,6 +1880,7 @@ function GridLayout({
     selfViewPlacement.placement === "floating" && selfViewPlacement.rect !== null;
   const showMinimizedSelfView =
     selfViewPlacement.placement === "minimized" && selfViewPlacement.rect !== null;
+  const showCompactSelfView = selfViewPlacement.placement === "pill";
   const actualSelfViewPlacement = selfViewPlacement.placement;
   const roomTilingFallbackLevel = !hasMeasuredGrid
     ? 2
@@ -2114,6 +2140,14 @@ function GridLayout({
         transform: "translate(-50%, -50%)",
       }
     : undefined;
+  const selfViewOverlayStyle = selfViewPlacement.rect
+    ? {
+        ...stageRectSize(selfViewPlacement.rect),
+        left: GRID_PADDING + selfViewPlacement.rect.x,
+        top: GRID_PADDING + selfViewPlacement.rect.y,
+        ...selfViewDragStyle,
+      }
+    : undefined;
 
   const flipSignature = tiledGridTileIds
     .map((id, index) => {
@@ -2211,6 +2245,7 @@ function GridLayout({
             size={slot === "main" ? "stage" : "rail"}
             selfView={slot === "main" ? presentationSelfView : undefined}
             captureControl={presentationCaptureControl}
+            onFrameAspect={slot === "main" ? reportPresentationFrame : undefined}
             isPinned={pinnedId === PRESENTATION_TILE_ID}
             onTogglePin={() => togglePin(PRESENTATION_TILE_ID)}
           />
@@ -2334,6 +2369,7 @@ function GridLayout({
       <div ref={stageBoxRef} className="relative flex min-h-0 flex-1">
       <div
         ref={gridRef}
+        onScroll={(event) => setGridScrollTop(Math.max(0, event.currentTarget.scrollTop))}
         data-meet-view-layout={usesStageLayout ? renderedViewMode : "tiled"}
         data-meet-view-requested={viewSettings.mode}
         data-meet-view-effective={renderedViewMode}
@@ -2505,6 +2541,7 @@ function GridLayout({
               size="grid"
               selfView={presentationSelfView}
               captureControl={presentationCaptureControl}
+              onFrameAspect={reportPresentationFrame}
               isPinned={pinnedId === PRESENTATION_TILE_ID}
               onTogglePin={() => togglePin(PRESENTATION_TILE_ID)}
             />
@@ -2794,10 +2831,8 @@ function GridLayout({
       </div>
       {showFloatingSelfView && selfViewPlacement.rect ? (
         <div
-          className={`group absolute z-20 overflow-hidden rounded-2xl shadow-[0_16px_42px_rgba(0,0,0,0.38)] ${
-            selfViewDragPoint ? "" : selfViewCornerClass
-          }`}
-          style={{ ...stageRectSize(selfViewPlacement.rect), ...selfViewDragStyle }}
+          className="group absolute z-20 overflow-hidden rounded-2xl shadow-[0_16px_42px_rgba(0,0,0,0.38)]"
+          style={selfViewOverlayStyle}
           data-meet-floating-self-view="true"
           data-meet-detached-self-view="floating"
           data-meet-self-view-corner={selfViewPlacement.corner}
@@ -2840,19 +2875,22 @@ function GridLayout({
         </div>
       ) : null}
 
-      {showMinimizedSelfView && selfViewPlacement.rect ? (
-        <MinimizedSelfViewPill
+      {(showMinimizedSelfView || showCompactSelfView) && selfViewPlacement.rect ? (
+        <SelfViewPill
           displayName={localDisplayName}
           userEmail={userEmail}
           isMuted={isMuted}
           isHandRaised={isHandRaised}
           corner={selfViewPlacement.corner}
-          cornerClass={selfViewCornerClass}
-          maxWidth={selfViewPlacement.rect.width}
-          dragStyle={selfViewDragStyle}
+          compact={showCompactSelfView}
+          cornerClass={showCompactSelfView ? "" : selfViewCornerClass}
+          style={showCompactSelfView ? selfViewOverlayStyle : {
+            maxWidth: selfViewPlacement.rect.width,
+            ...selfViewDragStyle,
+          }}
           isDragging={Boolean(selfViewDragPoint)}
           onDragStart={beginSelfViewDrag}
-          onRestore={() => setSelfViewMode("floating")}
+          onRestore={effectiveSelfViewMode === "minimized" ? () => setSelfViewMode("floating") : undefined}
         />
       ) : null}
       </div>
@@ -2949,6 +2987,7 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
   size,
   selfView,
   captureControl,
+  onFrameAspect,
   isPinned = false,
   onTogglePin,
 }: {
@@ -2964,6 +3003,7 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
     controller: CaptureControllerLike | null;
     state: CapturedSurfaceControlState;
   };
+  onFrameAspect?: (stream: MediaStream, aspect: number) => void;
   isPinned?: boolean;
   onTogglePin?: () => void;
 }) {
@@ -2978,6 +3018,12 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
   const showCaptureControls = Boolean(
     captureController && captureControl?.state.available && !compact && !showChooser,
   );
+  const reportFrame = (event: SyntheticEvent<HTMLVideoElement>) => {
+    const { srcObject, videoWidth, videoHeight } = event.currentTarget;
+    if (srcObject === stream && videoWidth > 0 && videoHeight > 0) {
+      onFrameAspect?.(stream, videoWidth / videoHeight);
+    }
+  };
   const [captureZoomLevel, setCaptureZoomLevel] = useState<number | null>(null);
   const [captureZoomLevels, setCaptureZoomLevels] = useState<number[]>([]);
 
@@ -3178,6 +3224,8 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
     >
       <video
         ref={videoRef}
+        onLoadedMetadata={reportFrame}
+        onResize={reportFrame}
         autoPlay
         muted
         playsInline
@@ -3299,15 +3347,15 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
   );
 });
 
-const MinimizedSelfViewPill = memo(function MinimizedSelfViewPill({
+const SelfViewPill = memo(function SelfViewPill({
   displayName,
   userEmail,
   isMuted,
   isHandRaised,
   corner,
+  compact,
   cornerClass,
-  maxWidth,
-  dragStyle,
+  style,
   isDragging,
   onDragStart,
   onRestore,
@@ -3317,36 +3365,40 @@ const MinimizedSelfViewPill = memo(function MinimizedSelfViewPill({
   isMuted: boolean;
   isHandRaised: boolean;
   corner: MeetSelfViewCorner;
+  compact: boolean;
   cornerClass: string;
-  maxWidth: number;
-  dragStyle?: CSSProperties;
+  style?: CSSProperties;
   isDragging: boolean;
   onDragStart: (event: ReactPointerEvent<HTMLElement>) => void;
-  onRestore: () => void;
+  onRestore?: () => void;
 }) {
+  const buttonSize = compact ? "h-6 w-6" : "h-7 w-7";
   return (
     <div
-      className={`absolute z-20 flex items-center gap-2 rounded-full border border-[#fafafa]/12 bg-[#111114]/92 px-2.5 py-2 text-[#fafafa] shadow-[0_14px_36px_rgba(0,0,0,0.36)] ${
+      className={`absolute z-20 flex items-center overflow-hidden rounded-full border border-[#fafafa]/12 bg-[#111114]/92 text-[#fafafa] shadow-[0_14px_36px_rgba(0,0,0,0.36)] ${
+        compact ? "gap-1 px-1" : "gap-2 px-2.5 py-2"
+      } ${
         isDragging ? "" : cornerClass
       }`}
-      style={{ maxWidth, ...dragStyle }}
-      data-meet-minimized-self-view="true"
-      data-meet-detached-self-view="minimized"
+      style={style}
+      data-meet-minimized-self-view={compact ? undefined : "true"}
+      data-meet-detached-self-view={compact ? "pill" : "minimized"}
       data-meet-self-view-corner={corner}
       data-meet-self-view-dragging={isDragging ? "true" : "false"}
-      aria-label="Minimized self-view"
+      role="group"
+      aria-label={compact ? "Compact self-view" : "Minimized self-view"}
     >
       <button
         type="button"
         onPointerDown={onDragStart}
-        aria-label="Move minimized self-view"
+        aria-label={compact ? "Move compact self-view" : "Move minimized self-view"}
         title="Move self-view"
-        className="inline-flex h-7 w-7 shrink-0 cursor-grab items-center justify-center rounded-full bg-white/[0.08] text-[#fafafa]/76 transition-colors hover:bg-white/[0.14] hover:text-[#fafafa] active:cursor-grabbing"
+        className={`inline-flex ${buttonSize} shrink-0 cursor-grab items-center justify-center rounded-full bg-white/[0.08] text-[#fafafa]/76 transition-colors hover:bg-white/[0.14] hover:text-[#fafafa] active:cursor-grabbing`}
       >
         <Move size={14} strokeWidth={1.8} />
       </button>
-      <Avatar id={userEmail} name={displayName || userEmail} size={32} />
-      <span className="min-w-0 truncate text-[13px] font-medium">
+      <Avatar id={userEmail} name={displayName || userEmail} size={compact ? 20 : 32} />
+      <span className={`min-w-0 truncate font-medium ${compact ? "text-[11px]" : "text-[13px]"}`}>
         {truncateDisplayName(displayName, 20)}
       </span>
       <span className="text-[11px] font-medium text-[#F95F4A]">You</span>
@@ -3356,15 +3408,15 @@ const MinimizedSelfViewPill = memo(function MinimizedSelfViewPill({
       {isHandRaised ? (
         <Hand size={14} strokeWidth={1.75} className="shrink-0 text-amber-300" />
       ) : null}
-      <button
+      {onRestore ? <button
         type="button"
         onClick={onRestore}
         aria-label="Restore self-view"
         title="Restore self-view"
-        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/[0.08] text-[#fafafa]/76 transition-colors hover:bg-white/[0.14] hover:text-[#fafafa]"
+        className={`inline-flex ${buttonSize} shrink-0 items-center justify-center rounded-full bg-white/[0.08] text-[#fafafa]/76 transition-colors hover:bg-white/[0.14] hover:text-[#fafafa]`}
       >
         <Maximize2 size={14} strokeWidth={1.8} />
-      </button>
+      </button> : null}
     </div>
   );
 });

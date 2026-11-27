@@ -2,9 +2,11 @@ import { computeStageRailLayout } from "@conclave/meeting-core";
 import { DEFAULT_MEET_VIEW_SETTINGS, type MeetSelfViewCorner } from "./meet-view";
 import type { Participant } from "./types";
 import {
+  placeCompactStageOverlay,
   placeStageOverlay,
   type StageOverlayForm,
   type StageRect,
+  type StageShare,
   type StageSurface,
 } from "./stage-overlay";
 import {
@@ -32,7 +34,7 @@ export interface SelfViewRequest {
 }
 
 export interface SelfViewPlacement {
-  placement: "stage" | "tile" | "floating" | "minimized" | "none";
+  placement: "stage" | "tile" | "floating" | "minimized" | "pill" | "none";
   corner: MeetSelfViewCorner;
   rect: StageRect | null;
 }
@@ -55,7 +57,7 @@ interface MeetingStageLayoutInput {
   preferredCamera: CameraTile | null;
   pinnedCamera: CameraTile | null;
   companionCamera: CameraTile | null;
-  presenting: boolean;
+  share: StageShare | null;
   spotlight: boolean;
   selfView: SelfViewRequest;
   galleryOpen: boolean;
@@ -89,7 +91,7 @@ function placeStageTiles(
     preferredCamera,
     pinnedCamera,
     companionCamera,
-    presenting,
+    share,
     spotlight,
     maxTiles,
   }: MeetingStageLayoutInput,
@@ -98,7 +100,7 @@ function placeStageTiles(
   const split = chooseStageSplit(size, companionCamera ? COMPANION_RAIL : PARTICIPANT_RAIL);
   const railAvailable = !spotlight && split.mode !== "main-only";
   const presentation = { kind: "presentation" } as const;
-  const main = presenting && (!pinnedCamera || split.mode !== "side" || !railAvailable)
+  const main = share && (!pinnedCamera || split.mode !== "side" || !railAvailable)
     ? presentation
     : pinnedCamera ?? preferredCamera;
 
@@ -107,7 +109,7 @@ function placeStageTiles(
   const companion = railAvailable ? companionCamera : null;
   const displacedPin = main.kind === "presentation" ? pinnedCamera : null;
   const requiredRailTile = railAvailable
-    ? displacedPin ?? (presenting && main.kind !== "presentation" ? presentation : null)
+    ? displacedPin ?? (share && main.kind !== "presentation" ? presentation : null)
     : null;
   const compactPin = railAvailable ? null : displacedPin;
   const placedTiles = [main, companion, requiredRailTile, compactPin];
@@ -247,17 +249,19 @@ function measureStage(size: StageSize, placed: PlacedStageTiles): StageRects {
   return rects;
 }
 
-function stageSurfaces(placed: PlacedStageTiles, rects: StageRects): StageSurface[] {
+function stageSurfaces(placed: PlacedStageTiles, rects: StageRects, share: StageShare | null): StageSurface[] {
   const surface = (tile: MeetingStageTile, rect: StageRect): StageSurface => ({
     rect,
-    cover: tile.kind === "presentation" ? "never" : "body",
+    kind: tile.kind === "presentation" ? "protected" : "camera",
   });
   return [
-    surface(placed.main, rects.main),
+    share && placed.main.kind === "presentation"
+      ? { kind: "share", rect: rects.main, share }
+      : surface(placed.main, rects.main),
     ...(placed.companion && rects.companion ? [surface(placed.companion, rects.companion)] : []),
     ...placed.rail.map((tile, index) => surface(tile, rects.rail[index])),
-    ...(rects.overflow ? [{ rect: rects.overflow, cover: "body" } satisfies StageSurface] : []),
-    ...(rects.compactPin ? [{ rect: rects.compactPin, cover: "never" } satisfies StageSurface] : []),
+    ...(rects.overflow ? [{ rect: rects.overflow, kind: "overflow" } satisfies StageSurface] : []),
+    ...(rects.compactPin ? [{ rect: rects.compactPin, kind: "compact-pin" } satisfies StageSurface] : []),
   ];
 }
 
@@ -270,7 +274,7 @@ function placeDetachedSelfView(
   const overlay = placeStageOverlay({ bounds: size, surfaces, corner: selfView.corner, form });
   return overlay
     ? { placement: form, ...overlay }
-    : { placement: "none", corner: selfView.corner, rect: null };
+    : { placement: "pill", ...placeCompactStageOverlay({ bounds: size, surfaces, corner: selfView.corner }) };
 }
 
 export function resolveMeetingStageLayout(input: MeetingStageLayoutInput) {
@@ -309,7 +313,7 @@ export function resolveMeetingStageLayout(input: MeetingStageLayoutInput) {
   if (docked.main.kind === "local") return settle(docked, fixed("stage"));
   if (docked.tiles.some((tile) => tile.kind === "local")) return settle(docked, fixed("tile"));
 
-  const surfaces = stageSurfaces(docked, measureStage(size, docked));
+  const surfaces = stageSurfaces(docked, measureStage(size, docked), input.share);
   if (selfView.mode === "minimized") {
     return settle(docked, placeDetachedSelfView("minimized", input, surfaces));
   }
@@ -342,12 +346,16 @@ export function resolveTiledGridPlacement({
   tiles,
   hiddenIds,
   galleryOpen,
+  share,
+  scrollTop = 0,
   selfView,
 }: {
   size: StageSize;
   tiles: readonly TiledGridTile[];
   hiddenIds: readonly string[];
   galleryOpen: boolean;
+  share: StageShare | null;
+  scrollTop?: number;
   selfView: SelfViewRequest;
 }): TiledGridPlacement {
   const ids = tiles.map((tile) => tile.id);
@@ -373,9 +381,14 @@ export function resolveTiledGridPlacement({
       hints,
     };
   }
-  const surfaces = tiles.flatMap(({ id, rect }): StageSurface[] =>
-    rect ? [{ rect, cover: id === PRESENTATION_TILE_ID ? "never" : "body" }] : [],
-  );
+  const surfaces = tiles.flatMap(({ id, rect }): StageSurface[] => {
+    if (!rect) return [];
+    const visibleRect = { ...rect, y: rect.y - scrollTop };
+    if (id === PRESENTATION_TILE_ID) {
+      return [share ? { kind: "share", rect: visibleRect, share } : { kind: "protected", rect: visibleRect }];
+    }
+    return [{ kind: id === OVERFLOW_TILE_ID ? "overflow" : "camera", rect: visibleRect }];
+  });
   const measured = isMeasured(size) && surfaces.length === tiles.length;
   return {
     arrangement: "grid",
