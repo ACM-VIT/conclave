@@ -455,7 +455,7 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
     overflow.push({
       id: "whiteboard",
       icon: StickyNote,
-      label: p.isWhiteboardActive ? "Close whiteboard" : "Open whiteboard",
+      label: p.isWhiteboardActive ? "Close whiteboard" : "Present whiteboard",
       active: p.isWhiteboardActive,
       paletteOnly: appsPanelOwnsApps,
       onPress: () => (p.isWhiteboardActive ? p.onCloseWhiteboard?.() : p.onOpenWhiteboard?.()),
@@ -475,7 +475,7 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
     overflow.push({
       id: "dev-playground",
       icon: TerminalSquare,
-      label: p.isDevPlaygroundActive ? "Close dev playground" : "Open dev playground",
+      label: p.isDevPlaygroundActive ? "Close dev playground" : "Present dev playground",
       active: p.isDevPlaygroundActive,
       paletteOnly: appsPanelOwnsApps,
       onPress: () =>

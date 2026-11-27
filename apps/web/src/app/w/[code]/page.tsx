@@ -1,7 +1,8 @@
 import { Suspense } from "react";
 import { headers as nextHeaders } from "next/headers";
 import RouteLoadingState from "../../components/RouteLoadingState";
-import { sanitizeWebinarLinkCode } from "../../lib/utils";
+import { webinarSlugFromPath } from "@/lib/meeting-links";
+import { canonicalizeSfuClientId } from "@/lib/sfu-client-id";
 import {
   resolveSfuClientId,
   resolveSfuSecret,
@@ -13,16 +14,15 @@ import WebinarLandingClient, {
 
 type WebinarRoomPageProps = {
   params: Promise<{ code: string }>;
+  searchParams?: Promise<{ clientId?: string | string[] }>;
 };
 
 const lookupScheduledWebinar = async (
   slug: string,
+  clientId: string,
 ): Promise<PublicScheduledWebinar | null> => {
   if (!slug) return null;
   const sfuUrl = resolveSfuUrl();
-  const headers = await nextHeaders();
-  const fakeRequest = new Request("http://internal/lookup", { headers });
-  const clientId = resolveSfuClientId(fakeRequest);
 
   try {
     const response = await fetch(
@@ -68,7 +68,7 @@ const lookupScheduledWebinar = async (
   }
 };
 
-export default function WebinarRoomPage({ params }: WebinarRoomPageProps) {
+export default function WebinarRoomPage({ params, searchParams }: WebinarRoomPageProps) {
   return (
     <Suspense
       fallback={
@@ -77,27 +77,26 @@ export default function WebinarRoomPage({ params }: WebinarRoomPageProps) {
         />
       }
     >
-      <WebinarRoomContent params={params} />
+      <WebinarRoomContent params={params} searchParams={searchParams} />
     </Suspense>
   );
 }
 
-async function WebinarRoomContent({ params }: WebinarRoomPageProps) {
+async function WebinarRoomContent({ params, searchParams }: WebinarRoomPageProps) {
   const { code } = await params;
 
   const rawCode = typeof code === "string" ? code : "";
-  const decodedCode = decodeURIComponent(rawCode);
-  const resolvedCode =
-    decodedCode === "undefined" || decodedCode === "null" ? "" : decodedCode;
-  const webinarLinkCode = sanitizeWebinarLinkCode(resolvedCode);
-
-  const webinar = webinarLinkCode
-    ? await lookupScheduledWebinar(webinarLinkCode)
-    : null;
+  const webinarLinkCode = webinarSlugFromPath(decodeURIComponent(rawCode));
+  const requested = (await searchParams)?.clientId;
+  const clientId =
+    canonicalizeSfuClientId(Array.isArray(requested) ? requested[0] : requested) ??
+    resolveSfuClientId(new Request("http://internal/lookup", { headers: await nextHeaders() }));
+  const webinar = await lookupScheduledWebinar(webinarLinkCode, clientId);
 
   return (
     <WebinarLandingClient
       webinarLinkCode={webinarLinkCode}
+      clientId={clientId}
       initialWebinar={webinar}
     />
   );

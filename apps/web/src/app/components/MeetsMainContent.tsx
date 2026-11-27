@@ -44,6 +44,7 @@ import MeetSettingsPanel from "./MeetSettingsPanel";
 import MeetViewPanel from "./MeetViewPanel";
 import ReactionOverlay from "./ReactionOverlay";
 import MeetingAppLayout from "./MeetingAppLayout";
+import PresentedApp from "./apps/PresentedApp";
 import CameraPreviewPanels from "./CameraPreviewPanels";
 import SharedBrowserStage from "./SharedBrowserStage";
 import ScreenShareAudioPlayers from "./ScreenShareAudioPlayers";
@@ -174,7 +175,7 @@ interface MeetsMainContentProps {
   showPermissionHint: boolean;
   availableRooms: RoomInfo[];
   roomsStatus: "idle" | "loading" | "error";
-  refreshRooms: () => void;
+  refreshRooms: (roomId?: string) => void;
   displayNameInput: string;
   setDisplayNameInput: Dispatch<SetStateAction<string>>;
   presentationStream: MediaStream | null;
@@ -647,8 +648,12 @@ export default function MeetsMainContent({
 }: MeetsMainContentProps) {
   const {
     state: appsState,
+    presentedDocKey,
+    syncStatus: appSyncStatus,
+    retrySync: retryAppSync,
+    rejectedChange: rejectedAppChange,
     apps,
-    openApp,
+    presentApp,
     closeApp,
     setLocked,
     refreshState,
@@ -679,16 +684,17 @@ export default function MeetsMainContent({
   const isWhiteboardActive = appsState.activeAppId === "whiteboard";
   const isWatchActive = appsState.activeAppId === "watch";
   const isDevPlaygroundActive = appsState.activeAppId === "dev-playground";
-  const ActiveMeetingApp = useMemo(
-    () => apps.find((app) => app.id === appsState.activeAppId)?.web ?? null,
+  const activeMeetingApp = useMemo(
+    () => apps.find((app) => app.id === appsState.activeAppId) ?? null,
     [apps, appsState.activeAppId],
   );
+  const ActiveMeetingApp = activeMeetingApp?.web ?? null;
   const handleOpenWhiteboard = useCallback(
-    () => openApp("whiteboard"),
-    [openApp],
+    () => presentApp("whiteboard"),
+    [presentApp],
   );
   const handleCloseWhiteboard = useCallback(() => closeApp(), [closeApp]);
-  const handleOpenWatch = useCallback(() => openApp("watch"), [openApp]);
+  const handleOpenWatch = useCallback(() => presentApp("watch"), [presentApp]);
   const handleCloseWatch = useCallback(() => closeApp(), [closeApp]);
   // Opting out of Watch together is local: this participant goes back to the
   // call view while everyone else keeps watching. It lasts until the current
@@ -709,8 +715,8 @@ export default function MeetsMainContent({
     [],
   );
   const handleOpenDevPlayground = useCallback(
-    () => openApp("dev-playground"),
-    [openApp],
+    () => presentApp("dev-playground"),
+    [presentApp],
   );
   const handleCloseDevPlayground = useCallback(() => closeApp(), [closeApp]);
   const handleToggleAppsLock = useCallback(
@@ -2508,7 +2514,14 @@ export default function MeetsMainContent({
           audioPlaybackAttemptToken={participantAudioPlaybackAttempt}
           getDisplayName={resolveDisplayName}
         >
-          <ActiveMeetingApp />
+          <PresentedApp
+            app={ActiveMeetingApp}
+            appName={activeMeetingApp?.name ?? ""}
+            appKey={presentedDocKey ?? ""}
+            syncStatus={appSyncStatus}
+            onRetrySync={retryAppSync}
+            rejectedChange={rejectedAppChange}
+          />
         </MeetingAppLayout>
       ) : browserState?.active && browserState.noVncUrl ? (
         <MeetingAppLayout
@@ -2545,6 +2558,7 @@ export default function MeetsMainContent({
         </MeetingAppLayout>
       ) : (
         <GridLayout
+
           localStream={effectiveLocalStream}
           isCameraOff={effectiveIsCameraOff}
           isMuted={isMuted}
@@ -2632,6 +2646,7 @@ export default function MeetsMainContent({
             <ControlsBar {...controlsBarProps} />
             <CommandPalette
               controls={controlsBarProps}
+              clientId={clientId}
               onSendChatMessage={handleSendChat}
             />
             <ShortcutsHelpDialog />

@@ -16,7 +16,6 @@ import {
   canonicalizeClientId,
   clientNamespaceIncludes,
   clientIdCandidates,
-  clientIdFamily,
   resolveDefaultClientId,
 } from "../clientIds.js";
 import type {
@@ -167,21 +166,6 @@ export const registerScheduledMeetingRoutes = (
     }
   };
 
-  const findMeetingByRoomCode = (
-    clientId: string,
-    roomCode: string,
-  ): ScheduledMeeting | null => {
-    for (const candidateClientId of clientIdFamily(clientId)) {
-      const meeting = getScheduledMeetingByRoomCode(
-        state.scheduledMeetings,
-        candidateClientId,
-        roomCode,
-      );
-      if (meeting) return meeting;
-    }
-    return null;
-  };
-
   const listMeetingsForClient = (options: {
     clientId: string;
     ownerEmail?: string;
@@ -255,7 +239,7 @@ export const registerScheduledMeetingRoutes = (
     }
   });
 
-  app.get("/scheduled-meetings/by-room/:roomCode", async (req, res) => {
+  app.get("/scheduled-meetings/by-room/:roomCode", (req, res) => {
     if (!requireSecret(req, res)) return;
     const clientId = resolveClientId(req);
     const roomCode = normalizeIdentifier(
@@ -266,7 +250,7 @@ export const registerScheduledMeetingRoutes = (
       res.status(400).json({ error: "Room code is required" });
       return;
     }
-    const meeting = findMeetingByRoomCode(clientId, roomCode);
+    const meeting = getScheduledMeetingByRoomCode(state.scheduledMeetings, clientId, roomCode);
     if (!meeting) {
       res.status(404).json({ error: "Scheduled meeting not found" });
       return;
@@ -274,7 +258,7 @@ export const registerScheduledMeetingRoutes = (
     res.json({ scheduledMeeting: serializeMeeting(meeting) });
   });
 
-  app.get("/scheduled-meetings/public/by-room/:roomCode", async (req, res) => {
+  app.get("/scheduled-meetings/public/by-room/:roomCode", (req, res) => {
     if (!requireSecret(req, res)) return;
     const clientId = resolveClientId(req);
     const roomCode = normalizeIdentifier(
@@ -285,7 +269,7 @@ export const registerScheduledMeetingRoutes = (
       res.status(400).json({ error: "Room code is required" });
       return;
     }
-    const meeting = findMeetingByRoomCode(clientId, roomCode);
+    const meeting = getScheduledMeetingByRoomCode(state.scheduledMeetings, clientId, roomCode);
     if (!meeting) {
       res.status(404).json({ error: "Scheduled meeting not found" });
       return;
@@ -303,7 +287,7 @@ export const registerScheduledMeetingRoutes = (
       res.status(400).json({ error: "Room code is required" });
       return;
     }
-    const meeting = findMeetingByRoomCode(resolveClientId(req), roomCode);
+    const meeting = getScheduledMeetingByRoomCode(state.scheduledMeetings, resolveClientId(req), roomCode);
     res.json({ scheduledMeeting: meeting ? publicMeetingView(meeting) : null });
   });
 

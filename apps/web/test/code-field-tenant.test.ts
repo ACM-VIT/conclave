@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/sfu-client-id", () => import("../src/lib/sfu-client-id"));
+vi.mock("@/app/lib/utils", () => import("../src/app/lib/utils"));
 
 import { buildMeetingPath, buildMeetingUrl } from "../src/lib/meeting-links";
 import { canonicalizeSfuClientId, resolveBrowserSfuClientId } from "../src/lib/sfu-client-id";
@@ -26,6 +27,16 @@ afterEach(() => {
 });
 
 describe("joining a Conclave link from the code field", () => {
+  it("uses the link's default tenant only for links, not bare codes", () => {
+    vi.stubEnv("NEXT_PUBLIC_SFU_CLIENT_ID", "conclave");
+    const input = (value: string) => codeFieldTenant(resolveCodeField(value, ORIGINS), "acme");
+    expect(input("review-room")).toEqual({ clientId: "acme", onThisPage: true });
+    expect(input("https://conclave.acmvit.in/Review-Room")).toEqual({
+      clientId: "conclave",
+      onThisPage: false,
+    });
+  });
+
   it("lands on the link's tenant wherever the link is made and wherever it is opened", () => {
     const failures: string[] = [];
     for (const madeOn of DEPLOYMENT_DEFAULTS) {
@@ -38,10 +49,10 @@ describe("joining a Conclave link from the code field", () => {
           }`;
           const resolution = resolveCodeField(link, ORIGINS);
           const tenant = codeFieldTenant(resolution, page);
-          const wanted = canonicalizeSfuClientId(linkTenant) ?? page;
+          const wanted = canonicalizeSfuClientId(linkTenant) ?? resolveBrowserSfuClientId();
           const target = { roomCode: resolution.code, clientId: tenant.clientId };
-          const path = buildMeetingPath(target);
-          const url = buildMeetingUrl("https://conclave.acmvit.in", target);
+          const path = buildMeetingPath(target)!;
+          const url = buildMeetingUrl("https://conclave.acmvit.in", target)!;
           vi.stubEnv("NEXT_PUBLIC_SFU_CLIENT_ID", openedOn);
           const redirect = landsOn(path);
           const copied = landsOn(url);
@@ -112,8 +123,7 @@ describe("joining a Conclave link from the code field", () => {
         "https://conclave.acmvit.in/review-room?clientId=conclave",
       );
     }
-    expect(buildMeetingPath({ roomCode: "review-room", clientId: null })).toBe("/review-room");
-    expect(buildMeetingPath({ roomCode: "review-room", clientId: "a b" })).toBe("/review-room");
+    expect(buildMeetingPath({ roomCode: "review-room", clientId: "a b" })).toBeNull();
   });
 });
 

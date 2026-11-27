@@ -821,6 +821,7 @@ export const scheduledMeetingJsonStore: JsonStoreAdapter<ScheduledMeeting[]> = {
       key: (meeting) => meeting.id,
       stamp: (meeting) => meeting.updatedAt,
       claims: scheduledMeetingClaims,
+      canDelete: true,
     }),
   },
   build: (_base, rows) => rows.meetings as ScheduledMeeting[],

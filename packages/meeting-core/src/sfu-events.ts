@@ -93,6 +93,7 @@ export const SFU_EVENTS = {
     // Apps SDK / collaborative docs
     appsOpen: "apps:open",
     appsClose: "apps:close",
+    appsDiscard: "apps:discard",
     appsLock: "apps:lock",
     appsGetState: "apps:getState",
     appsYjsSync: "apps:yjs:sync",

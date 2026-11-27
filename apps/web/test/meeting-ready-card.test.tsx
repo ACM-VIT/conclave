@@ -69,7 +69,7 @@ describe("MeetingReadyCard", () => {
     expect(container.textContent).toContain(`${location.host}/abc-defg-hij`);
     await click("Copy meeting link");
 
-    expect(writeText).toHaveBeenCalledWith(`${location.origin}/abc-defg-hij`);
+    expect(writeText).toHaveBeenCalledWith(`${location.origin}/abc-defg-hij?clientId=conclave`);
     expect(button("Meeting link copied")).toBeDefined();
   });
 
@@ -92,7 +92,7 @@ describe("MeetingReadyCard", () => {
 
     expect(share).toHaveBeenCalledWith({
       title: "Join my Conclave meeting",
-      url: `${location.origin}/abc-defg-hij`,
+      url: `${location.origin}/abc-defg-hij?clientId=conclave`,
     });
     expect(container.textContent).toContain("Invite sent");
   });
@@ -110,7 +110,7 @@ describe("MeetingReadyCard", () => {
 
     await click("Add others");
     expect(writeText).toHaveBeenCalledWith(
-      `Join my Conclave meeting: ${location.origin}/abc-defg-hij`,
+      `Join my Conclave meeting: ${location.origin}/abc-defg-hij?clientId=conclave`,
     );
   });
 
@@ -120,7 +120,7 @@ describe("MeetingReadyCard", () => {
     await click("Add others");
 
     expect(writeText).toHaveBeenCalledWith(
-      `Join my Conclave meeting: ${location.origin}/abc-defg-hij`,
+      `Join my Conclave meeting: ${location.origin}/abc-defg-hij?clientId=conclave`,
     );
     expect(container.textContent).toContain("Invite copied");
   });

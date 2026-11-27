@@ -12,7 +12,7 @@ import {
 
 interface MeetingOutcomeScreenProps {
   outcome: CallOutcome;
-  onRejoin: () => void;
+  onRejoin?: () => void;
   onReturnHome: () => void;
   onRate: (rating: number) => void;
 }
@@ -24,6 +24,7 @@ export default function MeetingOutcomeScreen({
   onRate,
 }: MeetingOutcomeScreenProps) {
   const policy = CALL_OUTCOME_POLICY[outcome.kind];
+  const actions = onRejoin ? policy.actions : policy.actions.filter((action) => action !== "rejoin");
   const titleRef = useRef<HTMLHeadingElement>(null);
   const [rating, setRating] = useState<number | null>(null);
   const [preview, setPreview] = useState<number | null>(null);
@@ -57,7 +58,7 @@ export default function MeetingOutcomeScreen({
           </p>
         ) : null}
         <div className="mt-7 flex w-full flex-col gap-2.5 sm:flex-row">
-          {policy.actions.map((action, index) => (
+          {actions.map((action, index) => (
             <button
               key={action}
               type="button"

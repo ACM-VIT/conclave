@@ -342,8 +342,8 @@ export const toRoomSnapshot = (room: Room): RoomSnapshot => {
     screenShareProducerId: room.screenShareProducerId,
     quality: room.currentQuality,
     appsState: {
-      activeAppId: room.appsState.activeAppId,
-      locked: room.appsState.locked,
+      activeAppId: room.apps.activeAppId,
+      locked: room.apps.locked,
     },
     policies: {
       locked: room.isLocked,
@@ -1127,7 +1127,7 @@ export const teardownClient = (options: {
   const peers = options.peers ?? io.to(roomChannelId);
 
   // Clear awareness before removing the client so peers stop seeing its cursor.
-  for (const removal of room.clearUserAwareness(userId)) {
+  for (const removal of room.apps.clearUserAwareness(userId)) {
     peers.emit("apps:awareness", {
       appId: removal.appId,
       awarenessUpdate: removal.awarenessUpdate,

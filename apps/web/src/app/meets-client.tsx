@@ -36,7 +36,6 @@ import {
   type CallOutcomeKind,
 } from "./lib/call-outcome";
 import { telemetry } from "./lib/telemetry";
-import { buildMeetingPath } from "@/lib/meeting-links";
 
 const MEETING_APPS =
   process.env.NODE_ENV === "development"
@@ -136,7 +135,6 @@ import {
   generateRoomCode,
   isSystemUserId,
   sanitizeInstitutionDisplayName,
-  sanitizeRoomCode,
 } from "./lib/utils";
 import type { VideoEffectsBridgeState } from "./components/VideoEffectsBridge";
 import { deriveInCallAlerts } from "./lib/in-call-alerts";
@@ -148,10 +146,8 @@ import {
   saveRejoinIntent,
   type RejoinMedia,
 } from "./lib/rejoin-intent";
-import { canonicalizeSfuClientId, resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
-
-const pageTenant = (clientId: string | undefined): string =>
-  canonicalizeSfuClientId(clientId) ?? resolveBrowserSfuClientId();
+import { resolveMeetingClientId } from "@/lib/sfu-client-id";
+import { buildMeetingPath, buildWebinarPath, roomIdFromMeetingPath } from "@/lib/meeting-links";
 
 type MeetUser = {
   id?: string;
@@ -462,7 +458,10 @@ export default function MeetsClient({
   const [rejoinMedia, setRejoinMedia] = useState(() =>
     typeof window === "undefined"
       ? null
-      : readRejoinIntent({ roomId: initialRoomId ?? "", clientId: pageTenant(clientId) }),
+      : readRejoinIntent({
+          roomId: initialRoomId ?? "",
+          clientId: resolveMeetingClientId(clientId),
+        }),
   );
   useEffect(() => {
     if (rejoinMedia) clearRejoinIntent();
@@ -959,11 +958,9 @@ export default function MeetsClient({
     if (typeof window === "undefined") return;
     const path = window.location.pathname.replace(/^\/+/, "");
     if (!path) return;
-    const decoded = decodeURIComponent(path);
-    if (!decoded || decoded === "undefined" || decoded === "null") return;
-    const sanitized = sanitizeRoomCode(decoded);
-    if (!sanitized) return;
-    setRoomId(sanitized);
+    const pathRoomId = roomIdFromMeetingPath(decodeURIComponent(path));
+    if (!pathRoomId) return;
+    setRoomId(pathRoomId);
   }, [enableRoomRouting, forceJoinOnly, roomId, setRoomId]);
 
   useEffect(() => {
@@ -2414,13 +2411,10 @@ export default function MeetsClient({
         notification.webinarLinkSlug?.trim() ||
         webinarConfigRef.current?.linkSlug?.trim() ||
         "";
-      if (slug) {
-        window.location.assign(`/w/${encodeURIComponent(slug)}`);
-      } else {
-        window.location.assign("/");
-      }
+      const path = buildWebinarPath({ slug, clientId: resolveMeetingClientId(clientId) });
+      window.location.assign(path ?? "/");
     },
-    [],
+    [clientId],
   );
 
   const socket = useMeetSocket({
@@ -2515,12 +2509,15 @@ export default function MeetsClient({
     bypassMediaPermissions,
   });
 
+  const webinarStagePath = webinarStageInvite
+    ? buildMeetingPath({
+        roomCode: webinarStageInvite.rejoinRoomId,
+        clientId: resolveMeetingClientId(clientId),
+      })
+    : null;
   const handleAcceptWebinarStageInvite = useCallback(() => {
-    if (!webinarStageInvite || typeof window === "undefined") return;
-    window.location.assign(
-      `/${encodeURIComponent(webinarStageInvite.rejoinRoomId)}`,
-    );
-  }, [webinarStageInvite]);
+    if (webinarStagePath) window.location.assign(webinarStagePath);
+  }, [webinarStagePath]);
 
   const declineWebinarStageInvite = socket.declineWebinarStageInvite;
   const handleDismissWebinarStageInvite = useCallback(() => {
@@ -2714,24 +2711,6 @@ export default function MeetsClient({
       setHasEnteredMeetingSurface(false);
     }
   }, [connectionState, refs.intentionalDisconnectRef]);
-
-  useEffect(() => {
-    if (connectionState === "joined") return;
-    const normalizedRoomId = roomId.trim();
-    const hasRoom = normalizedRoomId.length > 0;
-    if (!hasRoom && !isAdminFlag) return;
-
-    const refresh = () => {
-      void refreshRooms(isAdminFlag ? undefined : normalizedRoomId);
-    };
-
-    refresh();
-    if (!hasRoom) return;
-    const interval = setInterval(() => {
-      refresh();
-    }, 10000);
-    return () => clearInterval(interval);
-  }, [roomId, isAdminFlag, connectionState, refreshRooms]);
 
   const joinRoomById = socket.joinRoomById;
   useEffect(() => {
@@ -3338,20 +3317,20 @@ export default function MeetsClient({
 
   if (callOutcome) {
     const outcome = callOutcome;
+    const rejoinDestination = { roomId: outcome.roomId, clientId: resolveMeetingClientId(clientId) };
+    const rejoinPath = buildMeetingPath({ roomCode: rejoinDestination.roomId, clientId: rejoinDestination.clientId });
     return renderWithApps(
       <MeetingOutcomeScreen
         outcome={outcome}
-        onRejoin={() => {
+        onRejoin={rejoinPath ? () => {
           if (outcome.rejoinMedia) {
             saveRejoinIntent(
-              { roomId: outcome.roomId, clientId: pageTenant(clientId) },
+              rejoinDestination,
               outcome.rejoinMedia,
             );
           }
-          window.location.assign(
-            buildMeetingPath({ roomCode: outcome.roomId, clientId }),
-          );
-        }}
+          window.location.assign(rejoinPath);
+        } : undefined}
         onReturnHome={() => window.location.assign("/")}
         onRate={(rating) =>
           telemetry.capture("meet_call_rated", {
@@ -3628,7 +3607,7 @@ export default function MeetsClient({
         isWebinarHandRaised={isWebinarHandRaised}
         webinarStageInvite={webinarStageInvite}
         onDismissWebinarStageInvite={handleDismissWebinarStageInvite}
-        onAcceptWebinarStageInvite={handleAcceptWebinarStageInvite}
+        onAcceptWebinarStageInvite={webinarStagePath ? handleAcceptWebinarStageInvite : undefined}
         onSubmitWebinarQuestion={
           isWebinarAttendee ? socket.submitWebinarQuestion : undefined
         }

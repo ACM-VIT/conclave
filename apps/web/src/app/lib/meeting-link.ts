@@ -1,11 +1,12 @@
 import { buildMeetingUrl } from "../../lib/meeting-links";
+import { resolveMeetingClientId } from "../../lib/sfu-client-id";
 
 export function meetingLinkFor(
   roomId: string,
   clientId: string | null | undefined,
-): string {
+): string | null {
   const origin = typeof window === "undefined" ? "" : window.location.origin;
-  return buildMeetingUrl(origin, { roomCode: roomId, clientId });
+  return buildMeetingUrl(origin, { roomCode: roomId, clientId: resolveMeetingClientId(clientId) });
 }
 
 export async function copyText(value: string): Promise<boolean> {
