@@ -17,6 +17,7 @@ import { GHOST_BUTTON, ICON_BUTTON, SECONDARY_BUTTON } from "./buttons";
 export type WheelPanelProps = {
   fill: boolean;
   entries: WheelEntry[];
+  waitingCount: number;
   history: WheelResult[];
   canEdit: boolean;
   locked: boolean;
@@ -26,7 +27,7 @@ export type WheelPanelProps = {
   removeWinnerOnDone: boolean;
   missingParticipantCount: number;
   onToggleSound: () => void;
-  onAddEntries: (labels: string[]) => void;
+  onAddEntries: (labels: string[]) => number;
   onAddParticipants: () => void;
   onRemoveEntry: (entryId: string) => void;
   onShuffle: () => void;
@@ -115,6 +116,7 @@ function TabButton({
 export function WheelPanel({
   fill,
   entries,
+  waitingCount,
   history,
   canEdit,
   locked,
@@ -153,8 +155,7 @@ export function WheelPanel({
   const submitDraft = () => {
     const value = draft.trim();
     if (!value) return;
-    onAddEntries([value]);
-    setDraft("");
+    if (onAddEntries([value]) > 0) setDraft("");
   };
 
   return (
@@ -215,11 +216,9 @@ export function WheelPanel({
                     const names = splitPastedNames(event.clipboardData.getData("text"));
                     if (names.length <= 1) return;
                     event.preventDefault();
-                    onAddEntries(names);
-                    setDraft("");
+                    if (onAddEntries(names) > 0) setDraft("");
                   }}
                   disabled={isSpinning || full}
-                  maxLength={48}
                   placeholder={full ? "The wheel is full" : "Add a name or paste a list"}
                   aria-label="Add a name"
                   className="h-9 w-full rounded-lg border border-white/[0.14] bg-transparent pl-3 pr-10 text-[13px] text-[#fafafa] outline-none transition-colors duration-100 placeholder:text-[#fafafa]/40 disabled:opacity-50"
@@ -240,7 +239,7 @@ export function WheelPanel({
                   {confirmClear ? (
                     <>
                       <span className="min-w-0 flex-1 truncate text-[13px] text-[#fafafa]/75">
-                        Clear all {entries.length} names?
+                        Clear all {entries.length + waitingCount} names?
                       </span>
                       <button
                         type="button"
@@ -365,9 +364,11 @@ export function WheelPanel({
                 ))}
               </ol>
             )}
-            {full && canEdit && (
-              <p className="pt-2 text-[12px] text-[#fafafa]/45">
+            {(waitingCount > 0 || (full && canEdit)) && (
+              <p data-wheel-capacity className="pt-2 text-[12px] text-[#fafafa]/45">
                 The wheel holds up to {MAX_WHEEL_ENTRIES} names.
+                {waitingCount > 0 &&
+                  ` ${waitingCount} more ${waitingCount === 1 ? "is" : "are"} waiting for a place.`}
               </p>
             )}
           </div>

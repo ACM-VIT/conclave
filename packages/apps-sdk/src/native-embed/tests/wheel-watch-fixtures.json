@@ -128,6 +128,62 @@
       "expect": false
     },
     {
+      "name": "wheel names waiting",
+      "app": {
+        "kind": "wheel",
+        "waiting": 3
+      },
+      "expect": true
+    },
+    {
+      "name": "wheel no names waiting",
+      "app": {
+        "kind": "wheel",
+        "waiting": 0
+      },
+      "expect": true
+    },
+    {
+      "name": "wheel waiting at the limit",
+      "app": {
+        "kind": "wheel",
+        "waiting": 999
+      },
+      "expect": true
+    },
+    {
+      "name": "wheel waiting over the limit",
+      "app": {
+        "kind": "wheel",
+        "waiting": 1000
+      },
+      "expect": false
+    },
+    {
+      "name": "wheel waiting below zero",
+      "app": {
+        "kind": "wheel",
+        "waiting": -1
+      },
+      "expect": false
+    },
+    {
+      "name": "wheel waiting not whole",
+      "app": {
+        "kind": "wheel",
+        "waiting": 1.5
+      },
+      "expect": false
+    },
+    {
+      "name": "wheel waiting as text",
+      "app": {
+        "kind": "wheel",
+        "waiting": "2"
+      },
+      "expect": false
+    },
+    {
       "name": "wheel 64 entries",
       "generate": "wheelEntries",
       "count": 64,
@@ -283,7 +339,7 @@
     "spin",
     "setRemoveWinner",
     "setSounds",
-    "clearResults",
+    "clearResults", "addOutcome",
     "playNow",
     "enqueue",
     "request",

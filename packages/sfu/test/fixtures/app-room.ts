@@ -82,7 +82,8 @@ const newRoom = (state: SfuState, id: string): Room => {
   return room;
 };
 
-export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChangeStaging?: StagingBudget } = {}) => {
+export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChangeStaging?: StagingBudget; appId?: string } = {}) => {
+  const { appId = "board" } = options;
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
   const hub: Hub = new Map();
@@ -101,7 +102,7 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
   registerAppsHandlers(context);
   const requestSync = (holder: Y.Doc, canRetry = true, wholeChanges = false) =>
     call<AppsSyncResponse | AppsSyncError>("apps:yjs:sync", {
-      appId: "board",
+      appId,
       syncMessage: Y.encodeStateVector(holder),
       canRetry,
       ...(wholeChanges ? { wholeChanges } : {}),
@@ -125,7 +126,7 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
     if (syncs) {
       const vector = Y.encodeStateVector(new Y.Doc());
       await joiner.call("apps:yjs:sync", {
-        appId: "board",
+        appId,
         syncMessage: encoding === "base64" ? Buffer.from(vector).toString("base64") : vector,
         canRetry: true,
         ...(declares ? { wholeChanges: true } : {}),
@@ -134,9 +135,9 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
     return {
       inbox: joiner.member.inbox,
       settle: () =>
-        joiner.call("apps:yjs:sync", { appId: "board", syncMessage: Y.encodeStateVector(new Y.Doc()), canRetry: true }),
+        joiner.call("apps:yjs:sync", { appId, syncMessage: Y.encodeStateVector(new Y.Doc()), canRetry: true }),
       send: (update: Uint8Array, replicaId: string, part?: unknown) =>
-        joiner.listeners.get("apps:yjs:update")!({ appId: "board", update, replicaId, ...(part === undefined ? {} : { part }) }),
+        joiner.listeners.get("apps:yjs:update")!({ appId, update, replicaId, ...(part === undefined ? {} : { part }) }),
       updates: () => joiner.member.inbox.filter(({ event }) => event === "apps:yjs:update").map(({ payload }) => (payload as { update: Uint8Array }).update),
       states: () => joiner.member.inbox.filter(({ event }) => event === "apps:state").map(({ payload }) => (payload as { activeAppId: string | null }).activeAppId),
     };
@@ -159,7 +160,7 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
     void self.socket.join(other.channelId);
     context.currentRoom = other;
     context.currentClient = moved;
-    await call("apps:open", { appId: "board" });
+    await call("apps:open", { appId });
     return other;
   };
   return {
@@ -173,14 +174,14 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
     peer,
     strangerIn,
     getState: () => call("apps:getState"),
-    open: () => call("apps:open", { appId: "board" }),
+    open: () => call("apps:open", { appId }),
     close: () => call("apps:close"),
     send: (update: Uint8Array, replicaId?: string, part?: unknown) =>
-      listeners.get("apps:yjs:update")!({ appId: "board", update, replicaId, ...(part === undefined ? {} : { part }) }),
-    sendList: (updates: unknown, replicaId?: string) => listeners.get("apps:yjs:update")!({ appId: "board", updates, replicaId }),
+      listeners.get("apps:yjs:update")!({ appId, update, replicaId, ...(part === undefined ? {} : { part }) }),
+    sendList: (updates: unknown, replicaId?: string) => listeners.get("apps:yjs:update")!({ appId, updates, replicaId }),
     acknowledged: (payload: { update?: Uint8Array; updates?: unknown; part?: unknown }, replicaId?: string) =>
       new Promise<{ inbox: Received[]; relayed: number }>((resolve) => {
-        listeners.get("apps:yjs:update")!({ appId: "board", replicaId, ...payload }, () =>
+        listeners.get("apps:yjs:update")!({ appId, replicaId, ...payload }, () =>
           resolve({ inbox: [...self.member.inbox], relayed: relayed.length }),
         );
       }),

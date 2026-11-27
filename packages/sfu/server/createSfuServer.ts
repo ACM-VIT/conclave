@@ -32,6 +32,7 @@ import {
   healAllRooms,
 } from "./audioConsumerHeal.js";
 import {
+  hasUnconfirmedRoomLeases,
   releaseAllRoomOwnerships,
   renewRoomOwnerships,
 } from "./rooms.js";
@@ -39,6 +40,9 @@ import { shutdownAnalytics } from "./analytics/posthog.js";
 import { createSfuState } from "./state.js";
 import type { SfuState } from "./state.js";
 import { shutdownBrowserBackend } from "./browserServiceClient.js";
+import { retryWhileSqliteLocked } from "./sqliteWriteCheck.js";
+
+const ROOM_LEASE_RECOVERY_INTERVAL_MS = 2_000;
 
 export type SfuServer = {
   app: Express;
@@ -84,6 +88,7 @@ export const createSfuServer = (
 
   let scheduledMeetingTickTimer: NodeJS.Timeout | null = null;
   let roomOwnershipRenewTimer: NodeJS.Timeout | null = null;
+  let roomLeaseRecoveryTimer: NodeJS.Timeout | null = null;
   let audioConsumerHealTimer: NodeJS.Timeout | null = null;
   const workerShutdown = new AbortController();
 
@@ -91,9 +96,9 @@ export const createSfuServer = (
     await state.roomRegistry.start();
     socketAdapterLifecycle = await connectSocketAdapter(io, { config });
     await initMediaSoup(state, config, () => io, workerShutdown.signal);
-    initScheduledWebinars(state);
-    await initScheduledMeetings(state);
-    await initScheduling(state);
+    await retryWhileSqliteLocked(() => initScheduledWebinars(state));
+    await retryWhileSqliteLocked(() => initScheduledMeetings(state));
+    await retryWhileSqliteLocked(() => initScheduling(state));
     startScheduledWebinarTimer(state, () => io, undefined);
     roomOwnershipRenewTimer = setInterval(() => {
       renewRoomOwnerships(state).catch((error) => {
@@ -102,6 +107,23 @@ export const createSfuServer = (
     }, config.roomRegistry.renewIntervalMs);
     if (roomOwnershipRenewTimer.unref) {
       roomOwnershipRenewTimer.unref();
+    }
+    // A room kept open through a registry outage is not registered anywhere,
+    // so claim its lease again promptly instead of on the next renewal.
+    let roomLeaseRecoveryInFlight = false;
+    roomLeaseRecoveryTimer = setInterval(() => {
+      if (roomLeaseRecoveryInFlight || !hasUnconfirmedRoomLeases(state)) return;
+      roomLeaseRecoveryInFlight = true;
+      renewRoomOwnerships(state)
+        .catch((error) => {
+          Logger.error("Failed to recover room ownerships", error);
+        })
+        .finally(() => {
+          roomLeaseRecoveryInFlight = false;
+        });
+    }, ROOM_LEASE_RECOVERY_INTERVAL_MS);
+    if (roomLeaseRecoveryTimer.unref) {
+      roomLeaseRecoveryTimer.unref();
     }
     scheduledMeetingTickTimer = setInterval(() => {
       const changedMeetings = advanceScheduledMeetings(state.scheduledMeetings);
@@ -147,6 +169,10 @@ export const createSfuServer = (
     if (scheduledMeetingTickTimer) {
       clearInterval(scheduledMeetingTickTimer);
       scheduledMeetingTickTimer = null;
+    }
+    if (roomLeaseRecoveryTimer) {
+      clearInterval(roomLeaseRecoveryTimer);
+      roomLeaseRecoveryTimer = null;
     }
     if (roomOwnershipRenewTimer) {
       clearInterval(roomOwnershipRenewTimer);

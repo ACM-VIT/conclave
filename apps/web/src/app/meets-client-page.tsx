@@ -12,6 +12,7 @@ import {
   canonicalizeSfuClientId,
   resolveBrowserSfuClientId,
 } from "@/lib/sfu-client-id";
+import { requestJoinInfo } from "./lib/join-info-request";
 import { readResponseError } from "./lib/utils";
 
 const reactionAssets = [
@@ -23,33 +24,7 @@ const reactionAssets = [
   "yawn.gif",
 ];
 
-const readError = readResponseError;
-
 const defaultClientId = resolveBrowserSfuClientId();
-const JOIN_INFO_REQUEST_TIMEOUT_MS = 15000;
-
-const fetchJoinInfoWithTimeout = async (
-  init: RequestInit,
-): Promise<Response> => {
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(
-    () => controller.abort(),
-    JOIN_INFO_REQUEST_TIMEOUT_MS,
-  );
-  try {
-    return await fetch("/api/sfu/join", {
-      ...init,
-      signal: controller.signal,
-    });
-  } catch (error) {
-    if (controller.signal.aborted) {
-      throw new Error("Join info request timeout");
-    }
-    throw error;
-  } finally {
-    window.clearTimeout(timeoutId);
-  }
-};
 
 type MeetsClientPageProps = {
   initialRoomId?: string;
@@ -98,13 +73,16 @@ export default function MeetsClientPage({
         user?: { id?: string; email?: string | null; name?: string | null };
         isHost?: boolean;
         joinMode?: JoinMode;
+        signal?: AbortSignal;
       }
     ) => {
       const resolvedUser = options?.user ?? defaultUser;
       const isHost = Boolean(options?.isHost);
       const resolvedJoinMode = options?.joinMode ?? joinMode;
-      return guestPass.join(async (guestFields) => {
-        const response = await fetchJoinInfoWithTimeout({
+      return guestPass.join((guestFields) =>
+        requestJoinInfo(
+          "/api/sfu/join",
+          {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -118,26 +96,12 @@ export default function MeetsClientPage({
             allowRoomCreation: forceJoinOnly,
             clientId: resolvedClientId,
             joinMode: resolvedJoinMode,
-            ...guestFields,
-          }),
-        });
-
-        if (!response.ok) {
-          const error = new Error(await readError(response)) as Error & {
-            responseStatus?: number;
-          };
-          error.responseStatus = response.status;
-          throw error;
-        }
-
-        return (await response.json()) as {
-          token: string;
-          sfuUrl: string;
-          iceServers?: RTCIceServer[];
-          guestId?: string;
-          guestGrant?: string;
-        };
-      });
+              ...guestFields,
+            }),
+          },
+          { signal: options?.signal },
+        ),
+      );
     },
     [forceJoinOnly, joinMode, defaultUser, resolvedClientId, guestPass]
   );
@@ -148,7 +112,7 @@ export default function MeetsClientPage({
       headers: { "x-sfu-client": resolvedClientId },
     });
     if (!response.ok) {
-      throw new Error(await readError(response));
+      throw new Error(await readResponseError(response));
     }
     const data = (await response.json()) as { rooms?: unknown };
     return (Array.isArray(data.rooms) ? data.rooms : []) as RoomInfo[];
@@ -166,7 +130,7 @@ export default function MeetsClientPage({
       },
     );
     if (!response.ok) {
-      throw new Error(await readError(response));
+      throw new Error(await readResponseError(response));
     }
 
     const data = (await response.json()) as { room?: unknown };
@@ -187,6 +151,7 @@ export default function MeetsClientPage({
     <div className="w-full h-full min-h-[100dvh] bg-[#0a0a0b] overflow-auto relative">
       <MeetsClient
         initialRoomId={resolvedInitialRoomId}
+        clientId={resolvedClientId}
         enableRoomRouting={usesRoomRouting}
         forceJoinOnly={forceJoinOnly}
         bypassMediaPermissions={bypassMediaPermissions}

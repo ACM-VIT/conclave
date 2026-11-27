@@ -12,6 +12,7 @@ import { SFU_EVENTS } from "@conclave/meeting-core/sfu-events";
 import type { RoomInfo } from "@/lib/sfu-types";
 import { useSession } from "@/lib/auth-client";
 import { readJoinTokenUserKey } from "./lib/join-token-identity";
+import type { JoinInfoAnswer } from "./lib/join-info-request";
 import { shouldRetainMeetingSurface } from "./lib/meeting-surface-policy";
 import {
   AppsProvider,
@@ -89,7 +90,12 @@ import {
   clearStoredVoiceAgentKey,
   storeVoiceAgentKey,
 } from "./lib/voice-agent-key";
-import type { ChatMessage, JoinMode, PrejoinMediaHandoff } from "./lib/types";
+import type {
+  ChatMessage,
+  JoinMode,
+  MeetError,
+  PrejoinMediaHandoff,
+} from "./lib/types";
 import { getTtsMessageText } from "./lib/chat-commands";
 import {
   readStoredMeetViewSettings,
@@ -123,7 +129,11 @@ import {
   sanitizeRoomCode,
 } from "./lib/utils";
 import type { VideoEffectsBridgeState } from "./components/VideoEffectsBridge";
+import { deriveInCallAlerts } from "./lib/in-call-alerts";
+import { NETWORK_BLOCKED_MESSAGE } from "./lib/media-path-recovery";
 import type { SetupNotice } from "./lib/setup-notice";
+import { clearRejoinIntent, readRejoinIntent } from "./lib/rejoin-intent";
+import { canonicalizeSfuClientId, resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
 
 type MeetUser = {
   id?: string;
@@ -153,6 +163,11 @@ const VIDEO_EFFECTS_OFF_STATE: VideoEffectsBridgeState = {
   debugStats: null,
 };
 
+const MEDIA_BLOCKED_ALERT: MeetError = {
+  code: "NETWORK_BLOCKED",
+  message: NETWORK_BLOCKED_MESSAGE,
+  recoverable: true,
+};
 const GUEST_USER_STORAGE_KEY = "conclave:guest-user";
 const DEBUG_VIDEO_EFFECTS_STORAGE_KEY = "conclave:debug-video-effects";
 const VIDEO_EFFECTS_STORAGE_KEY = "conclave:video-effects";
@@ -372,6 +387,7 @@ const normalizeSessionUser = (user: {
 
 export type MeetsClientProps = {
   initialRoomId?: string;
+  clientId?: string;
   enableRoomRouting?: boolean;
   forceJoinOnly?: boolean;
   bypassMediaPermissions?: boolean;
@@ -388,12 +404,9 @@ export type MeetsClientProps = {
       user?: { id?: string; email?: string | null; name?: string | null };
       isHost?: boolean;
       joinMode?: JoinMode;
+      signal?: AbortSignal;
     },
-  ) => Promise<{
-    token: string;
-    sfuUrl: string;
-    iceServers?: RTCIceServer[];
-  }>;
+  ) => Promise<JoinInfoAnswer>;
   joinMode?: JoinMode;
   autoJoinOnMount?: boolean;
   hideJoinUI?: boolean;
@@ -405,6 +418,7 @@ export type MeetsClientProps = {
 
 export default function MeetsClient({
   initialRoomId,
+  clientId,
   enableRoomRouting = false,
   forceJoinOnly = false,
   bypassMediaPermissions = false,
@@ -426,6 +440,17 @@ export default function MeetsClient({
   const [pendingNewMeetingRoomId, setPendingNewMeetingRoomId] =
     useState<string | null>(null);
   const [setupNotice, setSetupNotice] = useState<SetupNotice | null>(null);
+  const [rejoinMedia, setRejoinMedia] = useState(() =>
+    typeof window === "undefined"
+      ? null
+      : readRejoinIntent({
+          roomId: initialRoomId ?? "",
+          clientId: canonicalizeSfuClientId(clientId) ?? resolveBrowserSfuClientId(),
+        }),
+  );
+  useEffect(() => {
+    if (rejoinMedia) clearRejoinIntent();
+  }, [rejoinMedia]);
   const [guestStorageReady, setGuestStorageReady] = useState(false);
   const [appsSocket, setAppsSocket] = useState<Socket | null>(null);
   const [viewSettings, setViewSettings] = useState<MeetViewSettings>(
@@ -619,6 +644,8 @@ export default function MeetsClient({
     adminNotice,
     setAdminNotice,
   } = useMeetState({ initialRoomId });
+  if (rejoinMedia && connectionState === "joined") setRejoinMedia(null);
+  const consumeRejoinMedia = useCallback(() => setRejoinMedia(null), []);
 
   const [serverActiveSpeakerAvailable, setServerActiveSpeakerAvailable] =
     useState(false);
@@ -935,6 +962,7 @@ export default function MeetsClient({
         ),
         isCameraOn: false,
         isMicOn: false,
+        skipMutedMicWarmup: false,
       };
     }
     refs.shouldAutoJoinRef.current = true;
@@ -1456,6 +1484,7 @@ export default function MeetsClient({
         trackIds: liveTrackIds,
         isCameraOn: handoff.isCameraOn && hasLiveVideo,
         isMicOn: handoff.isMicOn && hasLiveAudio,
+        skipMutedMicWarmup: handoff.skipMutedMicWarmup,
       };
       setLocalStream(nextStream);
       setIsCameraOff(!(handoff.isCameraOn && hasLiveVideo));
@@ -2675,6 +2704,10 @@ export default function MeetsClient({
     void joinRoomById(roomToJoinAsIssued);
   }, [joinRoomById, roomToJoinAsIssued]);
   const retryReconnect = socket.retryReconnect;
+  const inCallAlerts = deriveInCallAlerts({
+    meetError,
+    mediaPathHealth: socket.mediaPathHealth,
+  });
   const reconnectRecoveryStatus = socket.reconnectRecoveryStatus;
   const getMeetingConfig = socket.getMeetingConfig;
   const getWebinarConfig = socket.getWebinarConfig;
@@ -3264,9 +3297,23 @@ export default function MeetsClient({
     <div className="flex flex-col h-full w-full bg-[#18181b] text-white">
       <MeetsHeader isJoined={isJoined} />
       <MeetsMainContent
+        mediaBlockedNotice={
+          connectionState === "joined" && inCallAlerts.mediaBlocked ? (
+            <MeetsErrorBanner
+              meetError={MEDIA_BLOCKED_ALERT}
+              onDismiss={() => {}}
+              primaryActionLabel="Try again"
+              onPrimaryAction={() => void retryReconnect()}
+              collapseOnDismiss
+            />
+          ) : null
+        }
         errorNotice={
-          connectionState === "joined" && meetError ? (
-            <MeetsErrorBanner meetError={meetError} onDismiss={() => setMeetError(null)} />
+          connectionState === "joined" && inCallAlerts.error ? (
+            <MeetsErrorBanner
+              meetError={inCallAlerts.error}
+              onDismiss={() => setMeetError(null)}
+            />
           ) : null
         }
         mediaErrorNotice={
@@ -3295,6 +3342,7 @@ export default function MeetsClient({
         isWebinarAttendee={isWebinarAttendee}
         enableRoomRouting={enableRoomRouting}
         forceJoinOnly={forceJoinOnly}
+        clientId={clientId}
         user={currentUser}
         userEmail={userEmail}
         isAdmin={canModerateMeeting}
@@ -3468,6 +3516,8 @@ export default function MeetsClient({
         meetError={meetError}
         mediaError={mediaError}
         setupNotice={setupNotice}
+        prejoinInitialMedia={rejoinMedia}
+        onPrejoinInitialMediaUsed={consumeRejoinMedia}
         onDismissSetupNotice={() => setSetupNotice(null)}
         isPopoutActive={isPopoutActive}
         isPopoutSupported={isPopoutSupported}

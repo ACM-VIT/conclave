@@ -134,6 +134,27 @@ Run shared browser service locally:
 pnpm -C packages/shared-browser run dev
 ```
 
+Before every SFU or shared browser deploy, build and boot both root-context images locally. This is a required pre-deploy step:
+
+```bash
+pnpm check:docker-images
+```
+
+It needs a local Docker daemon.
+
+- It runs `pnpm check:docker-context` first, then builds `packages/sfu/Dockerfile` and `packages/shared-browser/Dockerfile` from the repository root and boots each one.
+- Each container must return a complete 200 response on `/health` over HTTP from inside the container, and the SFU must also import `@conclave/apps-sdk` there, all within one 120 s deadline. Each probe stops itself inside the container before that deadline.
+- The shared browser gets a random `BROWSER_SERVICE_TOKEN`, binds `127.0.0.1`, and gets the session browser image built from `packages/shared-browser/docker` (as `scripts/deploy-browser-service.sh` builds it) as `BROWSER_IMAGE_NAME`.
+- It resolves Docker's effective endpoint the way the CLI does: `DOCKER_HOST` first, otherwise `DOCKER_CONTEXT` or the current context. It refuses that endpoint unless it is a local `unix://` socket.
+- It runs every later Docker call pinned to that endpoint, with every `DOCKER_*` and `BUILDX_*` variable removed except `DOCKER_CONFIG` and `BUILDX_CONFIG`, which only locate configuration (credentials, proxies, buildx state). It builds only with the `default` buildx builder, and refuses unless that is the docker driver on the checked endpoint.
+- It never pushes. It gives each run a random container name and tag. It makes each container with `docker create` and a random owner label chosen before the command runs, then runs it with `docker start`. It removes only the containers that carry those labels, by the ids `docker ps` lists for them, and the tags it created. Each cleanup command has a time limit and each cleanup pass a total budget. If it cannot confirm that something it created is gone after the final pass, it prints what is left and fails. A name conflict therefore never removes another container, and a container created just as the run is interrupted is still removed.
+- Each Docker command runs in its own process group. Ctrl-C or SIGTERM is passed on to that whole group, a build in progress and any plugin it started included, and the group is killed if its command is still running 15 s later. A group is only signalled while its command is running, and a command that exits while something it started holds its output open is settled after 2 s and counted as failed. Stopping the script itself with SIGKILL leaves those Docker commands running, so use Ctrl-C or SIGTERM when cleanup must run. No later step runs, the run's containers and tags are removed within the cleanup budget, and it exits 130 or 143.
+- Supported setups: OrbStack, Docker Desktop and Colima, which run the daemon in a VM and get `/var/run/docker.sock` (the socket inside that VM) mounted into the shared browser container. Also a native Linux engine, rootless included, which gets the resolved socket path mounted. `BROWSER_DOCKER_SOCKET` overrides the mounted path, as with `docker-compose.browser.yml`.
+- Pass `--no-cache` for a cold build.
+- `pnpm check:docker-context` reads Dockerfiles with a deliberately small grammar: plain ASCII, no parser directives, no heredocs, a fixed list of instructions, and COPY words made only of plain path characters. Anything else fails with `unsupported Dockerfile syntax on line N`; extend `scripts/docker-context` or rewrite the Dockerfile. The real build in `pnpm check:docker-images` is the authority on build behaviour.
+
+Do not deploy if it fails.
+
 Deploy SFU pair (Docker Compose):
 
 ```bash

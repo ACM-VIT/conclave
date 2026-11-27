@@ -1,19 +1,29 @@
 "use client";
 
-import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { LogOut, RotateCw } from "lucide-react";
+import { useElementSize } from "../hooks/useElementSize";
+import { useMediaQuery } from "../hooks/useMediaQuery";
+import { useScrollWindow } from "../hooks/useScrollWindow";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
+import { usePublishStagePlacement } from "../hooks/usePublishStagePlacement";
+import { resolveContentStagePlacement } from "../lib/meeting-stage-layout";
 import type { Participant } from "../lib/types";
 import { isSystemUserId } from "../lib/utils";
 import AdminNoticePill from "./AdminNoticePill";
 import LocalVideoTile from "./LocalVideoTile";
+import ParticipantAudio from "./ParticipantAudio";
 import ParticipantVideo from "./ParticipantVideo";
 import {
-  STAGE_RAIL_CLASS,
-  STAGE_RAIL_SHORT_LANDSCAPE_HIDDEN_CLASS,
-  STAGE_RAIL_TILE_CLASS,
-  STAGE_SPLIT_CLASS,
+  stageRailClass,
+  stageRailStyle,
+  stageRailTileClass,
+  stageSplitClass,
 } from "./stage-layout";
+
+const LARGE_VIEWPORT = "(width >= 64rem)";
+const SHORT_LANDSCAPE_VIEWPORT =
+  "(width < 40rem) and (height < 31.25rem) and (orientation: landscape)";
 
 interface MeetingAppLayoutProps {
   children: ReactNode;
@@ -102,10 +112,60 @@ function MeetingAppLayout({
     remoteParticipants,
     activeSpeakerId,
   );
+  const splitRef = useRef<HTMLDivElement>(null);
+  const splitSize = useElementSize(splitRef);
+  const isLargeViewport = useMediaQuery(LARGE_VIEWPORT);
+  const isShortLandscape = useMediaQuery(SHORT_LANDSCAPE_VIEWPORT);
+  const railAllowed = !isShortLandscape && (isLargeViewport || !fullStageBelowLarge);
+  const [railElement, setRailElement] = useState<HTMLDivElement | null>(null);
+  const railWindow = useScrollWindow(
+    railElement,
+    `${splitSize?.width}x${splitSize?.height}:${participantsList.length}`,
+  );
+  const placement = useMemo(
+    () =>
+      resolveContentStagePlacement({
+        size: splitSize,
+        participants: participantsList,
+        railAllowed,
+        railWindow,
+      }),
+    [participantsList, railAllowed, railWindow, splitSize],
+  );
+  const details = useMemo(
+    () => ({
+      focusIds: activeSpeakerId ? [activeSpeakerId] : [],
+      warmIds: [],
+      orderedRemoteIds: participantsList.map((participant) => participant.userId),
+      presentation: { presenterId: null, producerId: null, focus: false },
+    }),
+    [activeSpeakerId, participantsList],
+  );
+  const stage = usePublishStagePlacement(placement, details);
+  const railTileClass = stageRailTileClass(stage);
 
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 p-4">
-      <div className={STAGE_SPLIT_CLASS}>
+      <div className="pointer-events-none h-0 w-0 overflow-hidden" aria-hidden={true}>
+        {remoteParticipants.map((participant) => (
+          <ParticipantAudio
+            key={participant.userId}
+            participant={participant}
+            audioOutputDeviceId={audioOutputDeviceId}
+            onAudioAutoplayBlocked={onAudioAutoplayBlocked}
+            onAudioPlaybackStarted={onAudioPlaybackStarted}
+            audioPlaybackAttemptToken={audioPlaybackAttemptToken}
+          />
+        ))}
+      </div>
+      <div
+        ref={splitRef}
+        className={stageSplitClass(stage)}
+        data-meet-stage-split={stage.split.mode}
+        data-meet-room-tiling-visible-ids={stage.hints.visibleRemoteIds.join(",")}
+        data-meet-room-tiling-primary-ids={stage.hints.primaryIds.join(",")}
+        data-meet-room-tiling-hidden-ids={stage.hints.hiddenIds.join(",")}
+      >
         <div
           className="flex min-h-0 min-w-0 flex-1 flex-col gap-2"
           data-meet-stage-main={stageId}
@@ -160,45 +220,45 @@ function MeetingAppLayout({
             ) : null}
           </div>
         </div>
-        <div
-          className={fullStageBelowLarge ? "hidden lg:contents" : "contents"}
-        >
+        {stage.rail.length > 0 ? (
           <div
-            className={`${STAGE_RAIL_CLASS} ${STAGE_RAIL_SHORT_LANDSCAPE_HIDDEN_CLASS}`}
+            ref={setRailElement}
+            className={stageRailClass(stage)}
+            style={stageRailStyle(stage)}
             data-meet-stage-rail
           >
-            <div className={STAGE_RAIL_TILE_CLASS} data-userid={currentUserId}>
-              <LocalVideoTile
-                stream={localStream}
-                isCameraOff={isCameraOff}
-                isMuted={isMuted}
-                isHandRaised={isHandRaised}
-                isMirrorCamera={isMirrorCamera}
-                displayName={getDisplayName(currentUserId)}
-                userEmail={userEmail}
-                isActiveSpeaker={activeSpeakerId === currentUserId}
-                size="rail"
-              />
-            </div>
-            {participantsList.map((participant) => (
-              <div
-                key={participant.userId}
-                className={STAGE_RAIL_TILE_CLASS}
-                data-userid={participant.userId}
-              >
-                <ParticipantVideo
-                  participant={participant}
-                  displayName={getDisplayName(participant.userId)}
-                  isActiveSpeaker={activeSpeakerId === participant.userId}
-                  audioOutputDeviceId={audioOutputDeviceId}
-                  onAudioAutoplayBlocked={onAudioAutoplayBlocked}
-                  onAudioPlaybackStarted={onAudioPlaybackStarted}
-                  audioPlaybackAttemptToken={audioPlaybackAttemptToken}
-                />
-              </div>
-            ))}
+            {stage.rail.map((tile) =>
+              tile.kind === "local" ? (
+                <div key="local" className={railTileClass} data-userid={currentUserId}>
+                  <LocalVideoTile
+                    stream={localStream}
+                    isCameraOff={isCameraOff}
+                    isMuted={isMuted}
+                    isHandRaised={isHandRaised}
+                    isMirrorCamera={isMirrorCamera}
+                    displayName={getDisplayName(currentUserId)}
+                    userEmail={userEmail}
+                    isActiveSpeaker={activeSpeakerId === currentUserId}
+                  />
+                </div>
+              ) : (
+                <div
+                  key={tile.participant.userId}
+                  className={railTileClass}
+                  data-userid={tile.participant.userId}
+                >
+                  <ParticipantVideo
+                    participant={tile.participant}
+                    displayName={getDisplayName(tile.participant.userId)}
+                    isActiveSpeaker={activeSpeakerId === tile.participant.userId}
+                    audioOutputDeviceId={audioOutputDeviceId}
+                    disableAudio
+                  />
+                </div>
+              ),
+            )}
           </div>
-        </div>
+        ) : null}
       </div>
     </div>
   );

@@ -113,7 +113,7 @@ export const registerAuthorityHandlers = (context: ConnectionContext): void => {
   const authority = () =>
     context.currentRoom ? getRoomAuthority(state, context.currentRoom) : null;
 
-  socket.on(AUTHORITY_EVENTS.capabilities, (data: unknown, callback: unknown) => {
+  socket.on(AUTHORITY_EVENTS.capabilities, (data: unknown, callback?: (response: unknown) => void) => {
     if (!takeToken(socket, "apps:authority:capabilities", RATE_LIMITS.appsAuthorityControl)) {
       respond(callback, fail("rate-limited"));
       return;
@@ -127,7 +127,7 @@ export const registerAuthorityHandlers = (context: ConnectionContext): void => {
     respond(callback, room ? room.capabilities(context, request) : fail("not-in-room"));
   });
 
-  socket.on(AUTHORITY_EVENTS.subscribe, (data: unknown, callback: unknown) => {
+  socket.on(AUTHORITY_EVENTS.subscribe, (data: unknown, callback?: (response: unknown) => void) => {
     if (!takeToken(socket, "apps:authority:subscribe", RATE_LIMITS.appsAuthorityControl)) {
       respond(callback, fail("rate-limited"));
       return;
@@ -147,7 +147,7 @@ export const registerAuthorityHandlers = (context: ConnectionContext): void => {
     peekRoomAuthority(context.currentRoom)?.unsubscribe(context, subscription);
   });
 
-  socket.on(AUTHORITY_EVENTS.act, (data: unknown, callback: unknown) => {
+  socket.on(AUTHORITY_EVENTS.act, (data: unknown, callback?: (response: unknown) => void) => {
     if (!takeToken(socket, "apps:authority:act", RATE_LIMITS.appsAuthorityAct)) {
       respond(callback, fail("rate-limited"));
       return;
@@ -161,7 +161,7 @@ export const registerAuthorityHandlers = (context: ConnectionContext): void => {
     respond(callback, room ? room.act(context, request) : fail("not-in-room"));
   });
 
-  socket.on(AUTHORITY_EVENTS.query, (data: unknown, callback: unknown) => {
+  socket.on(AUTHORITY_EVENTS.query, (data: unknown, callback?: (response: unknown) => void) => {
     if (!takeToken(socket, "apps:authority:query", RATE_LIMITS.appsAuthorityQuery)) {
       respond(callback, fail("rate-limited"));
       return;

@@ -409,8 +409,12 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         return;
       }
       if (result.unchanged) return;
+      const published = { appId, update } satisfies AppsUpdateData;
+      if (appId === "wheel" && context.currentRoom === room && activeDocument(room, appId) === document) {
+        socket.emit("apps:yjs:update", published);
+      }
       if (update.length <= APP_DOCUMENT_UPDATE_MAX_BYTES) {
-        socket.to(channelId).emit("apps:yjs:update", { appId, update } satisfies AppsUpdateData);
+        socket.to(channelId).emit("apps:yjs:update", published);
         return;
       }
       const { activeAppId, locked } = room.appsState;
@@ -420,7 +424,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
           receiver.socket.emit("apps:state", { activeAppId: null, locked, roomId: room.id } satisfies AppsState);
           receiver.socket.emit("apps:state", { activeAppId, locked, roomId: room.id } satisfies AppsState);
         } else {
-          receiver.socket.emit("apps:yjs:update", { appId, update } satisfies AppsUpdateData);
+          receiver.socket.emit("apps:yjs:update", published);
         }
       }
     });
@@ -524,7 +528,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     await commit(room, appId, replicaId, joinParts(change.parts), true);
   };
 
-  socket.on("apps:yjs:update", (data: AppsUpdateData, ack?: unknown) => {
+  socket.on("apps:yjs:update", (data: AppsUpdateData, ack?: () => void) => {
     const settle = () => respond(ack, undefined);
     void receiveUpdate(data).then(settle, settle);
   });

@@ -6,10 +6,10 @@ import { inAppRoom } from "./fixtures/app-room.js";
 const MAX_DOC_BYTES = 1024 * 1024;
 
 const pools: AppDocumentPool[] = [];
-const joinBoardApp = async (id: string) => {
+const joinApp = async (id: string, appId = "board") => {
   const pool = createAppDocumentPool({ workers: 1, deadlineMs: 20_000, maxDocumentBytes: MAX_DOC_BYTES });
   pools.push(pool);
-  const room = inAppRoom(pool, id);
+  const room = inAppRoom(pool, id, { appId });
   await room.open();
   return room;
 };
@@ -49,7 +49,7 @@ const everyOtherClock = (from: number, to: number) => {
 
 describe("app document size", () => {
   it("stops growing a document at the size a sync can still deliver", async () => {
-    const room = await joinBoardApp("inserts");
+    const room = await joinApp("inserts");
 
     const attacker = new Y.Doc();
     const text = attacker.getText("t");
@@ -82,7 +82,7 @@ describe("app document size with deletions", () => {
   });
 
   it("refuses deletions whose item splits would push the document past the limit", async () => {
-    const room = await joinBoardApp("deletions");
+    const room = await joinApp("deletions");
     const joined = async () => {
       const { doc, encodedBytes } = await room.joinDocument();
       return { doc, length: doc.getText("t").length, encodedBytes };
@@ -112,4 +112,24 @@ describe("app document size with deletions", () => {
     expect(afterRefusal.encodedBytes).toBe(MAX_DOC_BYTES);
     expect(room.relayed).toHaveLength(3);
   }, 30_000);
+});
+
+it.each(["wheel", "board"])("echoes accepted updates to the writer only for the wheel (%s)", async (appId) => {
+  const room = await joinApp(`receipt-${appId}`, appId);
+  const writer = new Y.Doc();
+  const entry = { id: "ada", label: "Ada" };
+  writer.getArray("wheel.entries").push([entry]);
+  const update = Y.encodeStateAsUpdate(writer);
+  const echoes = () => room.inbox.filter(({ event }) => event === "apps:yjs:update");
+
+  await room.acknowledged({ update });
+  expect((await room.joinDocument()).doc.getArray("wheel.entries").toArray()).toEqual([entry]);
+  expect(room.relayed).toEqual([update]);
+  expect(echoes()).toEqual(appId === "wheel" ? [{ event: "apps:yjs:update", payload: { appId, update } }] : []);
+
+  await room.acknowledged({ update });
+  await room.acknowledged({ update: Uint8Array.of(255) });
+  await room.acknowledged({ update: new Uint8Array(MAX_DOC_BYTES) });
+  expect(room.relayed).toEqual([update]);
+  expect(echoes()).toHaveLength(appId === "wheel" ? 1 : 0);
 });

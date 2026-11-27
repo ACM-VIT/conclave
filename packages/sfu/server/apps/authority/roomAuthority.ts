@@ -28,10 +28,14 @@ import {
   type Subject,
 } from "@conclave/apps-sdk/authority/server";
 import type { Client } from "../../../config/classes/Client.js";
-import type { Room } from "../../../config/classes/Room.js";
+import type {
+  GuestIdentityMerge,
+  Room,
+  StagedGuestMerge,
+} from "../../../config/classes/Room.js";
 import type { ConnectionContext } from "../../socket/context.js";
 import type { IdentityAdapter } from "./identity.js";
-import { AuthorityInstance, type Actor } from "./instance.js";
+import { AuthorityInstance, type Actor, type StagedMerge } from "./instance.js";
 import type { AuthorityLimits } from "./limits.js";
 import {
   ARRAY_BYTES,
@@ -264,6 +268,7 @@ export class RoomAuthority {
   private wakeTimer: NodeJS.Timeout | null = null;
   private lagTimer: NodeJS.Timeout | null = null;
   private pruneTimer: NodeJS.Timeout | null = null;
+  private receiptSweepTimer: NodeJS.Timeout | null = null;
   /** Apps a viewer has left since their unheld views were last forgotten. */
   private readonly left = new Set<AuthorityInstance>();
   /** Apps whose viewers are due a word on what they may now do. */
@@ -391,10 +396,15 @@ export class RoomAuthority {
       this.now(),
     );
     this.afterWrite(instance);
-    if (!result.ok) return result;
-    if (actor.verified && context.currentClient) {
+    this.armReceiptSweep();
+    if (
+      actor.verified &&
+      context.currentClient &&
+      (result.ok || instance.keepsAnswer(actor, request.operation))
+    ) {
       this.options.identity.hold(this.room, context.currentClient);
     }
+    if (!result.ok) return result;
     return { ...result, revision: this.answerRevision(subscription) };
   }
 
@@ -470,21 +480,39 @@ export class RoomAuthority {
    * subscription is checked against the room as it is now. A missed call
    * only delays this: nothing is ever sent without the same check.
    */
-  guestIdentityMerged(from: string, into: string): void {
-    if (this.closed) return;
-    const merge = {
-      from: this.options.identity.guestSubject(from),
-      into: this.options.identity.guestSubject(into),
-    };
-    const now = this.now();
-    for (const instance of this.instances.values()) {
-      if (instance.mergeSubjects(merge, now)) this.afterWrite(instance);
-    }
+  membershipChanged(): void {
     this.scheduleSweep();
   }
 
-  membershipChanged(): void {
-    this.scheduleSweep();
+  stageGuestMerges(merges: readonly GuestIdentityMerge[]): StagedGuestMerge | null {
+    if (this.closed) return null;
+    const policy = this.options.policy();
+    this.syncPolicy(policy);
+    const subjects = merges.map(({ from, into }) => ({
+      from: this.options.identity.guestSubject(from),
+      into: this.options.identity.guestSubject(into),
+    }));
+    const now = this.now();
+    const staged: Array<[AuthorityInstance, StagedMerge]> = [];
+    for (const instance of this.instances.values()) {
+      const merge = instance.stageMerge(subjects, now);
+      if (!merge) return null;
+      staged.push([instance, merge]);
+    }
+    return {
+      commit: () => {
+        if (
+          this.closed ||
+          !samePolicy(policy, this.options.policy()) ||
+          !staged.every(([, merge]) => merge.fresh())
+        ) return false;
+        for (const [instance, merge] of staged) {
+          if (merge.commit()) this.afterWrite(instance);
+        }
+        this.scheduleSweep();
+        return true;
+      },
+    };
   }
 
   /** The room's mode or a flag changed. */
@@ -516,11 +544,12 @@ export class RoomAuthority {
       this.wakeTimer,
       this.lagTimer,
       this.pruneTimer,
+      this.receiptSweepTimer,
     ]) {
       if (timer) clearTimeout(timer);
     }
     this.flushTimer = this.sweepTimer = this.wakeTimer = this.lagTimer = null;
-    this.pruneTimer = null;
+    this.pruneTimer = this.receiptSweepTimer = null;
     this.left.clear();
     for (const timer of this.stalled) clearTimeout(timer);
     this.stalled.clear();
@@ -543,6 +572,24 @@ export class RoomAuthority {
       held.subjects += subjects;
     }
     return held;
+  }
+
+  get receiptsHeld(): number {
+    let held = 0;
+    for (const instance of this.instances.values()) held += instance.receiptCount;
+    return held;
+  }
+
+  private armReceiptSweep(): void {
+    if (this.receiptSweepTimer || this.closed) return;
+    this.receiptSweepTimer = setTimeout(() => {
+      this.receiptSweepTimer = null;
+      const now = this.now();
+      let held = false;
+      for (const instance of this.instances.values()) held = instance.sweepReceipts(now) || held;
+      if (held) this.armReceiptSweep();
+    }, this.limits.operationMaxAgeMs);
+    this.receiptSweepTimer.unref?.();
   }
 
   /** Flushes pending view changes now. For tests and orderly shutdown. */
@@ -647,8 +694,7 @@ export class RoomAuthority {
    * view, such as one that only decides who may take part, sends no rows:
    * in a room of 5,000 it is 5,000 small frames and not 5,000 whole views.
    */
-  private syncPolicy(): void {
-    const policy = this.options.policy();
+  private syncPolicy(policy = this.options.policy()): void {
     for (const instance of this.instances.values()) {
       if (samePolicy(instance.policy, policy)) continue;
       instance.setPolicy(policy);
@@ -937,6 +983,7 @@ export class RoomAuthority {
     if (!this.hasRoom(subscription)) return;
 
     const { rows, version } = subscription.instance.snapshot(subscription.actor);
+    if (subscription.instance.hasPendingChanges) this.scheduleFlush(false);
     subscription.viewVersion = version;
     // A whole view as committed now holds none of the rows clears took.
     subscription.owed = subscription.instance.owedEnd(subscription.actor);

@@ -3,10 +3,12 @@
 import { useRef } from "react";
 import type { Socket } from "socket.io-client";
 import type { Device } from "mediasoup-client";
+import type { ReconnectRequest } from "../lib/reconnect-request-policy";
 import type {
   AudioAnalyserEntry,
   Consumer,
   JoinMode,
+  PrejoinMediaHandoff,
   Producer,
   ProducerInfo,
   ProducerMapEntry,
@@ -122,9 +124,9 @@ export function useMeetRefs() {
   const handleRedirectRef = useRef<(roomId: string) => Promise<void>>(
     async () => {}
   );
-  const handleReconnectRef = useRef<() => void | Promise<void>>(
-    async () => {},
-  );
+  const handleReconnectRef = useRef<
+    (options?: ReconnectRequest) => void | Promise<void>
+  >(async () => {});
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioAnalyserMapRef = useRef<Map<string, AudioAnalyserEntry>>(
     new Map()
@@ -143,22 +145,19 @@ export function useMeetRefs() {
   });
   const isChatOpenRef = useRef(false);
   const localStreamRef = useRef<MediaStream | null>(null);
-  const prejoinMediaIntentRef = useRef<{
-    streamId: string | null;
-    trackIds: Set<string>;
-    isCameraOn: boolean;
-    isMicOn: boolean;
-  } | null>(null);
+  const prejoinMediaIntentRef = useRef<
+    | ({
+        streamId: string | null;
+        trackIds: Set<string>;
+      } & Pick<PrejoinMediaHandoff, "isCameraOn" | "isMicOn" | "skipMutedMicWarmup">)
+    | null
+  >(null);
   const processedVideoTrackRef = useRef<MediaStreamTrack | null>(null);
   const sessionIdRef = useRef<string>(getOrCreateSessionId());
   const isHandRaisedRef = useRef(false);
   const producerTransportDisconnectTimeoutRef = useRef<number | null>(null);
   const consumerTransportDisconnectTimeoutRef = useRef<number | null>(null);
   const pendingProducerRetryTimeoutRef = useRef<number | null>(null);
-  const iceRestartInFlightRef = useRef({
-    producer: false,
-    consumer: false,
-  });
   const producerSyncIntervalRef = useRef<number | null>(null);
 
   return {
@@ -207,7 +206,6 @@ export function useMeetRefs() {
     producerTransportDisconnectTimeoutRef,
     consumerTransportDisconnectTimeoutRef,
     pendingProducerRetryTimeoutRef,
-    iceRestartInFlightRef,
     producerSyncIntervalRef,
   };
 }

@@ -25,6 +25,7 @@ import {
   admitWaitingGuest,
   allowUserKeys,
   blockUserKey,
+  emitPendingUsersSnapshot,
   rejectWaitingGuest,
   kickClient,
   rejectAllPendingUsers,
@@ -335,27 +336,14 @@ export const createSfuApp = ({
 
   const forceCloseRoomWithSockets = (
     io: SocketIOServer,
-    roomChannelId: string,
+    room: Room,
     pendingSockets: Array<{ disconnect: (close?: boolean) => void }> = [],
   ): boolean => {
-    io.in(roomChannelId).disconnectSockets(true);
+    io.in(room.channelId).disconnectSockets(true);
     for (const pendingSocket of pendingSockets) {
       pendingSocket.disconnect(true);
     }
-    return forceCloseRoom(state, roomChannelId);
-  };
-
-  const emitPendingUsersSnapshot = (
-    io: SocketIOServer,
-    room: Room,
-  ): void => {
-    io.to(room.channelId).emit("pendingUsersSnapshot", {
-      users: room.waitingGuests().map((pending) => ({
-        userId: pending.userKey,
-        displayName: pending.displayName || pending.userKey,
-      })),
-      roomId: room.id,
-    });
+    return forceCloseRoom(state, room);
   };
 
   const handleUserMediaControl = (
@@ -510,6 +498,8 @@ export const createSfuApp = ({
 
     const healthData = {
       status: isHealthy ? "healthy" : "unhealthy",
+      instanceId: config.instanceId,
+      deployId: config.deployId,
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
       port: config.port,
@@ -943,9 +933,12 @@ export const createSfuApp = ({
 
     try {
       // Draining instances keep routing established owners/placements but must
-      // not become the first assignment for a new room.
+      // not become the first assignment for a new room. The deploy canary asks
+      // with allowDraining: it calls a fresh build that stays out of rotation
+      // until that call passes.
       const existing = await state.roomRegistry.getAssignment(channelId);
-      if (state.isDraining && !existing) {
+      const allowDraining = readBoolean(requestBody(req), "allowDraining") === true;
+      if (state.isDraining && !existing && !allowDraining) {
         res.status(409).json({
           error: "Meeting server is draining",
           draining: true,
@@ -1325,7 +1318,7 @@ export const createSfuApp = ({
     }
     const { allowed, refused, admitted } = outcome;
 
-    emitPendingUsersSnapshot(io, lookup.room);
+    emitPendingUsersSnapshot(lookup.room);
 
     res.status(allowed.length === 0 ? 409 : 200).json({
       ...(allowed.length === 0
@@ -1424,7 +1417,7 @@ export const createSfuApp = ({
       }
     }
 
-    emitPendingUsersSnapshot(io, lookup.room);
+    emitPendingUsersSnapshot(lookup.room);
 
     res.json({
       success: true,
@@ -1629,7 +1622,7 @@ export const createSfuApp = ({
       return;
     }
 
-    emitPendingUsersSnapshot(io, lookup.room);
+    emitPendingUsersSnapshot(lookup.room);
     res.json({ success: true, roomId: lookup.room.id, userKey });
   });
 
@@ -1659,7 +1652,7 @@ export const createSfuApp = ({
       return;
     }
 
-    emitPendingUsersSnapshot(io, lookup.room);
+    emitPendingUsersSnapshot(lookup.room);
     res.json({ success: true, roomId: lookup.room.id, userKey });
   });
 
@@ -1683,7 +1676,7 @@ export const createSfuApp = ({
       res.status(409).json(decisionRecordFull("admit"));
       return;
     }
-    emitPendingUsersSnapshot(io, lookup.room);
+    emitPendingUsersSnapshot(lookup.room);
 
     res.json({
       success: true,
@@ -1708,7 +1701,7 @@ export const createSfuApp = ({
     }
 
     const rejected = rejectAllPendingUsers(lookup.room);
-    emitPendingUsersSnapshot(io, lookup.room);
+    emitPendingUsersSnapshot(lookup.room);
 
     res.json({
       success: true,
@@ -1808,7 +1801,7 @@ export const createSfuApp = ({
     const closeNow = () => {
       // A delayed close must not hit a newer room reopened on this channel.
       if (!isCurrentRoom(state, room)) return;
-      forceCloseRoomWithSockets(io, roomChannelId, pendingSockets);
+      forceCloseRoomWithSockets(io, room, pendingSockets);
     };
 
     if (delayMs > 0) {
