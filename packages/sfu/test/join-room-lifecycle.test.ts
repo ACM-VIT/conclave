@@ -735,6 +735,27 @@ describe("a webinar link code saved across the store read", () => {
     expect(state.webinarConfigs.get(room.channelId)).toMatchObject({ enabled: false, linkSlug: null });
   });
 
+  it("changes neither room when the host switched rooms on the same socket during the read", async () => {
+    const state = makeState();
+    const { room, host, update } = await hostedRoom(state);
+    const next = openRoom(state, "next");
+    const reads = holdStoreReads(state, (read) => read === 1);
+    const ack = vi.fn();
+    const saving = update({ enabled: true, linkSlug: "launch-day" }, ack);
+    await reads.reached();
+    const switched = vi.fn();
+    await host.peer.handlers.get("joinRoom")!(...[{ roomId: next.id, sessionId: "h" }, switched] as never[]);
+    expect(switched).toHaveBeenCalledWith(expect.objectContaining({ roomId: next.id, status: "joined" }));
+    expect(host.context.currentRoom).toBe(next);
+    reads.release();
+    await saving;
+
+    expect(ack).toHaveBeenCalledWith({ error: "Not in a room" });
+    expect(state.webinarLinks.has("launch-day")).toBe(false);
+    expect(state.webinarConfigs.get(next.channelId)).toMatchObject({ enabled: false, linkSlug: null });
+    expect(state.webinarConfigs.get(room.channelId)?.enabled ?? false).toBe(false);
+  });
+
   it("still saves the code when the room and the host are unchanged after the read", async () => {
     const state = makeState();
     const { room, update } = await hostedRoom(state);

@@ -57,7 +57,7 @@ const adminRoomOf = (
 
 const ensureAdminRoom = (
   context: ConnectionContext,
-): { roomId: string } | { error: string } => {
+): { room: Room } | { error: string } => {
   const seat = adminRoomOf(context);
   if ("error" in seat) return seat;
 
@@ -65,7 +65,16 @@ const ensureAdminRoom = (
     return { error: "Too many admin requests; please retry shortly" };
   }
 
-  return { roomId: seat.room.id };
+  return seat;
+};
+
+const stillAdminOf = (
+  context: ConnectionContext,
+  room: Room,
+): { room: Room } | { error: string } => {
+  const seat = adminRoomOf(context);
+  if ("error" in seat) return seat;
+  return seat.room === room ? seat : { error: "Not in a room" };
 };
 
 export const registerWebinarHandlers = (context: ConnectionContext): void => {
@@ -129,7 +138,7 @@ export const registerWebinarHandlers = (context: ConnectionContext): void => {
         const reservedBy = requestedLinkSlug
           ? await state.controlPlane.read(webinarBySlug(requestedLinkSlug))
           : null;
-        const seat = adminRoomOf(context);
+        const seat = stillAdminOf(context, guard.room);
         if ("error" in seat) {
           respond(callback, seat);
           return;
