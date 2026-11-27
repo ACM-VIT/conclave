@@ -247,8 +247,9 @@ describe.each(crashModes)("an SFU on a %s store killed between a calendar change
   const kill = async (sfu: CaseSfu, gate: GateKind, inFlight: Promise<unknown>) => {
     expect(gates.drop(gate)).toBe(1);
     running.splice(running.indexOf(sfu), 1);
+    const settled = inFlight.catch(() => undefined);
     await sfu.stop();
-    await inFlight.catch(() => undefined);
+    await settled;
   };
 
   const until = async (condition: () => boolean, label: string) => {
