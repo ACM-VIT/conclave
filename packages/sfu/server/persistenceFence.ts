@@ -1,21 +1,9 @@
 import { z } from "zod";
-import type { ScheduledMeetingPersistence } from "./scheduledMeetings.js";
-import type { ScheduledWebinarPersistence } from "./scheduledWebinars.js";
-import type { SchedulingPersistence } from "./scheduling.js";
+import type { ControlPlaneStore } from "./controlPlane/store.js";
 
-// A write fence for backups, as a gate in front of every persistence call
-// (scheduled meetings, scheduling, webinars, booking locks, reminder claims).
-// While it is open, calls start the moment they are made and run side by
-// side, each store keeping its own order, so a slow Redis never holds up a
-// SQLite save. A backup's hold closes it: later calls queue in the order they
-// were made, and the hold answers once every call already under way has
-// finished, so the backup copies SQLite and Redis at one point in time. The
-// release starts the queued calls in that order. Each caller gets its own
-// call's result or error. Live media does not wait on this gate.
-// A hold belongs to the owner token that took it. Only that token renews or
-// releases it, it lifts itself at its deadline if the backup never comes
-// back, and no renewal keeps it past MAX_PERSISTENCE_FENCE_MS from when it
-// was taken, so writers never wait longer than that.
+// A backup hold drains active transactions and queues later commits. Reads
+// never wait on the fence. Only the holder can renew or release its lease,
+// and the hard deadline keeps a lost backup from blocking writes indefinitely.
 
 export const MAX_PERSISTENCE_FENCE_MS = 30_000;
 
@@ -108,113 +96,12 @@ export const createPersistenceFence = (): PersistenceFence => {
   };
 };
 
-const atCall = <A extends unknown[]>(args: A): A => structuredClone(args);
-
-export const fenceScheduledMeetingPersistence = (
-  persistence: ScheduledMeetingPersistence,
+export const fenceControlPlane = (
+  store: ControlPlaneStore,
   fence: PersistenceFence,
-): ScheduledMeetingPersistence => {
-  // Each write's promise is that write's own: Redis resolves it once the
-  // write landed, so the caller gets its result or error, never another's.
-  return {
-    save: (...args) => {
-      const [snapshot] = atCall(args);
-      return fence.run(() => persistence.save(snapshot));
-    },
-    saveChanged:
-      persistence.saveChanged &&
-      ((...args) => {
-        const [meetings] = atCall(args);
-        return fence.run(() => persistence.saveChanged!(meetings));
-      }),
-    deleteIds:
-      persistence.deleteIds &&
-      ((...args) => {
-        const [ids] = atCall(args);
-        return fence.run(() => persistence.deleteIds!(ids));
-      }),
-    reserveBookingSlot:
-      persistence.reserveBookingSlot &&
-      ((...args) => {
-        const [reservation] = atCall(args);
-        return fence.run(() => persistence.reserveBookingSlot!(reservation));
-      }),
-    // A claim reads what the meeting writes made before it left, so it waits
-    // for them to land, failed or not.
-    claimEmailReminder:
-      persistence.claimEmailReminder &&
-      ((...args) => {
-        const [claim] = atCall(args);
-        return fence.run(async () => {
-          if (persistence.flush) await persistence.flush().catch(() => undefined);
-          return persistence.claimEmailReminder!(claim);
-        });
-      }),
-    // A load can write too: Redis migrates the fallback's meetings into itself.
-    load: () => fence.run(() => persistence.load()),
-    loadOne: persistence.loadOne && ((id) => fence.run(() => persistence.loadOne!(id))),
-    setInviteeReadmission:
-      persistence.setInviteeReadmission &&
-      ((...args) => fence.run(() => persistence.setInviteeReadmission!(...args))),
-    endRemovals:
-      persistence.endRemovals &&
-      ((...args) => fence.run(() => persistence.endRemovals!(...args))),
-    fenceMeeting:
-      persistence.fenceMeeting &&
-      ((...args) => fence.run(() => persistence.fenceMeeting!(...args))),
-    flush: persistence.flush && (() => fence.run(() => persistence.flush!())),
-    close:
-      persistence.close &&
-      (() => {
-        fence.open();
-        return fence.run(() => persistence.close!());
-      }),
-  };
-};
-
-export const fenceSchedulingPersistence = (
-  persistence: SchedulingPersistence,
-  fence: PersistenceFence,
-): SchedulingPersistence => ({
-  save: (...args) => {
-    const [snapshot] = atCall(args);
-    return fence.run(() => persistence.save(snapshot));
-  },
-  load: () => fence.run(() => persistence.load()),
-  flush: persistence.flush && (() => fence.run(() => persistence.flush!())),
-  close:
-    persistence.close &&
-    (() => {
-      fence.open();
-      return fence.run(() => persistence.close!());
-    }),
-});
-
-export const fenceScheduledWebinarPersistence = (
-  persistence: ScheduledWebinarPersistence,
-  fence: PersistenceFence,
-): ScheduledWebinarPersistence => ({
-  save: (...args) => {
-    const [snapshot] = atCall(args);
-    return fence.run(() => persistence.save(snapshot));
-  },
-  saveChanged:
-    persistence.saveChanged &&
-    ((...args) => {
-      const [webinars] = atCall(args);
-      return fence.run(() => persistence.saveChanged!(webinars));
-    }),
-  deleteIds:
-    persistence.deleteIds &&
-    ((...args) => {
-      const [ids] = atCall(args);
-      return fence.run(() => persistence.deleteIds!(ids));
-    }),
-  load: () => persistence.load(),
-  close:
-    persistence.close &&
-    (() => {
-      fence.open();
-      return fence.run(() => persistence.close!());
-    }),
+): ControlPlaneStore => ({
+  mode: store.mode,
+  read: (query) => store.read(query),
+  commit: (command) => fence.run(() => store.commit(command)),
+  close: () => store.close(),
 });

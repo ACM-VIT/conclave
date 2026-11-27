@@ -61,9 +61,22 @@ export const canMigrateClientNamespace = (
     LEGACY_CONCLAVE_CLIENT_IDS.has(source.toLowerCase());
 };
 
+export const servedClientId = (storedUnder: string): string => {
+  const deployment = resolveDefaultClientId();
+  return canMigrateClientNamespace(storedUnder, deployment) ? deployment : storedUnder;
+};
+
+export const clientsServedAs = (clientId: string): string[] => {
+  const served = canonicalizeClientId(clientId);
+  return clientIdCandidates(served).filter((candidate) => servedClientId(candidate) === served);
+};
+
 export const clientNamespaceIncludes = (
   viewClientId: string,
   storedClientId: string,
 ): boolean =>
   storedClientId === viewClientId ||
   canMigrateClientNamespace(storedClientId, viewClientId);
+
+export const clientNamespacesIn = (viewClientId: string): string[] =>
+  clientIdCandidates(viewClientId).filter((stored) => clientNamespaceIncludes(viewClientId, stored));

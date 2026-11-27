@@ -1,929 +1,247 @@
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { createConnection, createServer } from "node:net";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createClient } from "redis";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  advanceScheduledMeetings,
-  endScheduledMeetingRemovals,
-  createScheduledMeeting,
-  fenceScheduledMeeting,
-  createScheduledMeetingPersistence,
-  createScheduledMeetingStore,
-  isScheduledMeetingInvitee,
-  loadPersistedMeetings,
-  persistInviteeReadmission,
-  persistScheduledMeetingChanges,
-  refreshScheduledMeeting,
-  setScheduledInviteeReadmission,
-  type ScheduledMeetingPersistence,
-} from "../server/scheduledMeetings.js";
-import { markRoomEnded } from "../server/rooms.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { bookingInvites, roomBooking, updateRoomInvitation } from "../server/controlPlane/inviteeCommands.js";
+import { createMeeting, deleteMeeting, meetingByRoomCode, updateMeeting } from "../server/controlPlane/meetingCommands.js";
+import { openControlPlane, resolveControlPlaneConfig } from "../server/controlPlane/open.js";
+import { openSqliteDatabase } from "../server/controlPlane/backends/sqlite.js";
+import type { ControlPlaneStore } from "../server/controlPlane/store.js";
+import { readRoomBooking } from "../server/rooms.js";
 import { createSfuState } from "../server/state.js";
+import { legacyMeeting } from "./support/oldSfu.js";
+import { hasRedis, startRedis, type RedisServer } from "./support/redisServer.js";
 
-type Sfu = {
-  persistence: ScheduledMeetingPersistence;
-  meetings: ReturnType<typeof createScheduledMeetingStore>;
-};
-const dirs: string[] = [];
-const running: Sfu[] = [];
-afterEach(async () => {
-  for (const sfu of running.splice(0)) await sfu.persistence.close?.();
-  vi.unstubAllEnvs();
-  vi.useRealTimers();
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-const tempDir = () => {
-  const dir = mkdtempSync(join(tmpdir(), "meetings-"));
-  dirs.push(dir);
-  return dir;
-};
+const ROOM = "abc-mnop-xyz";
+const HOST = "host@example.test";
+const INVITEE = "invitee@example.test";
+const CLIENT = "conclave";
+let dir: string;
+let redis: RedisServer | null = null;
+const stores: ControlPlaneStore[] = [];
 
-// The Redis store is tried against a real server, where one is installed.
-const redisServerPath = (() => {
-  try {
-    return execFileSync("which", ["redis-server"], { encoding: "utf8" }).trim();
-  } catch {
-    return "";
-  }
-})();
-let redis: { process: ChildProcess; port: number; dir: string } | null = null;
-const freePort = () =>
-  new Promise<number>((resolve) => {
-    const probe = createServer();
-    probe.listen(0, "127.0.0.1", () => {
-      const { port } = probe.address() as { port: number };
-      probe.close(() => resolve(port));
-    });
-  });
-const accepts = (port: number) =>
-  new Promise<boolean>((resolve) => {
-    const socket = createConnection({ port, host: "127.0.0.1" });
-    socket.once("connect", () => {
-      socket.destroy();
-      resolve(true);
-    });
-    socket.once("error", () => resolve(false));
-  });
 beforeAll(async () => {
-  if (!redisServerPath) return;
-  const port = await freePort();
-  const dir = mkdtempSync(join(tmpdir(), "meetings-redis-"));
-  const server = spawn(
-    redisServerPath,
-    ["--port", String(port), "--bind", "127.0.0.1", "--save", "", "--appendonly", "no", "--dir", dir],
-    { stdio: "ignore" },
-  );
-  redis = { process: server, port, dir };
-  await vi.waitFor(async () => expect(await accepts(port)).toBe(true), {
-    timeout: 20_000,
-    interval: 50,
-  });
-}, 30_000);
-afterAll(() => {
-  redis?.process.kill();
-  if (redis) rmSync(redis.dir, { recursive: true, force: true });
+  if (hasRedis) redis = await startRedis(6920);
 });
 
-type StoreKind = "sqlite" | "json" | "redis";
-let keyPrefix = 0;
-// Where the SFUs of one test keep their meetings. Over Redis each SFU has a
-// local copy of its own as well, as SFUs on different hosts do.
-const useStore = (kind: StoreKind, dir = tempDir()) => {
-  vi.stubEnv("SCHEDULED_MEETINGS_PERSISTENCE", kind);
-  vi.stubEnv("SCHEDULED_MEETINGS_SQLITE_PATH", join(dir, "conclave.sqlite"));
-  vi.stubEnv("SCHEDULED_MEETINGS_PATH", join(dir, "scheduled-meetings.json"));
-  vi.stubEnv("REDIS_URL", "");
-  vi.stubEnv("SFU_REDIS_URL", "");
-  vi.stubEnv(
-    "SFU_PERSISTENCE_REDIS_URL",
-    kind === "redis" ? `redis://127.0.0.1:${redis?.port}` : "",
-  );
-  keyPrefix += 1;
-  vi.stubEnv("SFU_PERSISTENCE_REDIS_KEY_PREFIX", `test:${process.pid}:${keyPrefix}`);
-  return dir;
-};
-
-// One SFU: its own copy of the meetings in memory, over a store it may share.
-const startSfu = async (kind: StoreKind, localDir = tempDir()): Promise<Sfu> => {
-  if (kind === "redis") {
-    vi.stubEnv("SCHEDULED_MEETINGS_SQLITE_PATH", join(localDir, "conclave.sqlite"));
-  }
-  const persistence = createScheduledMeetingPersistence();
-  const meetings = createScheduledMeetingStore();
-  const sfu = { persistence, meetings };
-  running.push(sfu);
-  await loadPersistedMeetings(meetings, persistence);
-  return sfu;
-};
-const CODE = "abc-mnop-xyz";
-const INVITEE = "invitee@example.com";
-const isInvited = (sfu: Sfu) =>
-  isScheduledMeetingInvitee(sfu.meetings, "conclave", CODE, INVITEE);
-const scheduleIntroCall = async (sfu: Sfu, clientId = "conclave") => {
-  const meeting = createScheduledMeeting(
-    sfu.meetings,
-    {
-      title: "Intro call",
-      scheduledStartAt: Date.now(),
-      roomCode: CODE,
-      hostEmail: "host@example.com",
-      attendeeEmail: INVITEE,
-    },
-    {
-      clientId,
-      createdBy: "host@example.com",
-      defaultHostEmail: "host@example.com",
-      defaultHostUserId: null,
-    },
-  );
-  await persistScheduledMeetingChanges(sfu.meetings, sfu.persistence, [meeting]);
-  return meeting;
-};
-// What the SFU hosting the room does when its host removes the invitee, or
-// lets them in again.
-const setRemoved = async (sfu: Sfu, removed: boolean) => {
-  const changed = setScheduledInviteeReadmission(sfu.meetings, "conclave", CODE, INVITEE, removed);
-  await persistInviteeReadmission(sfu.meetings, sfu.persistence, changed!, INVITEE, removed);
-};
-// What every SFU's clock does to its own copy of a meeting whose time has
-// come: move it on, and save the whole copy.
-const moveOnAndSave = async (sfu: Sfu, now: number) => {
-  const moved = advanceScheduledMeetings(sfu.meetings, now);
-  expect(moved).toHaveLength(1);
-  await persistScheduledMeetingChanges(sfu.meetings, sfu.persistence, moved);
-};
-const readFresh = (sfu: Sfu) =>
-  refreshScheduledMeeting(sfu.meetings, sfu.persistence, "conclave", CODE);
-
-describe.each(["sqlite", "json", "redis"] as const)(
-  "two SFUs that share a %s schedule store",
-  (kind) => {
-    const test = kind === "redis" && !redisServerPath ? it.skip : it;
-
-    test("see an invitee's removal on the one that did not make it, once it reads fresh", async () => {
-      useStore(kind);
-      const sfuA = await startSfu(kind);
-      await scheduleIntroCall(sfuA);
-      const sfuB = await startSfu(kind);
-      expect(isInvited(sfuB)).toBe(true);
-
-      await setRemoved(sfuA, true);
-      expect(isInvited(sfuB)).toBe(true);
-
-      await readFresh(sfuB);
-      expect(isInvited(sfuB)).toBe(false);
-    });
-
-    test("keep the removal when the one that did not make it saves its older copy of the meeting", async () => {
-      useStore(kind);
-      const sfuA = await startSfu(kind);
-      const meeting = await scheduleIntroCall(sfuA);
-      const sfuB = await startSfu(kind);
-      await setRemoved(sfuA, true);
-
-      await moveOnAndSave(sfuB, meeting.scheduledEndAt + 1_000);
-
-      expect(isInvited(await startSfu(kind))).toBe(false);
-      await readFresh(sfuB);
-      expect(isInvited(sfuB)).toBe(false);
-      await readFresh(sfuA);
-      expect(isInvited(sfuA)).toBe(false);
-    });
-
-    test("invite them again once a host lets them back in, whatever older copies are saved after", async () => {
-      useStore(kind);
-      const sfuA = await startSfu(kind);
-      const meeting = await scheduleIntroCall(sfuA);
-      await setRemoved(sfuA, true);
-      const sfuB = await startSfu(kind);
-      expect(isInvited(sfuB)).toBe(false);
-
-      await setRemoved(sfuA, false);
-      await moveOnAndSave(sfuB, meeting.scheduledEndAt + 1_000);
-
-      expect(isInvited(await startSfu(kind))).toBe(true);
-      await readFresh(sfuB);
-      expect(isInvited(sfuB)).toBe(true);
-    });
-  },
-);
-
-describe.each(["sqlite", "json", "redis"] as const)("a fence on a %s schedule store", (kind) => {
-  const test = kind === "redis" && !redisServerPath ? it.skip : it;
-  const fence = (sfu: Sfu, generation: number) =>
-    fenceScheduledMeeting(sfu.meetings, sfu.persistence, "conclave", CODE, generation);
-
-  test("refuses a generation older than one that fenced the meeting, and takes that one again", async () => {
-    useStore(kind);
-    const sfuA = await startSfu(kind);
-    await scheduleIntroCall(sfuA);
-
-    expect(await fence(sfuA, 20)).toBe(true);
-    expect(await fence(sfuA, 10)).toBe(false);
-    expect(await fence(sfuA, 20)).toBe(true);
-    expect(await fence(await startSfu(kind), 15)).toBe(false);
-  });
-
-  test("lets a room that claims its code again fence only while the fence it held still stands", async () => {
-    useStore(kind);
-    const sfuA = await startSfu(kind);
-    await scheduleIntroCall(sfuA);
-    const sfuB = await startSfu(kind);
-    const again = (sfu: Sfu, generation: number, held: number) =>
-      fenceScheduledMeeting(sfu.meetings, sfu.persistence, "conclave", CODE, generation, held);
-
-    expect(await fence(sfuA, 5)).toBe(true);
-    expect(await again(sfuA, 7, 5)).toBe(true);
-    expect(await again(sfuA, 7, 5)).toBe(true);
-
-    expect(await fence(sfuB, 8)).toBe(true);
-    expect(await again(sfuA, 9, 7)).toBe(false);
-    expect(await fence(sfuB, 8)).toBe(true);
-  });
-
-  test("lets a room that claims its code again fence a meeting booked after the room opened", async () => {
-    useStore(kind);
-    const sfuA = await startSfu(kind);
-    await scheduleIntroCall(sfuA);
-
-    expect(
-      await fenceScheduledMeeting(sfuA.meetings, sfuA.persistence, "conclave", CODE, 7, 5),
-    ).toBe(true);
-    expect(await fence(sfuA, 6)).toBe(false);
-  });
+afterAll(() => redis?.stop());
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "unified-meeting-invitees-")); });
+afterEach(async () => {
+  for (const store of stores.splice(0)) await store.close();
+  rmSync(dir, { recursive: true, force: true });
 });
 
-describe("the end of a meeting on one SFU and a removal at the next on another", () => {
-  const test = redisServerPath ? it : it.skip;
-
-  test("keeps the newer removal when the end's reset reaches Redis after it", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    const startedAt = Date.parse("2026-11-23T08:00:00Z");
-    vi.setSystemTime(startedAt);
-    useStore("redis");
-    const sfuA = await startSfu("redis");
-    await scheduleIntroCall(sfuA);
-    const sfuB = await startSfu("redis");
-    await setRemoved(sfuA, true);
-
-    // SFU A's writes to Redis are slow from here on.
-    const persistenceA = sfuA.persistence as unknown as { start: () => Promise<void> };
-    const start = persistenceA.start.bind(persistenceA);
-    let goOn: () => void = () => {};
-    const slow = new Promise<void>((resolve) => (goOn = resolve));
-    persistenceA.start = async () => {
-      await slow;
-      return start();
-    };
-
-    // The meeting ends on SFU A.
-    const stateA = createSfuState();
-    stateA.scheduledMeetings = sfuA.meetings;
-    stateA.scheduledMeetingPersistence = sfuA.persistence;
-    vi.setSystemTime(startedAt + 60_000);
-    markRoomEnded(
-      stateA,
-      {
-        id: CODE,
-        clientId: "conclave",
-        channelId: `conclave:${CODE}`,
-        markEnded: () => {},
-        incarnationId: "room-a",
-        takesOverRecordOf: null,
-        ownerEmail: null,
-      },
-      { message: "The host ended this meeting.", endedBy: "host" },
-    );
-
-    // The next meeting runs on SFU B, whose host removes the invitee again.
-    vi.setSystemTime(startedAt + 120_000);
-    await setRemoved(sfuB, true);
-
-    goOn();
-    await sfuA.persistence.flush?.();
-    expect(isInvited(await startSfu("redis"))).toBe(false);
+const configFor = (mode: "memory" | "json" | "sqlite" | "redis") =>
+  resolveControlPlaneConfig({
+    CONTROL_PLANE_PERSISTENCE: mode,
+    CONCLAVE_SQLITE_PATH: join(dir, "unified.sqlite"),
+    CONTROL_PLANE_JSON_PATH: join(dir, "unified.json"),
+    SCHEDULED_MEETINGS_SQLITE_PATH: join(dir, "staging.sqlite"),
+    SCHEDULED_MEETINGS_PATH: join(dir, "scheduled-meetings.json"),
+    CONCLAVE_FALLBACK_IMPORT_DIR: join(dir, "fallback"),
+    SFU_PERSISTENCE_REDIS_URL: redis?.url,
+    SFU_PERSISTENCE_REDIS_KEY_PREFIX: `fresh-read:${dir}`,
   });
-});
 
-describe.each(["sqlite", "redis"] as const)(
-  "a %s store taking back the removals of a meeting that is over",
-  (kind) => {
-    const test = kind === "redis" && !redisServerPath ? it.skip : it;
-
-    test("takes back only those made at or before the end it applies", async () => {
-      vi.useFakeTimers({ toFake: ["Date"] });
-      const removedAt = Date.parse("2026-11-23T08:00:00Z");
-      vi.setSystemTime(removedAt);
-      useStore(kind);
-      const sfu = await startSfu(kind);
-      const meeting = await scheduleIntroCall(sfu);
-      await setRemoved(sfu, true);
-
-      await sfu.persistence.endRemovals?.(meeting.id, removedAt - 1);
-      await sfu.persistence.flush?.();
-      expect(isInvited(await startSfu(kind))).toBe(false);
-
-      await sfu.persistence.endRemovals?.(meeting.id, removedAt);
-      await sfu.persistence.flush?.();
-      expect(isInvited(await startSfu(kind))).toBe(true);
-    });
-  },
-);
-
-describe.each(["sqlite", "redis"] as const)(
-  "a meeting that ends on an SFU that saw none of its removals, over a %s store",
-  (kind) => {
-    const test = kind === "redis" && !redisServerPath ? it.skip : it;
-
-    test("still takes back a removal another SFU made before the end and saved after it", async () => {
-      vi.useFakeTimers({ toFake: ["Date"] });
-      const removedAt = Date.parse("2026-11-23T08:00:00Z");
-      vi.setSystemTime(removedAt);
-      useStore(kind);
-      const sfuA = await startSfu(kind);
-      const meeting = await scheduleIntroCall(sfuA);
-      const sfuB = await startSfu(kind);
-
-      // The meeting failed over to SFU B and ends there. SFU A removed the
-      // invitee before that, and its save is still on its way.
-      vi.setSystemTime(removedAt + 60_000);
-      await endScheduledMeetingRemovals(sfuB.meetings, sfuB.persistence, "conclave", CODE, Date.now());
-      await sfuB.persistence.flush?.();
-      await sfuA.persistence.setInviteeReadmission?.(meeting.id, INVITEE, true, removedAt);
-      await sfuA.persistence.flush?.();
-
-      expect(isInvited(await startSfu(kind))).toBe(true);
-    });
-  },
-);
-
-describe("a json schedule store at the end of a meeting", () => {
-  it("invites again the people removed from it", async () => {
-    useStore("json");
-    const sfu = await startSfu("json");
-    await scheduleIntroCall(sfu);
-    await setRemoved(sfu, true);
-
-    await endScheduledMeetingRemovals(sfu.meetings, sfu.persistence, "conclave", CODE, Date.now());
-
-    expect(isInvited(await startSfu("json"))).toBe(true);
-  });
-});
-
-describe("a removal still queued for Redis when its meeting ends", () => {
-  const test = redisServerPath ? it : it.skip;
-
-  test("is taken back with the meeting, stamped when the host made it", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    const removedAt = Date.parse("2026-11-23T08:00:00Z");
-    vi.setSystemTime(removedAt);
-    useStore("redis");
-    const sfu = await startSfu("redis");
-    await scheduleIntroCall(sfu);
-    // This SFU's writes to Redis are slow from here on.
-    const persistence = sfu.persistence as unknown as { start: () => Promise<void> };
-    const start = persistence.start.bind(persistence);
-    let goOn: () => void = () => {};
-    const slow = new Promise<void>((resolve) => (goOn = resolve));
-    persistence.start = async () => {
-      await slow;
-      return start();
-    };
-
-    const changed = setScheduledInviteeReadmission(sfu.meetings, "conclave", CODE, INVITEE, true);
-    const removing = persistInviteeReadmission(sfu.meetings, sfu.persistence, changed!, INVITEE, true);
-    vi.setSystemTime(removedAt + 60_000);
-    const ending = endScheduledMeetingRemovals(sfu.meetings, sfu.persistence, "conclave", CODE, Date.now());
-    vi.setSystemTime(removedAt + 120_000);
-    goOn();
-    await removing;
-    await ending;
-
-    expect(isInvited(await startSfu("redis"))).toBe(true);
-  });
-});
-
-// A small seeded generator, so a failing order can be replayed.
-const seededRandom = (seed: number) => () => {
-  seed = (seed * 1664525 + 1013904223) % 4294967296;
-  return seed / 4294967296;
+const open = async (mode: "memory" | "json" | "sqlite" | "redis", importLegacy = false) => {
+  const store = await openControlPlane(configFor(mode), { importLegacy });
+  stores.push(store);
+  return store;
 };
 
-describe.each(["sqlite", "redis", "json"] as const)(
-  "removals and readmissions on a %s store, from two SFUs in any order",
-  (kind) => {
-    const test = kind === "redis" && !redisServerPath ? it.skip : it;
-    const invitees = ["a@example.com", "b@example.com", "c@example.com", "d@example.com"];
-
-    test("end at each invitee's newest decision, a removal winning a tie", async () => {
-      useStore(kind);
-      const sfuA = await startSfu(kind);
-      const meeting = await scheduleIntroCall(sfuA);
-      const sfuB = await startSfu(kind);
-
-      // Every decision so far: an invitee no round decides about keeps the
-      // state an earlier round left.
-      const made: Array<{ email: string; removed: boolean; at: number }> = [];
-      for (let round = 1; round <= 12; round += 1) {
-        const random = seededRandom(round);
-        const base = round * 1_000_000;
-        const decisions = Array.from({ length: 10 }, () => ({
-          email: invitees[Math.floor(random() * invitees.length)],
-          removed: random() < 0.5,
-          // A narrow range, so stamps collide now and then.
-          at: base + Math.floor(random() * 6),
-          sfu: random() < 0.5 ? sfuA : sfuB,
-        }));
-        const delivery = [...decisions].sort(() => random() - 0.5);
-        for (const decision of delivery) {
-          await decision.sfu.persistence.setInviteeReadmission?.(
-            meeting.id,
-            decision.email,
-            decision.removed,
-            decision.at,
-          );
-          await decision.sfu.persistence.flush?.();
-        }
-
-        made.push(...decisions);
-        const expected = new Set<string>();
-        for (const email of invitees) {
-          const newest = made
-            .filter((decision) => decision.email === email)
-            .sort((x, y) => y.at - x.at || Number(y.removed) - Number(x.removed))[0];
-          if (newest?.removed) expected.add(email);
-        }
-        const reader = await startSfu(kind);
-        const removed = new Set(reader.meetings.byId.get(meeting.id)?.readmissionRequiredEmails);
-        expect([...removed].sort(), `round ${round}`).toEqual([...expected].sort());
-        await reader.persistence.close?.();
-        running.splice(running.indexOf(reader), 1);
-      }
-    }, 60_000);
-  },
-);
-
-describe("an SFU whose Redis holds no meetings yet", () => {
-  const test = redisServerPath ? it : it.skip;
-
-  test("brings its local copy's removed invitees along with the meetings", async () => {
-    useStore("redis");
-    const localDir = tempDir();
-    const before = await startSfu("redis", localDir);
-    await scheduleIntroCall(before);
-    await setRemoved(before, true);
-
-    vi.stubEnv("SFU_PERSISTENCE_REDIS_KEY_PREFIX", `test:${process.pid}:emptied`);
-    expect(isInvited(await startSfu("redis", localDir))).toBe(false);
-    expect(isInvited(await startSfu("redis"))).toBe(false);
-  });
-
-  test("hands a claimed reminder's meeting back with its removed invitees", async () => {
-    useStore("redis");
-    const sfu = await startSfu("redis");
-    const meeting = await scheduleIntroCall(sfu);
-    const HOUR_MS = 60 * 60 * 1000;
-    Object.assign(meeting, {
-      source: "booking_link",
-      status: "scheduled",
-      createdAt: Date.now() - 2 * HOUR_MS,
-      scheduledStartAt: Date.now() + HOUR_MS / 2,
-      scheduledEndAt: Date.now() + HOUR_MS,
-      updatedAt: Date.now(),
-    });
-    await persistScheduledMeetingChanges(sfu.meetings, sfu.persistence, [meeting]);
-    await setRemoved(sfu, true);
-
-    const claimed = await sfu.persistence.claimEmailReminder?.({
-      meetingId: meeting.id,
-      now: Date.now(),
-      leadMs: HOUR_MS,
-    });
-    expect(claimed?.emailReminderStatus).toBe("pending");
-    expect(claimed?.readmissionRequiredEmails).toEqual([INVITEE]);
-  });
-});
-
-const openSqlite = (path: string) => {
-  const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as {
-    DatabaseSync: new (file: string) => {
-      exec: (sql: string) => void;
-      prepare: (sql: string) => { get: (...p: unknown[]) => unknown; run: (...p: unknown[]) => unknown };
-      close: () => void;
-    };
-  };
-  return new DatabaseSync(path);
+const book = async (store: ControlPlaneStore, clientId = CLIENT) => {
+  const result = await store.commit(createMeeting({
+    title: "Intro call", roomCode: ROOM, scheduledStartAt: Date.now(), hostEmail: HOST, attendeeEmail: INVITEE,
+  }, { clientId, defaultHostEmail: HOST, defaultHostUserId: null, createdBy: HOST }));
+  if (!result.ok) throw Error(result.message ?? result.reason);
+  return result.value;
 };
 
-// Before removed invitees had writes of their own, every store kept them as
-// a field of the meeting. The JSON file still does. Wherever such a meeting
-// is read from, the people in that field stay removed.
-describe("removed invitees kept inside the meeting, as stores used to keep them", () => {
-  const redisTest = redisServerPath ? it : it.skip;
-  // A JSON file holding the meeting with its invitee removed.
-  const jsonFileWithRemoval = async () => {
-    const dir = useStore("json");
-    const sfu = await startSfu("json");
-    await scheduleIntroCall(sfu);
-    await setRemoved(sfu, true);
-    return dir;
-  };
-  const withRemovalInside = (record: string): string =>
-    JSON.stringify({ ...(JSON.parse(record) as object), readmissionRequiredEmails: [INVITEE] });
+const commit = async (store: ControlPlaneStore, ...args: Parameters<typeof updateRoomInvitation>) => {
+  expect(await store.commit(updateRoomInvitation(...args))).toMatchObject({ ok: true });
+};
 
-  const extraInvitee = "second@example.com";
-  const handoverSource = async () => {
-    const dir = useStore("json");
-    const source = await startSfu("json");
-    const meeting = await scheduleIntroCall(source);
-    await scheduleIntroCall(source, "other-tenant");
-    await setRemoved(source, true);
-    await source.persistence.setInviteeReadmission?.(meeting.id, extraInvitee, true, Date.now());
-    return { dir, meeting };
-  };
+const invited = async (store: ControlPlaneStore, clientId = CLIENT) =>
+  bookingInvites(await store.read(roomBooking(clientId, ROOM)), INVITEE);
 
-  const expectTenantRemovals = (sfu: Sfu) => {
-    expect(isInvited(sfu)).toBe(false);
-    expect(isScheduledMeetingInvitee(sfu.meetings, "other-tenant", CODE, INVITEE)).toBe(true);
-  };
+describe.each(hasRedis ? ["memory", "json", "sqlite", "redis"] as const : ["memory", "json", "sqlite"] as const)("%s invitee decisions", (mode) => {
+  it("reads fresh decisions and keeps them through ordinary booking edits", async () => {
+    const a = await open(mode);
+    const b = mode === "memory" || mode === "json" ? a : await open(mode);
+    const meeting = await book(a);
+    expect(await invited(b)).toBe(true);
+    await commit(a, meeting, { kind: "decide", email: INVITEE, removed: true, at: 10, generation: 1 });
+    expect(await invited(b)).toBe(false);
+    expect(await b.commit(updateMeeting(meeting.id, { title: "Moved" }, { email: HOST, isAdmin: false }))).toMatchObject({ ok: true });
+    expect(await invited(a)).toBe(false);
+    await commit(b, meeting, { kind: "decide", email: INVITEE, removed: false, at: 11, generation: 1 });
+    await commit(a, meeting, { kind: "decide", email: INVITEE, removed: true, at: 10, generation: 1 });
+    expect(await invited(a)).toBe(true);
+  });
 
-  it("refuses SQLite handover when a carried removal cannot be written, then retries", async () => {
-    const { dir } = await handoverSource();
-    useStore("sqlite", tempDir());
-    const target = await startSfu("sqlite", dir);
-    const db = openSqlite(join(process.env.SCHEDULED_MEETINGS_SQLITE_PATH!));
+  it("keeps later removals and lets removal win ties in either delivery order", async () => {
+    const store = await open(mode);
+    const meeting = await book(store);
+    await commit(store, meeting, { kind: "decide", email: INVITEE, removed: false, at: 30 });
+    await commit(store, meeting, { kind: "decide", email: INVITEE, removed: true, at: 30 });
+    await commit(store, meeting, { kind: "decide", email: INVITEE, removed: false, at: 30 });
+    await commit(store, meeting, { kind: "end", at: 20 });
+    expect(await invited(store)).toBe(false);
+    await commit(store, meeting, { kind: "end", at: 30 });
+    await commit(store, meeting, { kind: "decide", email: INVITEE, removed: true, at: 29 });
+    expect(await invited(store)).toBe(true);
+    await commit(store, meeting, { kind: "decide", email: INVITEE, removed: true, at: 31 });
+    expect(await invited(store)).toBe(false);
+  });
+
+  it("fences an old owner, permits a continuous reclaim, and adopts newly booked codes", async () => {
+    const store = await open(mode);
+    const meeting = await book(store);
+    await commit(store, meeting, { kind: "fence", generation: 7, held: 5 });
+    expect(await store.commit(updateRoomInvitation(meeting, { kind: "fence", generation: 8, held: 5 }))).toMatchObject({ ok: false });
+    await commit(store, meeting, { kind: "fence", generation: 8, held: 7 });
+    for (const change of [
+      { kind: "fence", generation: 7 },
+      { kind: "decide", email: INVITEE, removed: true, at: 50, generation: 7 },
+      { kind: "end", at: 60, generation: 7 },
+    ] as const) {
+      expect(await store.commit(updateRoomInvitation(meeting, change))).toMatchObject({ ok: false });
+    }
+    expect(await invited(store)).toBe(true);
+  });
+
+  it("pins writes to the booking and grants only in the exact tenant", async () => {
+    const store = await open(mode);
+    const meeting = await book(store);
+    const unrelated = await book(store, "other");
+    await commit(store, meeting, { kind: "decide", email: INVITEE, removed: true, at: 5 });
+    expect(await invited(store, "other")).toBe(true);
+    expect(await invited(store, "conclave-custom")).toBe(false);
+    expect(await store.commit(deleteMeeting(meeting.id, { email: HOST, isAdmin: false }))).toMatchObject({ ok: true });
+    const replacement = await book(store);
+    expect(replacement.id).not.toBe(meeting.id);
+    await commit(store, meeting, { kind: "decide", email: INVITEE, removed: true, at: 7 });
+    expect(await invited(store)).toBe(true);
+    expect((await store.read(roomBooking("other", ROOM)))?.meeting.id).toBe(unrelated.id);
+  });
+
+  it("queues a decision during a backup hold and leaves reads available", async () => {
+    const state = createSfuState({ controlPlane: await open(mode) });
+    const meeting = await book(state.controlPlane);
+    expect(await state.persistenceFence.hold("test-backup", 5_000)).not.toBeNull();
+    const removal = state.controlPlane.commit(updateRoomInvitation(meeting, { kind: "decide", email: INVITEE, removed: true, at: 12 }));
     try {
-      db.exec(`
-        CREATE TRIGGER reject_removal BEFORE INSERT ON scheduled_meeting_removed_invitees
-        WHEN NEW.email = 'second@example.com'
-        BEGIN SELECT RAISE(ABORT, 'removal write refused'); END;
-      `);
-      vi.stubEnv("SCHEDULED_MEETINGS_PATH", join(dir, "scheduled-meetings.json"));
-      await expect(startSfu("sqlite")).rejects.toThrow(/removal write refused/);
-      expect(await target.persistence.load()).toEqual([]);
-      expect(db.prepare("SELECT count(*) AS count FROM scheduled_meeting_removed_invitees").get())
-        .toEqual({ count: 0 });
-      db.exec("DROP TRIGGER reject_removal");
-      expectTenantRemovals(await startSfu("sqlite"));
-      expectTenantRemovals(await startSfu("sqlite"));
+      expect(await invited(state.controlPlane)).toBe(true);
     } finally {
-      db.close();
+      state.persistenceFence.release("test-backup");
     }
+    expect(await removal).toMatchObject({ ok: true });
+    expect(await invited(state.controlPlane)).toBe(false);
+  });
+});
+
+const restoredMeeting = (fields: Record<string, unknown> = {}) =>
+  legacyMeeting("restored", { roomCode: ROOM, attendeeEmail: INVITEE, ...fields });
+const removed = {
+  readmissionRequiredEmails: [INVITEE],
+  readmissionDecisions: { [INVITEE]: { removed: true, at: 50 } },
+  readmissionWriteGeneration: 7,
+};
+const archiveFile = () =>
+  join(configFor("json").legacy.fallbackDir!, "sfu-a", "20261124T000000000Z-sfu-older", "scheduled-meetings.json");
+
+describe("a staging archive opened by the unified store", () => {
+  it.each(["archived", "same-stamp copy", "newer edit"] as const)("retains the decisions for %s and retires the archive", async (source) => {
+    const config = configFor("json");
+    const path = archiveFile();
+    mkdirSync(dirname(path), { recursive: true });
+    if (source !== "archived") writeFileSync(config.legacy.meetingsJson, JSON.stringify([restoredMeeting(removed)]));
+    const archived = source === "archived" ? restoredMeeting(removed)
+      : source === "newer edit" ? restoredMeeting({ title: "Moved", updatedAt: 150 }) : restoredMeeting();
+    writeFileSync(path, JSON.stringify([archived]));
+    const store = await open("json", true);
+    const booking = await store.read(roomBooking(CLIENT, ROOM));
+    expect(booking).toMatchObject({ meeting: { title: archived.title }, removed: [INVITEE] });
+    expect(existsSync(path)).toBe(false);
+    expect(existsSync(`${path}.adopted`)).toBe(true);
+    expect(await store.commit(updateRoomInvitation(booking!.meeting, { kind: "fence", generation: 6 }))).toMatchObject({ ok: false });
   });
 
-  redisTest("refuses Redis handover when a carried removal cannot be confirmed, then retries", async () => {
-    const { dir, meeting } = await handoverSource();
-    useStore("redis", dir);
-    const client = createClient({ url: process.env.SFU_PERSISTENCE_REDIS_URL });
-    await client.connect();
+  it("does not re-import an older carried removal after a readmission", async () => {
+    const config = configFor("json");
+    writeFileSync(config.legacy.meetingsJson, JSON.stringify([restoredMeeting({ readmissionRequiredEmails: [INVITEE] })]));
+    const first = await open("json", true);
+    const meeting = (await first.read(meetingByRoomCode(CLIENT, ROOM)))!;
+    expect(await invited(first)).toBe(false);
+    await commit(first, meeting, { kind: "decide", email: INVITEE, removed: false, at: 101 });
+    await first.close();
+    stores.pop();
+    expect(await invited(await open("json", true))).toBe(true);
+  });
+
+  it("imports SQLite decisions atomically and does not revive the row's already moved removals", async () => {
+    const config = configFor("sqlite");
+    const legacy = openSqliteDatabase(config.legacy.meetingsSqlite);
+    legacy.exec(`
+      CREATE TABLE scheduled_meetings (payload_json TEXT);
+      CREATE TABLE scheduled_meeting_removed_invitees (meeting_id TEXT, email TEXT, removed_at INTEGER, readmitted INTEGER);
+      CREATE TABLE scheduled_meeting_removals_moved (meeting_id TEXT);
+      CREATE TABLE scheduled_meeting_write_generations (meeting_id TEXT, generation INTEGER);
+    `);
+    legacy.prepare("INSERT INTO scheduled_meetings VALUES (?)").run(JSON.stringify(restoredMeeting(removed)));
+    legacy.prepare("INSERT INTO scheduled_meeting_removed_invitees VALUES ('restored', ?, 60, 1)").run(INVITEE);
+    legacy.exec("INSERT INTO scheduled_meeting_removals_moved VALUES ('restored'); INSERT INTO scheduled_meeting_write_generations VALUES ('restored', 9)");
+    legacy.close();
+
+    const inspect = await open("sqlite");
+    const target = openSqliteDatabase(config.sqlitePath);
+    target.exec(`
+      CREATE TRIGGER block_invitee_state BEFORE INSERT ON control_plane_records
+      WHEN NEW.kind = 'inviteeState' BEGIN SELECT RAISE(ABORT, 'injected import fault'); END;
+    `);
     try {
-      const meetingsKey = `${process.env.SFU_PERSISTENCE_REDIS_KEY_PREFIX}:scheduled-meetings`;
-      const movedKey = `${meetingsKey}:removed-invitees-moved`;
-      await client.set(movedKey, "wrong type for a removal write");
-      await expect(startSfu("redis", dir)).rejects.toThrow(/import.*removal/i);
-      expect(await client.hLen(meetingsKey)).toBe(0);
-      await client.del(movedKey);
-
-      // A newer decision in Redis must win when the source is retried.
-      vi.stubEnv("SCHEDULED_MEETINGS_SQLITE_PATH", join(tempDir(), "conclave.sqlite"));
-      const retrying = createScheduledMeetingPersistence();
-      try {
-        expect(await retrying.setInviteeReadmission?.(meeting.id, extraInvitee, false, Date.now() + 1))
-          .toBe(true);
-      } finally {
-        await retrying.close?.();
-      }
-      const reader = await startSfu("redis", dir);
-      expectTenantRemovals(reader);
-      expect(reader.meetings.byId.get(meeting.id)?.readmissionRequiredEmails).toEqual([INVITEE]);
-      const fromAnotherSfu = await startSfu("redis");
-      expectTenantRemovals(fromAnotherSfu);
-      expect(fromAnotherSfu.meetings.byId.get(meeting.id)?.readmissionRequiredEmails).toEqual([INVITEE]);
+      await expect(open("sqlite", true)).rejects.toThrow();
+      expect(await inspect.read(roomBooking(CLIENT, ROOM))).toBeNull();
     } finally {
-      await client.quit();
+      target.exec("DROP TRIGGER block_invitee_state");
+      target.close();
     }
+    const imported = await open("sqlite", true);
+    const booking = await imported.read(roomBooking(CLIENT, ROOM));
+    expect(bookingInvites(booking, INVITEE)).toBe(true);
+    expect(await imported.commit(updateRoomInvitation(booking!.meeting, { kind: "fence", generation: 8 }))).toMatchObject({ ok: false });
   });
 
-  // An SFU process that moves the JSON file's meetings into its store and is
-  // killed the moment it turns from one kind of write to the other: from
-  // meetings to removed invitees, or the other way round.
-  const importKilledHalfway = (kind: "sqlite" | "redis") =>
-    new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-      const child = spawn(
-        process.execPath,
-        [
-          "--import",
-          "tsx",
-          "--input-type=module",
-          "-e",
-          kind === "sqlite"
-            ? `
-              import { StatementSync } from "node:sqlite";
-              const run = StatementSync.prototype.run;
-              let first = null;
-              StatementSync.prototype.run = function (...args) {
-                const sql = this.sourceSQL;
-                const write = sql.includes("scheduled_meeting_remov")
-                  ? "removal"
-                  : sql.includes("INSERT INTO scheduled_meetings")
-                    ? "meeting"
-                    : null;
-                if (write) {
-                  first ??= write;
-                  if (write !== first) process.kill(process.pid, "SIGKILL");
-                }
-                return run.apply(this, args);
-              };
-              const { createScheduledMeetingPersistence } = await import("./server/scheduledMeetings.ts");
-              createScheduledMeetingPersistence();
-            `
-            : `
-              const { createScheduledMeetingPersistence } = await import("./server/scheduledMeetings.ts");
-              const store = createScheduledMeetingPersistence();
-              let first = null;
-              const turned = (write) => {
-                first ??= write;
-                if (write === first) return false;
-                void Promise.resolve(store.flush()).finally(() => process.kill(process.pid, "SIGKILL"));
-                return true;
-              };
-              const save = store.save.bind(store);
-              const setInviteeReadmission = store.setInviteeReadmission.bind(store);
-              store.save = (...args) => (turned("meeting") ? undefined : save(...args));
-              store.setInviteeReadmission = (...args) =>
-                turned("removal") ? undefined : setInviteeReadmission(...args);
-              await store.load();
-              await new Promise((done) => setTimeout(done, 60_000));
-            `,
-        ],
-        { cwd: join(import.meta.dirname, ".."), stdio: "ignore" },
-      );
-      child.on("close", (code, signal) => resolve({ code, signal }));
-    });
-
-  it("come along when moving a JSON file into SQLite is cut off between its writes", async () => {
-    const dir = await jsonFileWithRemoval();
-    useStore("sqlite", dir);
-    expect(await importKilledHalfway("sqlite")).toEqual({ code: null, signal: "SIGKILL" });
-
-    expect(isInvited(await startSfu("sqlite"))).toBe(false);
-  });
-
-  redisTest("come along when moving into Redis is cut off between its writes", async () => {
-    const dir = await jsonFileWithRemoval();
-    useStore("redis", dir);
-    expect(await importKilledHalfway("redis")).toEqual({ code: null, signal: "SIGKILL" });
-
-    expect(isInvited(await startSfu("redis", dir))).toBe(false);
-  });
-
-  it("come along when a JSON file's meetings move into SQLite", async () => {
-    const dir = await jsonFileWithRemoval();
-    useStore("sqlite", dir);
-
-    expect(isInvited(await startSfu("sqlite"))).toBe(false);
-    expect(isInvited(await startSfu("sqlite"))).toBe(false);
-  });
-
-  redisTest("come along when a JSON file's meetings move into Redis", async () => {
-    const dir = await jsonFileWithRemoval();
-    useStore("redis", dir);
-    expect(isInvited(await startSfu("redis", dir))).toBe(false);
-
-    // Another host: no JSON file, a local copy of its own, the same Redis.
-    vi.stubEnv("SCHEDULED_MEETINGS_PATH", join(tempDir(), "none.json"));
-    expect(isInvited(await startSfu("redis"))).toBe(false);
-  });
-
-  it("are read from a SQLite row that still carries them, and a host can bring the person back", async () => {
-    const dir = useStore("sqlite");
-    const meeting = await scheduleIntroCall(await startSfu("sqlite"));
-    const db = openSqlite(join(dir, "conclave.sqlite"));
-    const row = db
-      .prepare("SELECT payload_json FROM scheduled_meetings WHERE id = ?")
-      .get(meeting.id) as { payload_json: string };
-    db.prepare("UPDATE scheduled_meetings SET payload_json = ? WHERE id = ?").run(
-      withRemovalInside(row.payload_json),
-      meeting.id,
-    );
-    db.close();
-
-    const sfu = await startSfu("sqlite");
-    expect(isInvited(sfu)).toBe(false);
-    await setRemoved(sfu, false);
-    expect(isInvited(await startSfu("sqlite"))).toBe(true);
-  });
-
-  redisTest("are read from a Redis record that still carries them, and a host can bring the person back", async () => {
-    useStore("redis");
-    const meeting = await scheduleIntroCall(await startSfu("redis"));
-    const client = createClient({ url: process.env.SFU_PERSISTENCE_REDIS_URL });
-    await client.connect();
-    const key = `${process.env.SFU_PERSISTENCE_REDIS_KEY_PREFIX}:scheduled-meetings`;
-    const record = await client.hGet(key, meeting.id);
-    await client.hSet(key, meeting.id, withRemovalInside(record!));
-    await client.quit();
-
-    const sfu = await startSfu("redis");
-    expect(isInvited(sfu)).toBe(false);
-    await setRemoved(sfu, false);
-    expect(isInvited(await startSfu("redis"))).toBe(true);
-  });
-
-  // What builds of this PR before removed invitees had writes of their own
-  // do when they save a meeting: write their copy with the list inside.
-  const earlierBuildSaves = async (kind: "sqlite" | "redis", dir: string, meetingId: string, carried: string[]) => {
-    const inside = (record: string) =>
-      JSON.stringify({ ...(JSON.parse(record) as object), readmissionRequiredEmails: carried });
-    if (kind === "sqlite") {
-      const db = openSqlite(join(dir, "conclave.sqlite"));
-      const row = db
-        .prepare("SELECT payload_json FROM scheduled_meetings WHERE id = ?")
-        .get(meetingId) as { payload_json: string };
-      db.prepare("UPDATE scheduled_meetings SET payload_json = ? WHERE id = ?").run(
-        inside(row.payload_json),
-        meetingId,
-      );
-      db.close();
-      return;
+  it.skipIf(!hasRedis)("imports Redis removals, end stamps and generation with the meeting", async () => {
+    const config = configFor("redis");
+    const legacy = createClient({ url: config.redisUrl });
+    const key = `${config.keyPrefix}:scheduled-meetings`;
+    await legacy.connect();
+    try {
+      await legacy.multi()
+        .hSet(key, "restored", JSON.stringify(restoredMeeting()))
+        .hSet(`${key}:removed-invitees`, `restored ${INVITEE}`, "70:removed")
+        .hSet(`${key}:removed-invitees-ended`, "restored", "60")
+        .hSet(`${key}:write-generations`, "restored", "9")
+        .sAdd(`${key}:removed-invitees-moved`, "restored")
+        .exec();
+    } finally {
+      await legacy.quit();
     }
-    const client = createClient({ url: process.env.SFU_PERSISTENCE_REDIS_URL });
-    await client.connect();
-    const key = `${process.env.SFU_PERSISTENCE_REDIS_KEY_PREFIX}:scheduled-meetings`;
-    const record = await client.hGet(key, meetingId);
-    await client.hSet(key, meetingId, inside(record!));
-    await client.quit();
-  };
-
-  for (const kind of ["sqlite", "redis"] as const) {
-    const storeTest = kind === "redis" ? redisTest : it;
-    storeTest(`stay let back in on ${kind} when an earlier build saves its old copy with the list inside`, async () => {
-      const dir = useStore(kind);
-      const sfu = await startSfu(kind);
-      const meeting = await scheduleIntroCall(sfu);
-      await setRemoved(sfu, true);
-      await setRemoved(sfu, false);
-      expect(isInvited(await startSfu(kind))).toBe(true);
-
-      await earlierBuildSaves(kind, dir, meeting.id, [INVITEE]);
-
-      expect(isInvited(await startSfu(kind))).toBe(true);
-    });
-  }
-
-  redisTest("are not lost when moving them fails part way", async () => {
-    useStore("redis");
-    const meeting = await scheduleIntroCall(await startSfu("redis"));
-    const client = createClient({ url: process.env.SFU_PERSISTENCE_REDIS_URL });
-    await client.connect();
-    const prefix = process.env.SFU_PERSISTENCE_REDIS_KEY_PREFIX;
-    const key = `${prefix}:scheduled-meetings`;
-    const record = await client.hGet(key, meeting.id);
-    const carried = withRemovalInside(record!);
-    await client.hSet(key, meeting.id, carried);
-    // A key of the wrong type where the removed invitees go.
-    await client.set(`${key}:removed-invitees`, "not a set");
-
-    await startSfu("redis");
-    expect(await client.hGet(key, meeting.id)).toBe(carried);
-
-    await client.del(`${key}:removed-invitees`);
-    await client.quit();
-    expect(isInvited(await startSfu("redis"))).toBe(false);
-  });
-
-  redisTest("are not put back by an SFU that read the old record before another moved them", async () => {
-    useStore("redis");
-    const meeting = await scheduleIntroCall(await startSfu("redis"));
-    const client = createClient({ url: process.env.SFU_PERSISTENCE_REDIS_URL });
-    await client.connect();
-    const key = `${process.env.SFU_PERSISTENCE_REDIS_KEY_PREFIX}:scheduled-meetings`;
-    const record = await client.hGet(key, meeting.id);
-    await client.hSet(key, meeting.id, withRemovalInside(record!));
-    await client.quit();
-
-    // A slow SFU: Redis has answered its read of the old record, and it has
-    // not acted on that answer yet.
-    const slow = {
-      persistence: createScheduledMeetingPersistence(),
-      meetings: createScheduledMeetingStore(),
-    };
-    running.push(slow);
-    const slowClient = (slow.persistence as unknown as {
-      client: { hVals: (key: string) => Promise<string[]> };
-    }).client;
-    const hVals = slowClient.hVals.bind(slowClient);
-    let answered = false;
-    let goOn: () => void = () => {};
-    const held = new Promise<void>((resolve) => (goOn = resolve));
-    slowClient.hVals = async (hashKey) => {
-      const values = await hVals(hashKey);
-      answered = true;
-      await held;
-      return values;
-    };
-    const slowLoading = loadPersistedMeetings(slow.meetings, slow.persistence);
-    await vi.waitFor(() => expect(answered).toBe(true), { timeout: 10_000, interval: 10 });
-
-    // Meanwhile another SFU moves the removal, and a host lets the person in.
-    const quick = await startSfu("redis");
-    expect(isInvited(quick)).toBe(false);
-    await setRemoved(quick, false);
-
-    goOn();
-    await slowLoading;
-    expect(isInvited(slow)).toBe(true);
-    expect(isInvited(await startSfu("redis"))).toBe(true);
+    const imported = await open("redis", true);
+    const booking = await imported.read(roomBooking(CLIENT, ROOM));
+    expect(bookingInvites(booking, INVITEE)).toBe(false);
+    expect(await imported.commit(updateRoomInvitation(booking!.meeting, { kind: "fence", generation: 8 }))).toMatchObject({ ok: false });
+    await commit(imported, booking!.meeting, { kind: "end", at: 70, generation: 9 });
+    expect(await invited(imported)).toBe(true);
   });
 });
 
-describe("a json schedule store whose file cannot be read", () => {
-  it("is replaced by the next save, not left in the way of it", async () => {
-    useStore("json");
-    const sfu = await startSfu("json");
-    await scheduleIntroCall(sfu);
-    writeFileSync(process.env.SCHEDULED_MEETINGS_PATH!, "{not json");
-
-    const [meeting] = [...sfu.meetings.byId.values()];
-    await persistScheduledMeetingChanges(sfu.meetings, sfu.persistence, [meeting]);
-
-    expect(isInvited(await startSfu("json"))).toBe(true);
-  });
-});
-
-describe("reading a meeting fresh from the store", () => {
-  const withMeeting = () => {
-    const meetings = createScheduledMeetingStore();
-    const meeting = createScheduledMeeting(
-      meetings,
-      {
-        title: "Intro call",
-        scheduledStartAt: Date.now(),
-        roomCode: "abc-mnop-xyz",
-        hostEmail: "host@example.com",
-        attendeeEmail: "invitee@example.com",
-      },
-      {
-        clientId: "conclave",
-        createdBy: "host@example.com",
-        defaultHostEmail: "host@example.com",
-        defaultHostUserId: null,
-      },
-    );
-    return { meetings, meeting };
-  };
-  const stored = (loadOne: ScheduledMeetingPersistence["loadOne"]) =>
-    ({ save: () => {}, load: () => [], loadOne }) satisfies ScheduledMeetingPersistence;
-  const invited = (meetings: ReturnType<typeof withMeeting>["meetings"]) =>
-    isScheduledMeetingInvitee(meetings, "conclave", "abc-mnop-xyz", "invitee@example.com");
-
-  it("keeps this SFU's copy of the meeting when the store's is older, but takes the store's removed invitees", async () => {
-    const { meetings, meeting } = withMeeting();
-    const older = {
-      ...meeting,
-      title: "Intro call, as first saved",
-      readmissionRequiredEmails: ["invitee@example.com"],
-      updatedAt: meeting.updatedAt - 1,
-    };
-    await refreshScheduledMeeting(meetings, stored(() => older), "conclave", "abc-mnop-xyz");
-    expect(meetings.byId.get(meeting.id)?.title).toBe("Intro call");
-    expect(invited(meetings)).toBe(false);
-  });
-
-  it("keeps this SFU's copy when the store fails or cannot be read one meeting at a time", async () => {
-    const { meetings } = withMeeting();
-    await refreshScheduledMeeting(
-      meetings,
-      stored(() => {
-        throw new Error("store down");
-      }),
-      "conclave",
-      "abc-mnop-xyz",
-    );
-    await refreshScheduledMeeting(
-      meetings,
-      { save: () => {}, load: () => [] },
-      "conclave",
-      "abc-mnop-xyz",
-    );
-    expect(invited(meetings)).toBe(true);
-  });
-
-  it("does not keep a room waiting on a store that never answers", async () => {
-    vi.useFakeTimers();
-    const { meetings } = withMeeting();
-    const refreshed = refreshScheduledMeeting(
-      meetings,
-      stored(() => new Promise(() => {})),
-      "conclave",
-      "abc-mnop-xyz",
-    );
-    await vi.advanceTimersByTimeAsync(1_000);
-    await expect(refreshed).resolves.toBeUndefined();
-    expect(invited(meetings)).toBe(true);
-  });
+it("does not wait indefinitely for a booking read, or grant on failure", async () => {
+  const state = createSfuState();
+  state.controlPlane.read = () => new Promise(() => undefined);
+  expect(await readRoomBooking(state, CLIENT, ROOM)).toBeNull();
+  state.controlPlane.read = async () => { throw Error("injected booking read failure"); };
+  expect(await readRoomBooking(state, CLIENT, ROOM)).toBeNull();
 });

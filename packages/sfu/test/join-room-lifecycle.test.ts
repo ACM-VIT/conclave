@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { seed } from "./support/controlPlane.js";
 import type { Consumer, Router, Worker } from "mediasoup/types";
 import type { Server as SocketIOServer, Socket } from "socket.io";
 import { Admin } from "../config/classes/Admin.js";
@@ -7,15 +8,17 @@ import { Room } from "../config/classes/Room.js";
 import { config } from "../config/config.js";
 import { NO_HOST_LEFT_MESSAGE } from "../server/admin/controlPlane.js";
 import { LocalRoomRegistry, RoomOpeningError } from "../server/roomRegistry.js";
-import { createScheduledWebinar } from "../server/scheduledWebinars.js";
+import { createWebinar } from "../server/controlPlane/webinarCommands.js";
 import type { SfuAuthPayload } from "../server/socket/auth.js";
 import { createConnectionContext } from "../server/socket/context.js";
 import { registerAdminHandlers } from "../server/socket/handlers/adminHandlers.js";
 import { registerDisconnectHandlers } from "../server/socket/handlers/disconnectHandlers.js";
 import { registerJoinRoomHandler } from "../server/socket/handlers/joinRoom.js";
 import { registerTransportHandlers } from "../server/socket/handlers/transportHandlers.js";
+import { registerWebinarHandlers } from "../server/socket/handlers/webinarHandlers.js";
 import { forceCloseRoom, getOrCreateRoomWithOrigin, writeSharedRoomState } from "../server/rooms.js";
 import { createSfuState, type SfuState } from "../server/state.js";
+import { advanceScheduledWebinars } from "../server/scheduledWebinarScheduler.js";
 import { getOrCreateWebinarRoomConfig, setCustomWebinarLinkSlug } from "../server/webinar.js";
 import type { ScheduledWebinar } from "../types.js";
 
@@ -37,18 +40,20 @@ const makeSocket = (id: string, user: SfuAuthPayload = {}) => {
     return recorder;
   };
   const to = (channelId: string) => ({ emit: emitToRoom(channelId) });
+  const disconnect = vi.fn();
+  const joinChannel = vi.fn();
   const socket = {
     id,
     data: { user },
     on: (event: string, handler: Handler) => handlers.set(event, handler),
     emit,
-    disconnect: vi.fn(),
+    disconnect,
     connected: true,
-    join: vi.fn(),
+    join: joinChannel,
     leave: vi.fn(),
     to,
   } as unknown as Socket;
-  return { socket, handlers, emit, emitToRoom };
+  return { socket, handlers, emit, emitToRoom, disconnect, joinChannel };
 };
 
 const makeState = (workers: Worker[] = []): SfuState => {
@@ -655,6 +660,76 @@ describe("waiting-room entry on disconnect", () => {
 });
 
 describe("scheduled webinar link codes", () => {
+  it.each(["rejected", "stalled", "lease lost", "room replaced"] as const)(
+    "does not end an audience on a %s cleanup check",
+    async (failure) => {
+      vi.useFakeTimers();
+      broadcast.mockClear();
+      disconnectRoom.mockClear();
+      const state = makeState([{
+        pid: 1, closed: false, createRouter: async () => ({
+          closed: false, close: vi.fn(), rtpCapabilities: { codecs: [], headerExtensions: [] },
+        }),
+      } as unknown as Worker]);
+      const now = Date.now();
+      const booked = await state.controlPlane.commit(createWebinar({
+        title: "Town hall", linkSlug: "town-hall",
+        scheduledStartAt: now + 60_000, scheduledEndAt: now + 3_600_000,
+        earlyEntryMinutes: 10, publicAccess: true,
+      }, {
+        clientId: "conclave", createdBy: "host@example.com", defaultHostEmail: "host@example.com",
+      }));
+      if (!booked.ok) throw Error(booked.message ?? booked.reason);
+      const { webinar } = booked.value;
+      const audience = await join(state, "viewer", {
+        userId: "viewer", clientId: "conclave", sessionId: "v", joinMode: "webinar_attendee",
+      }, webinar.linkSlug);
+      expect(audience.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "joined" }));
+      const channel = `conclave:${webinar.roomId}`;
+      const room = state.rooms.get(channel)!;
+      let finish!: (result: null) => void;
+      const held = new Promise<null>((resolve) => { finish = resolve; });
+      const read = vi.spyOn(state.controlPlane, "read");
+      if (failure === "rejected") read.mockRejectedValueOnce(new Error("Store unavailable"));
+      else read.mockImplementationOnce(() => held);
+
+      await vi.advanceTimersByTimeAsync(config.adminCleanupTimeout);
+      if (failure === "room replaced") {
+        forceCloseRoom(state, room);
+        const { room: replacement } = await getOrCreateRoomWithOrigin(state, "conclave", room.id);
+        finish(null);
+        await vi.advanceTimersByTimeAsync(config.adminCleanupTimeout + 1);
+        expect(state.rooms.get(channel)).toBe(replacement);
+        expect(disconnectRoom).not.toHaveBeenCalled();
+        return;
+      }
+      if (failure === "lease lost") {
+        const lease = vi.spyOn(state.roomRegistry, "holdsLease").mockReturnValue(false);
+        finish(null);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(state.rooms.get(channel)).toBe(room);
+        expect(disconnectRoom).not.toHaveBeenCalled();
+        lease.mockRestore();
+      } else if (failure === "stalled") {
+        await vi.advanceTimersByTimeAsync(5_001);
+        expect(room.cleanupDeadline).not.toBeNull();
+        finish(null);
+      }
+      await vi.advanceTimersByTimeAsync(1);
+      expect(state.rooms.get(channel)?.getWebinarAttendeeCount()).toBe(1);
+      expect(disconnectRoom).not.toHaveBeenCalled();
+      expect(broadcast).not.toHaveBeenCalledWith("roomEnded", expect.anything());
+
+      read.mockResolvedValueOnce(null);
+      await vi.advanceTimersByTimeAsync(config.adminCleanupTimeout + 1);
+      expect(state.rooms.has(channel)).toBe(false);
+      expect(disconnectRoom).toHaveBeenCalledOnce();
+      expect(broadcast).toHaveBeenCalledWith("roomEnded", {
+        roomId: room.id, message: NO_HOST_LEFT_MESSAGE, endedBy: "server",
+      });
+    },
+  );
+
   it.each(["host arrives", "window expires"])("keeps an early audience seated past ordinary cleanup until the %s", async (outcome) => {
     vi.useFakeTimers();
     broadcast.mockClear();
@@ -665,7 +740,7 @@ describe("scheduled webinar link codes", () => {
     const state = makeState([{ pid: 1, closed: false, createRouter: async () => router } as unknown as Worker]);
     const earlyEntryMinutes = 10;
     const scheduledStartAt = Date.now() + earlyEntryMinutes * 60_000 + 1;
-    const { webinar } = createScheduledWebinar(state.scheduledWebinars, {
+    const booked = await state.controlPlane.commit(createWebinar({
       title: "Town hall",
       linkSlug: "town-hall",
       scheduledStartAt,
@@ -674,7 +749,9 @@ describe("scheduled webinar link codes", () => {
       publicAccess: true,
     }, {
       clientId: "conclave", createdBy: "host@example.com", defaultHostEmail: "host@example.com",
-    });
+    }));
+    if (!booked.ok) throw Error(booked.message ?? booked.reason);
+    const { webinar } = booked.value;
     const viewer: SfuAuthPayload = {
       userId: "viewer", clientId: "conclave", sessionId: "v", joinMode: "webinar_attendee",
     };
@@ -759,9 +836,7 @@ describe("scheduled webinar link codes", () => {
       updatedAt: now, liveStartedAt: now, endedAt: null, totalJoinCount: 0, peakAttendeeCount: 0,
       webinarLink: "http://localhost/w/launch", coHostInviteTokenHash: null, coHostInviteTokenCreatedAt: null,
     } as ScheduledWebinar;
-    state.scheduledWebinars.byId.set(webinar.id, webinar);
-    state.scheduledWebinars.bySlug.set(webinar.linkSlug, webinar.id);
-    state.scheduledWebinars.byRoomChannel.set("conclave:sched-real", webinar.id);
+    await seed(state.controlPlane, "webinar", webinar);
 
     for (const id of ["sched-real", "squat"]) {
       const room = new Room({ id, clientId: "conclave", workerPid: null, router: { closed: false, close: vi.fn() } as unknown as Router });
@@ -819,5 +894,216 @@ describe("joining a room that closes during its lease renewal", () => {
     expect(createRouter).toHaveBeenCalledOnce();
     expect(context.currentClient).toBeInstanceOf(Admin);
     expect(state.rooms.get("conclave:room")?.hostUserKey).toBe("carol");
+  });
+});
+
+const holdStoreReads = (state: SfuState, held: (read: number) => boolean = () => true) => {
+  const store = state.controlPlane;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let reads = 0;
+  let waiting = 0;
+  state.controlPlane = {
+    ...store,
+    read: async (query) => {
+      reads += 1;
+      if (held(reads)) {
+        waiting += 1;
+        await gate;
+      }
+      return store.read(query);
+    },
+  };
+  return { release, reached: () => vi.waitFor(() => expect(waiting).toBe(1)) };
+};
+
+const openRoom = (state: SfuState, id = "room"): Room => {
+  const room = new Room({ id, clientId: "conclave", workerPid: null, router: { closed: false, close: vi.fn() } as unknown as Router });
+  state.rooms.set(room.channelId, room);
+  return room;
+};
+
+describe("a webinar link code saved across the store read", () => {
+  type Update = (data: Record<string, unknown>, ack: (response: unknown) => void) => Promise<void>;
+
+  const hostedRoom = async (state: SfuState) => {
+    const room = openRoom(state);
+    const host = await join(state, "host-socket", { userId: "host", clientId: "conclave", sessionId: "h", isForcedHost: true });
+    registerWebinarHandlers(host.context);
+    return { room, host, update: host.peer.handlers.get("webinar:updateConfig") as unknown as Update };
+  };
+
+  it("binds no link for a room that closed during the read, so the code stays free", async () => {
+    const state = makeState();
+    const { room, update } = await hostedRoom(state);
+    const reads = holdStoreReads(state);
+    const ack = vi.fn();
+    const saving = update({ enabled: true, linkSlug: "launch-day" }, ack);
+    await reads.reached();
+    expect(forceCloseRoom(state, room)).toBe(true);
+    reads.release();
+    await saving;
+
+    expect(ack).toHaveBeenCalledWith({ error: "Not in a room" });
+    expect(state.webinarLinks.has("launch-day")).toBe(false);
+    expect(state.webinarConfigs.has(room.channelId)).toBe(false);
+    const other = openRoom(state, "other");
+    expect(
+      setCustomWebinarLinkSlug({
+        webinarConfig: getOrCreateWebinarRoomConfig(state.webinarConfigs, other.channelId),
+        webinarLinks: state.webinarLinks,
+        room: other,
+        slug: "launch-day",
+      }).changed,
+    ).toBe(true);
+  });
+
+  it("leaves a room reopened on the same channel during the read as it was", async () => {
+    const state = makeState();
+    const { room, update } = await hostedRoom(state);
+    const reads = holdStoreReads(state);
+    const ack = vi.fn();
+    const saving = update({ enabled: true, linkSlug: "launch-day" }, ack);
+    await reads.reached();
+    forceCloseRoom(state, room);
+    const reopened = openRoom(state);
+    const fresh = getOrCreateWebinarRoomConfig(state.webinarConfigs, reopened.channelId);
+    reads.release();
+    await saving;
+
+    expect(ack).toHaveBeenCalledWith({ error: "Not in a room" });
+    expect(state.webinarLinks.has("launch-day")).toBe(false);
+    expect(state.webinarConfigs.get(reopened.channelId)).toBe(fresh);
+    expect(fresh).toMatchObject({ enabled: false, linkSlug: null });
+  });
+
+  it("refuses a host who stopped being an admin during the read", async () => {
+    const state = makeState();
+    const { room, host, update } = await hostedRoom(state);
+    const reads = holdStoreReads(state);
+    const ack = vi.fn();
+    const saving = update({ enabled: true, linkSlug: "launch-day" }, ack);
+    await reads.reached();
+    const demoted = new Client({ id: host.context.currentClient!.id, socket: host.peer.socket });
+    room.removeClient(demoted.id);
+    room.addClient(demoted);
+    host.context.currentClient = demoted;
+    reads.release();
+    await saving;
+
+    expect(ack).toHaveBeenCalledWith({ error: "Only admins can manage webinar settings" });
+    expect(state.webinarLinks.has("launch-day")).toBe(false);
+    expect(state.webinarConfigs.get(room.channelId)).toMatchObject({ enabled: false, linkSlug: null });
+  });
+
+  it("changes neither room when the host switched rooms on the same socket during the read", async () => {
+    const state = makeState();
+    const { room, host, update } = await hostedRoom(state);
+    const next = openRoom(state, "next");
+    const reads = holdStoreReads(state, (read) => read === 1);
+    const ack = vi.fn();
+    const saving = update({ enabled: true, linkSlug: "launch-day" }, ack);
+    await reads.reached();
+    const switched = vi.fn();
+    await host.peer.handlers.get("joinRoom")!(...[{ roomId: next.id, sessionId: "h" }, switched] as never[]);
+    expect(switched).toHaveBeenCalledWith(expect.objectContaining({ roomId: next.id, status: "joined" }));
+    expect(host.context.currentRoom).toBe(next);
+    reads.release();
+    await saving;
+
+    expect(ack).toHaveBeenCalledWith({ error: "Not in a room" });
+    expect(state.webinarLinks.has("launch-day")).toBe(false);
+    expect(state.webinarConfigs.get(next.channelId)).toMatchObject({ enabled: false, linkSlug: null });
+    expect(state.webinarConfigs.get(room.channelId)?.enabled ?? false).toBe(false);
+  });
+
+  it("still saves the code when the room and the host are unchanged after the read", async () => {
+    const state = makeState();
+    const { room, update } = await hostedRoom(state);
+    const reads = holdStoreReads(state);
+    const ack = vi.fn();
+    const saving = update({ enabled: true, linkSlug: "launch-day" }, ack);
+    await reads.reached();
+    reads.release();
+    await saving;
+
+    expect(ack).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    expect(state.webinarLinks.get("launch-day")).toMatchObject({ roomChannelId: room.channelId });
+    expect(state.webinarConfigs.get(room.channelId)).toMatchObject({ enabled: true, linkSlug: "launch-day" });
+  });
+});
+
+describe("two joins for one tab across the store read", () => {
+  it("lets the join that was asked last win when the earlier one's read is slower", async () => {
+    const state = makeState();
+    const room = openRoom(state);
+    const reads = holdStoreReads(state, (read) => read === 1);
+    const user = { userId: "alice", clientId: "conclave", sessionId: "a", isForcedHost: true };
+    const earlier = join(state, "old-socket", user);
+    await reads.reached();
+    const asked = join(state, "new-socket", user);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    reads.release();
+    const [, later] = await Promise.all([earlier, asked]);
+
+    expect(later.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "joined" }));
+    expect(room.getClient("alice#a")?.socket).toBe(later.peer.socket);
+    expect(later.peer.disconnect).not.toHaveBeenCalled();
+  });
+
+  it("stops a join whose socket closed during the read", async () => {
+    const state = makeState();
+    const room = openRoom(state);
+    const reads = holdStoreReads(state);
+    const peer = makeSocket("gone-socket", { userId: "bob", clientId: "conclave", sessionId: "b", isForcedHost: true });
+    const context = createConnectionContext(io, peer.socket, state);
+    registerJoinRoomHandler(context);
+    const ack = vi.fn();
+    const joining = peer.handlers.get("joinRoom")!(...[{ roomId: room.id, sessionId: "b" }, ack] as never[]);
+    await reads.reached();
+    (peer.socket as { connected: boolean }).connected = false;
+    reads.release();
+    await joining;
+
+    expect(room.getClient("bob#b")).toBeUndefined();
+    expect(context.currentRoom).toBeNull();
+    expect(peer.joinChannel).not.toHaveBeenCalled();
+  });
+});
+
+describe("a scheduled webinar stored under a legacy client of the deployment", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("is hosted, joined and kept by the tick under the deployment's client", async () => {
+    vi.stubEnv("SFU_CLIENT_ID", "acme");
+    const state = makeState();
+    const now = Date.now();
+    await seed(state.controlPlane, "webinar", {
+      id: "w-legacy", clientId: "conclave", roomId: "sched-legacy", linkSlug: "legacy-launch", title: "Launch", description: "",
+      hostEmail: "host@example.com", hostName: "Host", hostUserId: null, coHosts: [],
+      scheduledStartAt: now - 60_000, scheduledEndAt: now + 3_600_000, status: "live",
+      publicAccess: true, maxAttendees: 100, requiresInviteCode: false, waitingRoomEnabled: false,
+      earlyEntryMinutes: 10, qaEnabled: true, notes: "", createdAt: now, createdBy: "host@example.com",
+      updatedAt: now, liveStartedAt: now, endedAt: null, totalJoinCount: 0, peakAttendeeCount: 0,
+      webinarLink: "http://localhost/w/legacy-launch", coHostInviteTokenHash: null, coHostInviteTokenCreatedAt: null,
+    });
+    const room = new Room({ id: "sched-legacy", clientId: "acme", workerPid: null, router: { closed: false, close: vi.fn() } as unknown as Router });
+    state.rooms.set(room.channelId, room);
+
+    const host = await join(state, "host-socket", {
+      userId: "host", clientId: "acme", sessionId: "h", email: "host@example.com",
+    }, "sched-legacy");
+    expect(host.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "joined", webinarRole: "host" }));
+    const attendee = await join(state, "attendee-socket", {
+      userId: "viewer", clientId: "acme", sessionId: "v", joinMode: "webinar_attendee",
+    }, "legacy-launch");
+    expect(attendee.ack).toHaveBeenCalledWith(expect.objectContaining({ roomId: "sched-legacy" }));
+
+    await advanceScheduledWebinars(state, Date.now(), () => {});
+    expect(state.webinarConfigs.get(room.channelId)).toMatchObject({ scheduledWebinarId: "w-legacy", enabled: true });
+    expect([...state.webinarConfigs.keys()]).toEqual([room.channelId]);
+    expect((await state.controlPlane.read((view) => view.get("webinar", "w-legacy")))?.value.clientId).toBe("conclave");
   });
 });

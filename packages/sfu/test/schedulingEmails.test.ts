@@ -114,8 +114,11 @@ describe("scheduling email notifications", () => {
       "host@example.com",
     ]);
     expect(messages[0]?.subject).toContain("You're booked");
-    expect(messages[0]?.text).toContain("https://conclave.test/intro-1234");
-    expect(messages[0]?.text).not.toContain("clientId=default");
+    for (const message of messages) {
+      expect(message.text).toContain("https://conclave.test/intro-1234?clientId=conclave");
+      expect(message.html).toContain('href="https://conclave.test/intro-1234?clientId=conclave"');
+      expect(message.attachments?.[0]?.content).toContain("LOCATION:https://conclave.test/intro-1234?clientId=conclave");
+    }
     expect(messages[0]?.html).toContain("Conclave");
     expect(messages[0]?.html).toContain("is confirmed");
     expect(messages[0]?.attachments?.[0]?.filename).toBe("conclave-booking.ics");

@@ -4,22 +4,26 @@ import type {
   SchedulingProfile,
 } from "../types.js";
 import { Logger } from "../utilities/loggers.js";
-import { clientNamespaceIncludes } from "./clientIds.js";
 import {
-  persistScheduledMeetingChanges,
-  updateScheduledMeeting,
-} from "./scheduledMeetings.js";
+  claimDueReminder,
+  dueReminderMeetings,
+  recordReminderResult,
+  reminderContext,
+} from "./controlPlane/schedulingCommands.js";
+import { defaultAppOrigin } from "./appOrigin.js";
+import { commitFollowUp } from "./controlPlane/followUp.js";
 import {
   isSchedulingEmailConfigured,
   sendSchedulingReminderEmails,
+  type SchedulingEmailDeliveryResult,
 } from "./schedulingEmails.js";
 import type { SfuState } from "./state.js";
+
+export { shouldSendSchedulingReminder } from "./scheduledMeetings.js";
 
 const MINUTE_MS = 60 * 1000;
 const DEFAULT_REMINDER_MINUTES = 30;
 const MAX_REMINDER_MINUTES = 24 * 60;
-const reminderInFlight = new Set<string>();
-let scanRunning = false;
 
 const disabled = (value: string | undefined): boolean => {
   const normalized = value?.trim().toLowerCase();
@@ -36,35 +40,6 @@ const resolveSchedulingReminderLeadMs = (): number => {
   return minutes * MINUTE_MS;
 };
 
-export const shouldSendSchedulingReminder = (
-  meeting: ScheduledMeeting,
-  now: number,
-  leadMs: number,
-): boolean => {
-  if (leadMs <= 0) return false;
-  if (meeting.source !== "booking_link") return false;
-  if (meeting.status !== "scheduled") return false;
-  if (!meeting.attendeeEmail) return false;
-  if (
-    meeting.emailReminderStatus === "pending" ||
-    meeting.emailReminderStatus === "sent" ||
-    meeting.emailReminderStatus === "failed"
-  ) {
-    return false;
-  }
-  const reminderDueAt = meeting.scheduledStartAt - leadMs;
-  if (meeting.createdAt > reminderDueAt) return false;
-  return now >= reminderDueAt && now < meeting.scheduledStartAt;
-};
-
-const resolveAppOrigin = (): string =>
-  (
-    process.env.NEXT_PUBLIC_APP_URL ||
-    process.env.NEXT_PUBLIC_SITE_URL ||
-    process.env.BETTER_AUTH_BASE_URL ||
-    "https://conclave.acmvit.in"
-  ).replace(/\/$/, "");
-
 const fallbackTimeZone = (meeting: ScheduledMeeting): string => {
   const zone = meeting.attendeeTimeZone || "UTC";
   try {
@@ -73,46 +48,6 @@ const fallbackTimeZone = (meeting: ScheduledMeeting): string => {
   } catch {
     return "UTC";
   }
-};
-
-const resolveProfile = (
-  state: SfuState,
-  meeting: ScheduledMeeting,
-  eventType: SchedulingEventType | null,
-): SchedulingProfile => {
-  const byEventType = eventType
-    ? state.scheduling.profilesById.get(eventType.profileId)
-    : null;
-  if (byEventType) return byEventType;
-  const hostEmail = meeting.hostEmail.trim().toLowerCase();
-  const hostProfiles = Array.from(state.scheduling.profilesById.values()).filter(
-    (profile) => profile.email.trim().toLowerCase() === hostEmail,
-  );
-  const byHost =
-    hostProfiles.find((profile) => profile.clientId === meeting.clientId) ??
-    hostProfiles.find((profile) =>
-      clientNamespaceIncludes(profile.clientId, meeting.clientId),
-    );
-  if (byHost) return byHost;
-  return {
-    id: `meeting-host:${meeting.id}`,
-    clientId: meeting.clientId,
-    userId: meeting.hostUserId || meeting.hostEmail,
-    email: meeting.hostEmail,
-    name: meeting.hostName || "Host",
-    username: meeting.hostEmail.split("@")[0] || "host",
-    timeZone: fallbackTimeZone(meeting),
-    createdAt: meeting.createdAt,
-    updatedAt: meeting.updatedAt,
-  };
-};
-
-const resolveEventType = (
-  state: SfuState,
-  meeting: ScheduledMeeting,
-): SchedulingEventType | null => {
-  if (!meeting.eventTypeId) return null;
-  return state.scheduling.eventTypesById.get(meeting.eventTypeId) ?? null;
 };
 
 const fallbackEventType = (
@@ -140,121 +75,68 @@ const fallbackEventType = (
   updatedAt: meeting.updatedAt,
 });
 
-const persistMeetingChange = async (
-  state: SfuState,
-  meeting: ScheduledMeeting,
-): Promise<void> => {
-  if (!state.scheduledMeetingPersistence) return;
-  await persistScheduledMeetingChanges(
-    state.scheduledMeetings,
-    state.scheduledMeetingPersistence,
-    [meeting],
-  );
-};
-
-const claimReminderForMeeting = async (
-  state: SfuState,
-  meeting: ScheduledMeeting,
-  now: number,
-  leadMs: number,
-): Promise<ScheduledMeeting | null> => {
-  if (state.scheduledMeetingPersistence?.claimEmailReminder) {
-    const claimed = await state.scheduledMeetingPersistence.claimEmailReminder({
-      meetingId: meeting.id,
-      now,
-      leadMs,
-    });
-    if (!claimed) return null;
-    const local = state.scheduledMeetings.byId.get(claimed.id);
-    if (local) {
-      Object.assign(local, claimed);
-      return local;
-    }
-    state.scheduledMeetings.byId.set(claimed.id, claimed);
-    state.scheduledMeetings.byRoomCode.set(
-      `${claimed.clientId}:${claimed.roomCode}`,
-      claimed.id,
-    );
-    return claimed;
-  }
-
-  const pending = updateScheduledMeeting(state.scheduledMeetings, meeting.id, {
-    emailReminderStatus: "pending",
-    emailReminderError: null,
-    emailReminderSentAt: null,
-  });
-  await persistMeetingChange(state, pending);
-  return pending;
-};
+const fallbackProfile = (meeting: ScheduledMeeting): SchedulingProfile => ({
+  id: `meeting-host:${meeting.id}`,
+  clientId: meeting.clientId,
+  userId: meeting.hostUserId || meeting.hostEmail,
+  email: meeting.hostEmail,
+  name: meeting.hostName || "Host",
+  username: meeting.hostEmail.split("@")[0] || "host",
+  timeZone: fallbackTimeZone(meeting),
+  createdAt: meeting.createdAt,
+  updatedAt: meeting.updatedAt,
+});
 
 const sendReminderForMeeting = async (
   state: SfuState,
   meeting: ScheduledMeeting,
-  now: number,
   leadMs: number,
 ): Promise<ScheduledMeeting | null> => {
-  const pending = await claimReminderForMeeting(state, meeting, now, leadMs);
-  if (!pending) return null;
-
-  const eventType = resolveEventType(state, pending);
-  const profile = resolveProfile(state, pending, eventType);
-  const result = await sendSchedulingReminderEmails({
-    profile,
-    eventType: eventType ?? fallbackEventType(pending, profile),
-    meeting: pending,
-    appOrigin: resolveAppOrigin(),
-  });
-  const updated = updateScheduledMeeting(state.scheduledMeetings, pending.id, {
-    emailReminderStatus: result.status,
-    emailReminderError: result.error,
-    emailReminderSentAt: result.sentAt,
-  });
-  await persistMeetingChange(state, updated);
-  return updated;
+  const claim = await state.controlPlane.commit(claimDueReminder(meeting.id, leadMs));
+  if (!claim.ok) return null;
+  const pending = claim.value;
+  let result: SchedulingEmailDeliveryResult;
+  try {
+    const context = await state.controlPlane.read(reminderContext(pending));
+    const profile = context.profile ?? fallbackProfile(pending);
+    result = await sendSchedulingReminderEmails({
+      profile,
+      eventType: context.eventType ?? fallbackEventType(pending, profile),
+      meeting: pending,
+      appOrigin: defaultAppOrigin(),
+    });
+  } catch (error) {
+    Logger.warn("Failed to send scheduling reminder", error);
+    result = {
+      status: "failed",
+      error: (error as Error).message || "Scheduling reminder email failed.",
+      sentAt: null,
+    };
+  }
+  const recorded = await commitFollowUp(
+    state.controlPlane,
+    `reminder result for ${pending.id}`,
+    recordReminderResult(pending.id, result),
+  );
+  return recorded?.ok ? recorded.value : null;
 };
 
 export const sendDueSchedulingEmailReminders = async (
   state: SfuState,
-  now = Date.now(),
 ): Promise<ScheduledMeeting[]> => {
-  if (scanRunning || !isSchedulingEmailConfigured()) return [];
+  if (state.reminderScanRunning || !isSchedulingEmailConfigured()) return [];
   const leadMs = resolveSchedulingReminderLeadMs();
   if (leadMs <= 0) return [];
-
-  scanRunning = true;
-  const changed: ScheduledMeeting[] = [];
+  state.reminderScanRunning = true;
   try {
-    const dueMeetings = Array.from(state.scheduledMeetings.byId.values()).filter(
-      (meeting) =>
-        !reminderInFlight.has(meeting.id) &&
-        shouldSendSchedulingReminder(meeting, now, leadMs),
-    );
-
-    for (const meeting of dueMeetings) {
-      reminderInFlight.add(meeting.id);
-      try {
-        const updated = await sendReminderForMeeting(state, meeting, now, leadMs);
-        if (updated) changed.push(updated);
-      } catch (error) {
-        Logger.warn("Failed to send scheduling reminder", error);
-        try {
-          const failed = updateScheduledMeeting(state.scheduledMeetings, meeting.id, {
-            emailReminderStatus: "failed",
-            emailReminderError:
-              (error as Error).message || "Scheduling reminder email failed.",
-            emailReminderSentAt: null,
-          });
-          await persistMeetingChange(state, failed);
-          changed.push(failed);
-        } catch (persistError) {
-          Logger.warn("Failed to persist scheduling reminder failure", persistError);
-        }
-      } finally {
-        reminderInFlight.delete(meeting.id);
-      }
+    const due = await state.controlPlane.read(dueReminderMeetings(leadMs));
+    const changed: ScheduledMeeting[] = [];
+    for (const meeting of due) {
+      const updated = await sendReminderForMeeting(state, meeting, leadMs);
+      if (updated) changed.push(updated);
     }
     return changed;
   } finally {
-    scanRunning = false;
+    state.reminderScanRunning = false;
   }
 };

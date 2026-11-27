@@ -5,7 +5,7 @@ const GROUP_LENGTHS = [3, 4, 3];
 
 // The same "abc-mnop-xyz" format the web uses for new meetings: 26^10
 // possible codes, so scheduled rooms cannot be found by guessing either.
-export const generateMeetingCode = (): string =>
+export const generateMeetingCode = (pick: (max: number) => number = randomInt): string =>
   GROUP_LENGTHS.map((length) =>
-    Array.from({ length }, () => LETTERS[randomInt(LETTERS.length)]).join(""),
+    Array.from({ length }, () => LETTERS[pick(LETTERS.length)]).join(""),
   ).join("-");

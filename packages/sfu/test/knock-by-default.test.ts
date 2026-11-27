@@ -8,11 +8,9 @@ import jwt from "jsonwebtoken";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Router, Worker } from "mediasoup/types";
 import type { Server as SocketIOServer, Socket } from "socket.io";
-import type { ScheduledMeeting } from "../types.js";
 import { Admin } from "../config/classes/Admin.js";
 import { Client } from "../config/classes/Client.js";
 import { config } from "../config/config.js";
-import { initScheduledMeetings } from "../server/init.js";
 import {
   createMemoryRoomRecoveryStore,
   type RoomRecoveryStore,
@@ -24,15 +22,12 @@ import {
   type RoomRegistry,
 } from "../server/roomRegistry.js";
 import { forceCloseRoom, renewRoomOwnerships } from "../server/rooms.js";
-import {
-  createScheduledMeeting,
-  createScheduledMeetingPersistence,
-  createScheduledMeetingStore,
-  isScheduledMeetingInvitee,
-  loadPersistedMeetings,
-  persistScheduledMeetingChanges,
-  type ScheduledMeetingPersistence,
-} from "../server/scheduledMeetings.js";
+import { createMeeting } from "../server/controlPlane/meetingCommands.js";
+import { bookingInvites, roomBooking } from "../server/controlPlane/inviteeCommands.js";
+import { createSqliteBackend } from "../server/controlPlane/backends/sqlite.js";
+import { createMemoryBackend } from "../server/controlPlane/backends/memory.js";
+import { controlPlaneStore, type ControlPlaneStore } from "../server/controlPlane/store.js";
+import { installInviteeStoreProbes, observeInviteeStore } from "./controlPlaneInviteeProbes.js";
 import { ROOM_LEASE_UNCONFIRMED_ERROR } from "@conclave/meeting-core/host-commands";
 import {
   isNonJoinToken,
@@ -72,29 +67,17 @@ const io = {
 // state built on the same two is the SFU after a restart.
 type Durable = {
   recovery: RoomRecoveryStore;
-  schedule: ScheduledMeetingPersistence;
+  schedule: ControlPlaneStore;
 };
-const makeDurable = (): Durable => {
-  let stored = "[]";
-  return {
-    recovery: createMemoryRoomRecoveryStore(),
-    schedule: {
-      save: (snapshot) => {
-        stored = JSON.stringify(snapshot);
-      },
-      load: () => JSON.parse(stored) as ScheduledMeeting[],
-      loadOne: (id) =>
-        (JSON.parse(stored) as ScheduledMeeting[]).find((meeting) => meeting.id === id) ??
-        null,
-    },
-  };
-};
+const makeDurable = (): Durable => ({
+  recovery: createMemoryRoomRecoveryStore(),
+  schedule: controlPlaneStore(createMemoryBackend()),
+});
 const durableOf = new WeakMap<SfuState, Durable>();
 const restart = async (before: SfuState): Promise<SfuState> => {
-  const durable = durableOf.get(before)!;
-  const after = makeState(durable);
-  await initScheduledMeetings(after, durable.schedule);
-  return after;
+  const durable = durableOf.get(before);
+  if (!durable) throw Error("No durable state registered for the SFU");
+  return makeState(durable);
 };
 
 const makeState = (
@@ -118,16 +101,15 @@ const makeState = (
   const state = createSfuState({
     roomRegistry,
     roomRecoveryStore: durable.recovery,
+    controlPlane: durable.schedule,
   });
   state.workers = [worker];
-  state.scheduledMeetingPersistence = durable.schedule;
   durableOf.set(state, durable);
   return state;
 };
 
-const schedule = (state: SfuState, attendeeEmail = "invitee@example.com") => {
-  createScheduledMeeting(
-    state.scheduledMeetings,
+const schedule = async (state: SfuState, attendeeEmail = "invitee@example.com") => {
+  const booked = await state.controlPlane.commit(createMeeting(
     {
       title: "Intro call",
       scheduledStartAt: Date.now(),
@@ -141,8 +123,8 @@ const schedule = (state: SfuState, attendeeEmail = "invitee@example.com") => {
       defaultHostEmail: "host@example.com",
       defaultHostUserId: null,
     },
-  );
-  void durableOf.get(state)!.schedule.save([...state.scheduledMeetings.byId.values()]);
+  ));
+  if (!booked.ok) throw Error(booked.message ?? booked.reason);
 };
 
 type JoinAck = {
@@ -235,6 +217,7 @@ const agent = { userId: "guest-agent-session-1", clientId: "conclave", sessionId
 const invitee = { userId: "user-2", email: "invitee@example.com", clientId: "conclave", sessionId: "i" };
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -292,22 +275,7 @@ describe("new meetings make people knock", () => {
 
   it("lets a scheduled meeting's invited attendee skip the knock", async () => {
     const state = makeState();
-    createScheduledMeeting(
-      state.scheduledMeetings,
-      {
-        title: "Intro call",
-        scheduledStartAt: Date.now(),
-        roomCode: "abc-mnop-xyz",
-        hostEmail: "host@example.com",
-        attendeeEmail: "Invitee@Example.com",
-      },
-      {
-        clientId: "conclave",
-        createdBy: "host@example.com",
-        defaultHostEmail: "host@example.com",
-        defaultHostUserId: null,
-      },
-    );
+    await schedule(state, "Invitee@Example.com");
     await join(state, host);
 
     const invited = await join(state, {
@@ -329,22 +297,7 @@ describe("new meetings make people knock", () => {
 
   it("keeps an invited attendee the host removed out until they are let in again", async () => {
     const state = makeState();
-    createScheduledMeeting(
-      state.scheduledMeetings,
-      {
-        title: "Intro call",
-        scheduledStartAt: Date.now(),
-        roomCode: "abc-mnop-xyz",
-        hostEmail: "host@example.com",
-        attendeeEmail: "invitee@example.com",
-      },
-      {
-        clientId: "conclave",
-        createdBy: "host@example.com",
-        defaultHostEmail: "host@example.com",
-        defaultHostUserId: null,
-      },
-    );
+    await schedule(state);
     const created = await join(state, host);
     const invitee = {
       userId: "user-2",
@@ -363,22 +316,7 @@ describe("new meetings make people knock", () => {
 
   it("makes an invited attendee knock once a host revokes their access", async () => {
     const state = makeState();
-    createScheduledMeeting(
-      state.scheduledMeetings,
-      {
-        title: "Intro call",
-        scheduledStartAt: Date.now(),
-        roomCode: "abc-mnop-xyz",
-        hostEmail: "host@example.com",
-        attendeeEmail: "invitee@example.com",
-      },
-      {
-        clientId: "conclave",
-        createdBy: "host@example.com",
-        defaultHostEmail: "host@example.com",
-        defaultHostUserId: null,
-      },
-    );
+    await schedule(state);
     const created = await join(state, host);
     const invitee = {
       userId: "user-2",
@@ -469,7 +407,7 @@ describe("a client whose rooms start unlocked and use the waiting room", () => {
   it("seats the person a booking invites, and keeps one a host removed waiting", async () => {
     useWaitingRoom();
     const state = makeState();
-    schedule(state);
+    await schedule(state);
     const hostJoin = await join(state, { ...host, email: "host@example.com", userId: "host@example.com" });
     expect(hostJoin.status).toBe("joined");
 
@@ -944,7 +882,7 @@ describe("who hosts a call the server lost", () => {
   const knockerAsking = { ...knocker, allowRoomCreation: true };
   const lostCall = async (options: { scheduled?: boolean } = {}) => {
     const before = makeState();
-    if (options.scheduled) schedule(before);
+    if (options.scheduled) await schedule(before);
     const hostJoin = await join(before, host);
     roomOf(before).restoreAdmission(guest.userId, undefined, { pastLock: true });
     const guestJoin = await join(before, guest);
@@ -1443,7 +1381,7 @@ describe("who hosts a call the server lost", () => {
 describe("an invited attendee the host removed, after a restart", () => {
   it("still has to be let in again, and is invited again once a host does", async () => {
     const before = makeState();
-    schedule(before);
+    await schedule(before);
     const created = await join(before, host);
     const invited = await join(before, invitee);
     expect(invited.status).toBe("joined");
@@ -1464,19 +1402,14 @@ describe("an invited attendee the host removed, after a restart", () => {
 
   it("is not counted as invited when the web asks who may see the headcount", async () => {
     const before = makeState();
-    schedule(before);
+    await schedule(before);
     const created = await join(before, host);
     await join(before, invitee);
     await send(created.peer, "kickUser", { userId: "invitee@example.com#i" });
 
     const after = await restart(before);
     expect(
-      isScheduledMeetingInvitee(
-        after.scheduledMeetings,
-        "conclave",
-        "abc-mnop-xyz",
-        "invitee@example.com",
-      ),
+      bookingInvites(await after.controlPlane.read(roomBooking("conclave", "abc-mnop-xyz")), "invitee@example.com"),
     ).toBe(false);
   });
 });
@@ -1563,7 +1496,7 @@ describe("the account a code belongs to", () => {
   it("hosts the scheduled meeting they booked even when an invitee opened it first", async () => {
     useClock();
     const state = makeState();
-    schedule(state);
+    await schedule(state);
     const attendee = await join(state, { ...invitee, allowRoomCreation: true });
     expect(attendee.context.currentClient).toBeInstanceOf(Admin);
 
@@ -1700,7 +1633,7 @@ describe("the account a code belongs to", () => {
   it("reopens the scheduled meeting they booked from a fresh tab", async () => {
     useClock();
     const state = makeState();
-    schedule(state);
+    await schedule(state);
     const back = await join(state, inAFreshTab(scheduledHost, "fresh-tab"));
     expect(back.status).toBe("joined");
     expect(back.context.currentClient).toBeInstanceOf(Admin);
@@ -1773,7 +1706,7 @@ describe("an invited attendee a host removed, once that meeting is over", () => 
       toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
     });
     const state = makeState();
-    schedule(state);
+    await schedule(state);
     const created = await join(state, host);
     const invited = await join(state, invitee);
     await send(created.peer, "kickUser", { userId: "invitee@example.com#i" });
@@ -1820,7 +1753,7 @@ describe("a meeting whose last participant leaves while someone is still knockin
       toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
     });
     const state = makeState();
-    schedule(state);
+    await schedule(state);
     const created = await join(state, host);
     const invited = await join(state, invitee);
     expect(invited.status).toBe("joined");
@@ -1991,7 +1924,7 @@ describe("a meeting whose last participant leaves while someone is still knockin
 
   // The knocker's tab asks again, and that join stops at the registry
   // until the test lets it go on.
-  const askAgainHeldAtTheRegistry = (
+  const askAgainHeldAtTheRegistry = async (
     state: SfuState,
     knocking: Awaited<ReturnType<typeof join>>,
   ) => {
@@ -2000,15 +1933,18 @@ describe("a meeting whose last participant leaves while someone is still knockin
     let goOn = () => {};
     const held = new Promise<void>((resolve) => (goOn = resolve));
     let heldOnce = false;
+    let signalReached = () => {};
+    const reached = new Promise<void>((resolve) => (signalReached = resolve));
     registry.getAssignment = async (channelId) => {
       if (!heldOnce) {
         heldOnce = true;
+        signalReached();
         await held;
       }
       return lookUp(channelId);
     };
     const reply = askAgain(knocking);
-    expect(heldOnce).toBe(true);
+    await reached;
     return { reply, goOn };
   };
   const knocksAskedOf = (member: Awaited<ReturnType<typeof join>>) =>
@@ -2018,7 +1954,7 @@ describe("a meeting whose last participant leaves while someone is still knockin
 
   it("takes a knocker whose retry was still being decided into the meeting that opened meanwhile", async () => {
     const { state, knocking } = await everyoneLeftButTheKnocker();
-    const retry = askAgainHeldAtTheRegistry(state, knocking);
+    const retry = await askAgainHeldAtTheRegistry(state, knocking);
 
     const reopened = await join(state, host);
     retry.goOn();
@@ -2035,7 +1971,7 @@ describe("a meeting whose last participant leaves while someone is still knockin
 
   it("seats a knocker the host let in while their retry was still being decided, with no second knock", async () => {
     const { state, knocking } = await everyoneLeftButTheKnocker();
-    const retry = askAgainHeldAtTheRegistry(state, knocking);
+    const retry = await askAgainHeldAtTheRegistry(state, knocking);
     const reopened = await join(state, host);
     expect(knocksShownTo(reopened)).toEqual([knocker.userId]);
     expect(await send(reopened.peer, "admitUser", { userId: knocker.userId })).toEqual({
@@ -2051,7 +1987,7 @@ describe("a meeting whose last participant leaves while someone is still knockin
 
   it("leaves a knocker's seat alone when a retry older than the join that seated them ends", async () => {
     const { state, knocking } = await everyoneLeftButTheKnocker();
-    const retry = askAgainHeldAtTheRegistry(state, knocking);
+    const retry = await askAgainHeldAtTheRegistry(state, knocking);
     const reopened = await join(state, host);
     expect(await send(reopened.peer, "admitUser", { userId: knocker.userId })).toEqual({
       success: true,
@@ -2072,7 +2008,7 @@ describe("a meeting whose last participant leaves while someone is still knockin
 
   it("does not knock again for a knocker the host turned away while their retry was still being decided", async () => {
     const { state, knocking } = await everyoneLeftButTheKnocker();
-    const retry = askAgainHeldAtTheRegistry(state, knocking);
+    const retry = await askAgainHeldAtTheRegistry(state, knocking);
     const reopened = await join(state, host);
     expect(await send(reopened.peer, "rejectUser", { userId: knocker.userId })).toEqual({
       success: true,
@@ -2184,34 +2120,11 @@ describe.skipIf(!redisServerPath)("knockers waiting on an SFU when the next meet
 
   it("refuses a write from an SFU whose lease Redis forgot once another SFU claimed the code", async () => {
     const dir = mkdtempSync(joinPath(tmpdir(), "fenced-schedule-"));
-    vi.stubEnv("SCHEDULED_MEETINGS_PERSISTENCE", "sqlite");
-    vi.stubEnv("SCHEDULED_MEETINGS_SQLITE_PATH", joinPath(dir, "conclave.sqlite"));
-    vi.stubEnv("SCHEDULED_MEETINGS_PATH", joinPath(dir, "scheduled-meetings.json"));
-    vi.stubEnv("SFU_PERSISTENCE_REDIS_URL", "");
+    const store = controlPlaneStore(createSqliteBackend(joinPath(dir, "conclave.sqlite")));
     try {
-      const booking = createScheduledMeetingStore();
-      const meeting = createScheduledMeeting(
-        booking,
-        {
-          title: "Intro call",
-          scheduledStartAt: Date.now(),
-          roomCode: "abc-mnop-xyz",
-          hostEmail: "host@example.com",
-          attendeeEmail: "invitee@example.com",
-        },
-        {
-          clientId: "conclave",
-          createdBy: "host@example.com",
-          defaultHostEmail: "host@example.com",
-          defaultHostUserId: null,
-        },
-      );
-      await persistScheduledMeetingChanges(booking, createScheduledMeetingPersistence(), [meeting]);
       const { a, b } = await twoSfus();
-      for (const sfu of [a, b]) {
-        sfu.scheduledMeetingPersistence = createScheduledMeetingPersistence();
-        await initScheduledMeetings(sfu, sfu.scheduledMeetingPersistence);
-      }
+      for (const sfu of [a, b]) sfu.controlPlane = store;
+      await schedule(a);
       const hostOnA = await join(a, { ...host, userId: "host@example.com", email: "host@example.com" });
       expect(hostOnA.status).toBe("joined");
       expect((await join(a, invitee)).status).toBe("joined");
@@ -2228,11 +2141,9 @@ describe.skipIf(!redisServerPath)("knockers waiting on an SFU when the next meet
       expect(await send(hostOnA.peer, "kickUser", { userId: "invitee@example.com#i" })).toEqual({
         error: ROOM_LEASE_UNCONFIRMED_ERROR,
       });
-      const later = createScheduledMeetingStore();
-      await loadPersistedMeetings(later, createScheduledMeetingPersistence());
-      expect(isScheduledMeetingInvitee(later, "conclave", "abc-mnop-xyz", "invitee@example.com")).toBe(true);
+      expect(bookingInvites(await store.read(roomBooking("conclave", "abc-mnop-xyz")), "invitee@example.com")).toBe(true);
     } finally {
-      vi.unstubAllEnvs();
+      await store.close();
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -2476,7 +2387,7 @@ describe("an invited attendee a host removed from a call the server lost", () =>
     });
     vi.setSystemTime(new Date("2026-11-22T08:00:00Z"));
     const before = makeState();
-    schedule(before);
+    await schedule(before);
     const created = await join(before, host);
     expect((await join(before, invitee)).status).toBe("joined");
     await send(created.peer, "kickUser", { userId: "invitee@example.com#i" });
@@ -2515,7 +2426,7 @@ describe("an invited attendee a host lets back in after a failover", () => {
     });
     vi.setSystemTime(new Date("2026-11-22T08:00:00Z"));
     const sfuA = makeState();
-    schedule(sfuA);
+    await schedule(sfuA);
     const sfuB = await restart(sfuA);
     const created = await join(sfuA, host);
     expect((await join(sfuA, invitee)).status).toBe("joined");
@@ -2523,10 +2434,10 @@ describe("an invited attendee a host lets back in after a failover", () => {
 
     // SFU A loses the call. SFU B's fresh read of the schedule finds nothing,
     // while the recovery record brings the removal back with the call.
-    sfuB.scheduledMeetingPersistence = {
-      ...sfuB.scheduledMeetingPersistence!,
-      loadOne: () => null,
-    };
+    installInviteeStoreProbes();
+    sfuB.controlPlane = observeInviteeStore(sfuB.controlPlane, {
+      beforeRead: () => { throw new Error("booking read unavailable"); },
+    });
     const hostBack = await join(sfuB, host);
     expect(hostBack.context.currentClient).toBeInstanceOf(Admin);
     expect((await join(sfuB, invitee)).status).toBe("waiting");
@@ -2546,9 +2457,8 @@ describe("an invited attendee removed on one SFU", () => {
     // before the removal.
     const shared = makeDurable();
     const sfuA = makeState(shared);
-    schedule(sfuA);
+    await schedule(sfuA);
     const sfuB = makeState(shared);
-    await initScheduledMeetings(sfuB, shared.schedule);
     const created = await join(sfuA, host);
     await join(sfuA, invitee);
     await send(created.peer, "kickUser", { userId: "invitee@example.com#i" });

@@ -53,13 +53,7 @@ while (( $# > 0 )); do
   shift
 done
 
-if [[ "$list" == "true" ]]; then
-  load_backup_config listing
-else
-  load_backup_config
-fi
-[[ -n "$pattern" ]] && REDIS_KEY_PATTERN="$pattern"
-wants() { [[ ",${only}," == *",$1,"* ]]; }
+load_backup_config
 
 if [[ "$list" == "true" ]]; then
   blob_list "monthly/"
@@ -105,6 +99,8 @@ if [[ "$apply" == "true" ]]; then
   [[ -n "$restore_owner" ]] && restore_args+=(--owner "$restore_owner")
 fi
 
+load_redis_source
+[[ -n "$pattern" ]] && REDIS_KEY_PATTERN="$pattern"
 REDIS_SOURCE_URL="$REDIS_SOURCE_URL" REDIS_KEY_PATTERN="$REDIS_KEY_PATTERN" \
   SFU_HEALTH_URLS="${CONCLAVE_SFU_HEALTH_URLS:-http://127.0.0.1:3031/health http://127.0.0.1:3032/health}" \
   python3 -I "${SCRIPT_DIR}/restore_state.py" "${restore_args[@]}"

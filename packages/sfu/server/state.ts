@@ -3,24 +3,11 @@ import { config as defaultConfig } from "../config/config.js";
 import { Room } from "../config/classes/Room.js";
 import type { NextMeetingLobby } from "./nextMeetingLobby.js";
 import type { WebinarLinkTarget, WebinarRoomConfig } from "./webinar.js";
-import {
-  createScheduledWebinarStore,
-  type ScheduledWebinarPersistence,
-  type ScheduledWebinarStore,
-} from "./scheduledWebinars.js";
-import {
-  createScheduledMeetingStore,
-  type ScheduledMeetingPersistence,
-  type ScheduledMeetingStore,
-} from "./scheduledMeetings.js";
-import {
-  createSchedulingStore,
-  type SchedulingPersistence,
-  type SchedulingStore,
-} from "./scheduling.js";
+import { createMemoryBackend } from "./controlPlane/backends/memory.js";
+import { controlPlaneStore, type ControlPlaneStore } from "./controlPlane/store.js";
 import type { LeasedRoom } from "./roomLease.js";
 import { createRoomRegistry, type RoomRegistry } from "./roomRegistry.js";
-import { createPersistenceFence, type PersistenceFence } from "./persistenceFence.js";
+import { createPersistenceFence, fenceControlPlane, type PersistenceFence } from "./persistenceFence.js";
 import {
   createMemoryRoomRecoveryStore,
   createRoomRecoveryLedger,
@@ -68,14 +55,12 @@ export type SfuState = {
   endedRooms: Map<string, EndedRoom>;
   webinarConfigs: Map<string, WebinarRoomConfig>;
   webinarLinks: Map<string, WebinarLinkTarget>;
-  scheduledWebinars: ScheduledWebinarStore;
-  scheduledWebinarPersistence: ScheduledWebinarPersistence | null;
-  scheduledWebinarTimer: NodeJS.Timeout | null;
-  scheduledMeetings: ScheduledMeetingStore;
-  scheduledMeetingPersistence: ScheduledMeetingPersistence | null;
-  scheduling: SchedulingStore;
-  schedulingPersistence: SchedulingPersistence | null;
+  controlPlane: ControlPlaneStore;
   persistenceFence: PersistenceFence;
+  googleAccessTokens: Map<string, { token: string; expiresAt: number }>;
+  scheduledWebinarTimer: NodeJS.Timeout | null;
+  reminderScanRunning: boolean;
+  calendarTasks: { draining: boolean; failed: number };
   roomRegistry: RoomRegistry;
   deferredRoomWrites: Map<string, DeferredRoomWrites>;
   roomCommitsInFlight: Map<string, Set<Promise<boolean>>>;
@@ -96,10 +81,12 @@ export const createSfuState = (options?: {
   appChangeStaging?: StagingBudget;
   roomRecoveryStore?: RoomRecoveryStore;
   appsAuthority?: AppsAuthorityRuntime | null;
+  controlPlane?: ControlPlaneStore;
   config?: typeof defaultConfig;
 }): SfuState => {
   const config = options?.config ?? defaultConfig;
   const workerPlan = planWorkers(config.workerSettings);
+  const persistenceFence = createPersistenceFence();
   return {
     workers: [],
     rooms: new Map(),
@@ -109,14 +96,12 @@ export const createSfuState = (options?: {
     endedRooms: new Map(),
     webinarConfigs: new Map(),
     webinarLinks: new Map(),
-    scheduledWebinars: createScheduledWebinarStore(),
-    scheduledWebinarPersistence: null,
+    controlPlane: fenceControlPlane(options?.controlPlane ?? controlPlaneStore(createMemoryBackend()), persistenceFence),
+    persistenceFence,
+    googleAccessTokens: new Map(),
     scheduledWebinarTimer: null,
-    scheduledMeetings: createScheduledMeetingStore(),
-    scheduledMeetingPersistence: null,
-    scheduling: createSchedulingStore(),
-    schedulingPersistence: null,
-    persistenceFence: createPersistenceFence(),
+    reminderScanRunning: false,
+    calendarTasks: { draining: false, failed: 0 },
     roomRegistry: options?.roomRegistry ?? createRoomRegistry(config),
     deferredRoomWrites: new Map(),
     roomCommitsInFlight: new Map(),

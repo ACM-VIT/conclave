@@ -208,10 +208,9 @@ def run_backup(tree, payload, archive):
     with open(os.path.join(payload, "MANIFEST"), "w") as handle:
         handle.write("created_at=property\n")
     os.environ["CONCLAVE_SQLITE_PATH"] = f"{tree.container}/{tree.configured}"
-    for variable in statelib.STORE_VARIABLES:
-        os.environ.pop(variable, None)
+    os.environ["CONTROL_PLANE_PERSISTENCE"] = "sqlite"
     backup_state.copy_command(tree.state, tree.container, payload)
-    backup_state.pack_command(tree.state, payload)
+    backup_state.pack_command(tree.state, tree.container, payload)
     if backup_state.validate_command(tree.state, tree.container, payload) != 0:
         raise statelib.Refused("validate refused the payload")
     stdout = sys.stdout

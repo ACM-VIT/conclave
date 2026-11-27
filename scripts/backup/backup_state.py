@@ -46,7 +46,6 @@ from statelib import (  # noqa: E402
     docker_containers,
     is_database_name,
     is_sfu,
-    configured_json_stores,
     json_coverage_problems,
     log,
     mount_roots,
@@ -55,6 +54,7 @@ from statelib import (  # noqa: E402
     overlay,
     redis_key_pattern,
     redis_key_prefix,
+    redis_revision_key,
     redis_source_url,
     sfu_redis_source,
     relative_target,
@@ -78,12 +78,12 @@ def open_state(state):
         raise Refused(f"cannot open the state dir {state}: {error.strerror}")
 
 
-def plan(state_fd, state, roots, configured):
+def plan(state_fd, state, roots, configured, json_paths=()):
     """The databases to copy, the links on their chains (relative), and each
     chain from its start to the database it reaches."""
     databases, link_starts = [], []
     for rel, info in walk(state_fd, state):
-        if not rel.endswith(".sqlite"):
+        if not rel.endswith(".sqlite") or rel in json_paths:
             continue
         if stat.S_ISREG(info.st_mode):
             databases.append(rel)
@@ -96,7 +96,7 @@ def plan(state_fd, state, roots, configured):
             passed, reached = resolve(tree, start, roots, visited=dirs)
         except Unresolved as unresolved:
             if start in configured and unresolved.missing:
-                raise Refused(f"the configured database {state}/{start} is missing (a store's own SQLite path, CONCLAVE_SQLITE_PATH, or the compose default conclave.sqlite): {unresolved}")
+                raise Refused(f"the configured database {state}/{start} is missing (CONCLAVE_SQLITE_PATH or the default conclave.sqlite): {unresolved}")
             raise Refused(f"{state}/{start} does not lead to a file inside the state dir: {unresolved}")
         chains.append((start, reached))
         databases.append(reached)
@@ -224,8 +224,10 @@ def copy_command(state, container, payload):
     _, state_fd = open_state(state)
     try:
         roots = mount_roots(state, container)
-        configured = [store["rel"] for store in configured_stores(state, container, state_mounts(docker_containers(), state))]
-        databases, links, chains, dirs = plan(state_fd, state, roots, configured)
+        containers = state_mounts(docker_containers(), state)
+        configured = [store["rel"] for store in configured_stores(state, container, containers, "sqlite")]
+        json_paths = [store["rel"] for store in configured_stores(state, container, containers, "json")]
+        databases, links, chains, dirs = plan(state_fd, state, roots, configured, json_paths)
         write_lines(os.path.join(payload, "sqlite-databases"), databases)
         write_lines(os.path.join(payload, "sqlite-links"), [f"{link}\t{target}" for link, target in links])
         write_lines(os.path.join(payload, "sqlite-chains"), [f"{start}\t{reached}" for start, reached in chains])
@@ -254,21 +256,23 @@ def preflight_command(state, container, local_dir):
         if within(local, real) or within(real, local):
             raise Refused(f"BACKUP_LOCAL_DIR ({local_dir}) and the state dir ({state}) overlap; keep the archives outside the state dir")
         containers = state_mounts(docker_containers(), state)
-        configured = [store["rel"] for store in configured_stores(state, container, containers)]
-        configured_json_stores(state, container, containers)
-        plan(state_fd, state, mount_roots(state, container), configured)
+        configured = [store["rel"] for store in configured_stores(state, container, containers, "sqlite")]
+        json_paths = [store["rel"] for store in configured_stores(state, container, containers, "json")]
+        plan(state_fd, state, mount_roots(state, container), configured, json_paths)
     finally:
         os.close(state_fd)
 
 
-def pack_command(state, payload):
+def pack_command(state, container, payload):
     """The state dir's other files as a tar: files and directories only, a
     hard link stored as a whole file, and every database, recorded link,
     chain start and SQLite side file left out. Any other link or special file
     is left out and logged. Each file is opened without following and checked
     to be the entry listed."""
     archive = Archive(payload)
-    skip = database_paths(archive) | side_files(database_files(archive))
+    json_paths = {store["rel"] for store in configured_stores(
+        state, container, state_mounts(docker_containers(), state), "json")}
+    skip = database_paths(archive) | side_files(database_files(archive)) | {path + ".lock" for path in json_paths}
     real, state_fd = open_state(state)
     try:
         with tarfile.open(os.path.join(payload, "state-files.tar"), "w", format=tarfile.PAX_FORMAT) as tar:
@@ -278,7 +282,7 @@ def pack_command(state, payload):
                     member.type, member.mode, member.mtime = tarfile.DIRTYPE, info.st_mode & 0o7777, int(info.st_mtime)
                     tar.addfile(member)
                     continue
-                if rel in skip or is_database_name(rel):
+                if rel in skip or (is_database_name(rel) and rel not in json_paths):
                     continue
                 if not stat.S_ISREG(info.st_mode):
                     log(f"Left out {state}/{rel}: only files, directories and the database links are backed up")
@@ -312,6 +316,9 @@ def validate_command(state, container, payload):
         problems = chain_problems(overlay(None, archive, restore_writes(archive)), archive, roots)
     if not problems:
         problems = json_coverage_problems(archive, state, container)
+    if not problems and archive.has_redis:
+        from restore_state import validate_redis_snapshot
+        validate_redis_snapshot(archive)
     for problem in problems:
         print(problem, file=sys.stderr)
     return 1 if problems else 0
@@ -441,9 +448,11 @@ def main(argv):
         elif command == "containers":
             containers_command(*args)
         elif command == "redis-source" and args:
-            print(sfu_redis_source(os.environ, state_mounts(docker_containers(), args[0]), bool(os.environ.get("BACKUP_REDIS_PATTERN"))))
+            print(sfu_redis_source(os.environ, state_mounts(docker_containers(), args[0])))
         elif command == "redis-source":
             print(redis_source_url(os.environ))
+        elif command == "redis-revision-key":
+            print(redis_revision_key(os.environ))
         elif command == "redis-prefix":
             print(redis_key_prefix(os.environ))
         elif command == "redis-pattern":

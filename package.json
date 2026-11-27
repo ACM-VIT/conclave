@@ -53,6 +53,7 @@
     "check:native-test-stores": "node scripts/check-native-test-stores.mjs",
     "check:json-store-fixtures": "pnpm -C packages/sfu exec tsx scripts/write-staging-rollback-fixtures.ts --check",
     "generate:json-store-fixtures": "pnpm -C packages/sfu exec tsx scripts/write-staging-rollback-fixtures.ts",
+    "generate:legacy-store-fixtures": "pnpm -C packages/sfu exec tsx scripts/write-staging-legacy-fixtures.ts",
     "test:native-test-stores": "node --test scripts/check-native-test-stores.test.mjs",
     "check:native-emoji": "node scripts/gen-native-emoji-shortcodes.mjs --check",
     "check:native-game-fixtures": "pnpm -C packages/sfu exec tsx scripts/capture-long-shot-fixtures.ts --check && pnpm -C packages/sfu exec tsx scripts/capture-wordle-native-fixtures.ts --check",

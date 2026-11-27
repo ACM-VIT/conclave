@@ -45,32 +45,56 @@ when SQLite was locked. Before it replaces such a container, the deploy copies
 any of those files onto the volume as a new archive,
 `CONCLAVE_FALLBACK_IMPORT_DIR/<service>/<UTC time>-<deploy id>/`, owned by the
 SFU user and readable only by it, so they survive the replacement. No deploy
-replaces or deletes an archive an earlier deploy saved. A store set to JSON with
-`SCHEDULING_PERSISTENCE`, `SCHEDULED_MEETINGS_PERSISTENCE` or
-`SCHEDULED_WEBINARS_PERSISTENCE` combines its own file with every archive it has
-not adopted yet, oldest first, record by record, and renames each adopted copy
-with a `.adopted` suffix. The newer update of a record wins. It refuses to
-start, naming the records, when two sources changed one record differently at
-the same update time or when two records claim the same unique key, and it
-refuses with the fix when it cannot open a folder of saved copies. Hidden
-staging folders from a transfer still in progress, or one that failed, are never
-read. Stores on SQLite do not import the archives; that import moves to a
-follow-up with the multi-SFU persistence work.
+replaces or deletes an archive an earlier deploy saved. The next start claims
+each copy by renaming it to `<name>.claimed-<ticket>-<n>`, replays each old
+container's copies in order into the control-plane store in every mode (see
+below), so a record the container deleted between two copies stays deleted,
+and renames exactly the bytes it imported with an `.adopted` suffix. Hidden
+staging folders from a transfer still in progress, or one that failed, are
+never read. It refuses to start if a calendar token cannot be decrypted with
+this SFU's secret, and refuses with the fix when it cannot open a folder of
+saved copies.
 
 To upgrade an existing host, run `git pull` to the reviewed revision first,
 then run the new `scripts/deploy-sfu.sh`. Do not start the upgrade with the
 deploy script already on the host: it pulls the new revision and then keeps
 running its own old commands, which skip the ownership step.
 
-Both SFUs keep scheduled meetings, webinars and scheduling records in one
-SQLite file on the recordings volume. At startup each store proves it can
-write that file and its directory with a rolled-back test transaction. If it
-cannot, or SQLite will not open, a production SFU exits before it reports
-healthy, instead of accepting saves it cannot keep or falling back to a JSON
-copy that the other instance would overwrite and SQLite would never import
-back. A permission failure names the ownership step above. The container
-restart then retries. Set `SCHEDULING_PERSISTENCE`, `SCHEDULED_MEETINGS_PERSISTENCE`
-or `SCHEDULED_WEBINARS_PERSISTENCE` to `json` only for a single instance.
+Scheduling profiles, availability, event types, calendar connections,
+scheduled meetings and scheduled webinars live in one control-plane store that
+both SFUs share (ADR 0024). Every change is one atomic command against that
+store, and every read goes to it, so an SFU never answers from a stale copy.
+The store is Redis when a Redis URL is configured, and otherwise SQLite on the
+recordings volume. Set `CONTROL_PLANE_PERSISTENCE` to `redis`, `sqlite` or
+`json` to choose explicitly. JSON serves a single SFU only: it holds a lock
+file next to `CONTROL_PLANE_JSON_PATH`, and a second SFU refuses to start on
+it. The per-store `SCHEDULING_PERSISTENCE`, `SCHEDULED_MEETINGS_PERSISTENCE`
+and `SCHEDULED_WEBINARS_PERSISTENCE` still work when all three agree; mixed
+values stop startup with a message naming `CONTROL_PLANE_PERSISTENCE`.
+
+Every start also reads the previous release's stores and follows what an old
+SFU still running during a deploy created, edited or deleted there, unless the
+same record was changed here since its import; then this store's version stays
+and a warning names the record. An SFU whose import another SFU superseded
+waits for that import to finish before it serves, and stops after
+`CONTROL_PLANE_LEGACY_IMPORT_WAIT_MS` (120 s by default) if it never does.
+
+A SQLite commit waits at most 1 s for another SFU's write lock, then answers
+503. The bound is a store option (`openControlPlane(config, {
+sqliteCommitWaitMs })`) that tests shorten, not a deployment setting.
+
+At startup the SQLite store proves it can write its file and directory with a
+rolled-back test transaction. If it cannot, or SQLite will not open, a
+production SFU exits before it reports healthy instead of accepting saves it
+cannot keep. A permission failure names the ownership step above, and the
+container restart retries.
+
+Each start copies data from the stores of earlier releases into the shared
+store, inserting only records it does not have and never one that was deleted
+(the old Redis hashes in Redis mode, else the old SQLite tables, else the old
+JSON files; webinars come from SQLite or JSON). The old data stays where it is,
+so a rollback still finds it, but changes made after the upgrade are not
+copied back.
 
 ## To apply in production
 

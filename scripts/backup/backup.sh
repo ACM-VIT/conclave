@@ -78,6 +78,7 @@ state_py() {
 # deploy could start an SFU between the copies.
 take_backup_lock
 take_sfu_host_lock
+load_redis_source
 # Nothing to back up is a failure, never an empty success.
 [[ -d "$STATE_DIR" ]] || die "the state dir ${STATE_DIR} does not exist, so there is nothing to back up; check CONCLAVE_STATE_DIR"
 
@@ -95,10 +96,7 @@ manifest="${payload}/MANIFEST"
   [[ -n "${CONCLAVE_REPO:-}" ]] && echo "repo_commit=$(git -C "$CONCLAVE_REPO" rev-parse HEAD 2>/dev/null || echo unknown)"
 } > "$manifest"
 
-# Settled before the fence: every database a store opens (its own SQLite
-# path, CONCLAVE_SQLITE_PATH or the compose default, as this host's config
-# and each SFU container's env set them) is inside the state dir, exists, and
-# leads to a regular file there.
+# Refuse configured stores outside the volume before holding SFU writes.
 state_py preflight "$STATE_DIR" "$CONTAINER_STATE_DIR" "$BACKUP_LOCAL_DIR" || die "nothing was archived"
 
 # One point in time for SQLite and Redis: every SFU holds its durable writes
@@ -180,6 +178,10 @@ if [[ -n "$REDIS_SOURCE_URL" ]]; then
   command -v redis-cli >/dev/null || die "redis-cli is not installed"
   mkdir -p "${payload}/redis"
   parse_redis_url "$REDIS_SOURCE_URL"
+  revision_key="$(state_py redis-revision-key)"
+  revision="$(redis_cli --raw GET "$revision_key")"
+  [[ "$revision" =~ ^[1-9][0-9]*$ ]] ||
+    die "the Redis control-plane store revision is missing from the configured Redis database; nothing was archived"
   log "Redis snapshot from ${REDIS_HOST}:${REDIS_PORT}"
   redis_cli --rdb "${payload}/redis/dump.rdb" >/dev/null
   printf '%s\n' "$REDIS_DB" > "${payload}/redis/database"
@@ -194,6 +196,7 @@ if [[ -n "$REDIS_SOURCE_URL" ]]; then
   fi
   {
     echo "redis.version=$(redis_cli INFO server | sed -nE 's/^redis_version:([^[:space:]]+).*/\1/p')"
+    printf 'redis.control_plane_revision=%s\n' "$revision"
     echo "redis.pattern=${REDIS_KEY_PATTERN}"
     echo "redis.keys=$(redis_cli --scan --pattern "$REDIS_KEY_PATTERN" | wc -l | tr -d ' ')"
   } >> "$manifest"
@@ -208,7 +211,7 @@ fi
 # directories only, a hard link stored whole, and any other link or special
 # file left out. Every database, recorded link and SQLite side file is left
 # out by its path.
-state_py pack "$STATE_DIR" "$payload" || die "could not archive the other files in ${STATE_DIR}; nothing was archived"
+state_py pack "$STATE_DIR" "$CONTAINER_STATE_DIR" "$payload" || die "could not archive the other files in ${STATE_DIR}; nothing was archived"
 
 renew_fences
 if (( ${#fenced[@]} > 0 )); then

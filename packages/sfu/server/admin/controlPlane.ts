@@ -12,8 +12,10 @@ import type { AdmissionScope } from "../../config/classes/AdmissionLedger.js";
 import type { HostBasis, Room, SettledWaitingRequest, WaitingRequest } from "../../config/classes/Room.js";
 import type { AppsAwarenessData } from "../../types.js";
 import { isGuestUserKey } from "../identity.js";
-import { cleanupRoom, forceCloseRoom, getRoomChannelId, markRoomEnded } from "../rooms.js";
-import { getScheduledWebinarForRoom, hasWebinarEnded, isWithinEarlyEntryWindow } from "../scheduledWebinars.js";
+import { cleanupRoom, forceCloseRoom, getRoomChannelId, markRoomEnded, withDeadline } from "../rooms.js";
+import { holdsRoomLease } from "../roomLease.js";
+import { hasWebinarEnded, isWithinEarlyEntryWindow } from "../scheduledWebinars.js";
+import { webinarForRoom } from "../controlPlane/webinarCommands.js";
 import type { SfuState } from "../state.js";
 import {
   emitWebinarAttendeeCountChanged,
@@ -279,8 +281,14 @@ export const ensureHost = (
     const promoted = promoteNextAdmin(room);
     if (!promoted) {
       tellWaitingNoHost(room);
+      const needsHost = () => state.rooms.get(room.channelId) === room &&
+        !room.isHandingOff && room.recordsItsCall && !room.hasActiveAdmin();
       const checkForHost = () => {
-        if (state.rooms.get(room.channelId) !== room || room.hasActiveAdmin()) return;
+        if (!needsHost()) return;
+        if (!holdsRoomLease(state, room)) {
+          room.startCleanupTimer(checkForHost);
+          return;
+        }
         if (room.isEmpty()) {
           cleanupRoom(state, room);
           return;
@@ -297,18 +305,38 @@ export const ensureHost = (
           });
           return;
         }
-        const webinar = getScheduledWebinarForRoom(state.scheduledWebinars, room.clientId, room.id);
-        const now = Date.now();
-        if (
-          room.getWebinarAttendeeCount() > 0 &&
-          webinar &&
-          !hasWebinarEnded(webinar, now) &&
-          (webinar.status === "live" || isWithinEarlyEntryWindow(webinar, now))
-        ) {
-          room.startCleanupTimer(checkForHost);
+        if (room.getWebinarAttendeeCount() === 0) {
+          endForNoHost(io, state, room);
           return;
         }
-        endForNoHost(io, state, room);
+        runDetached("Checking the webinar audience", async () => {
+          const generation = room.ownershipGeneration;
+          const webinar = await withDeadline(
+            state.controlPlane.read(webinarForRoom(room.clientId, room.id)).catch(() => undefined),
+            undefined,
+            1_000,
+          );
+          if (!needsHost() || room.cleanupDeadline !== null) return;
+          if (webinar === undefined || room.ownershipGeneration !== generation || !holdsRoomLease(state, room)) {
+            room.startCleanupTimer(checkForHost);
+            return;
+          }
+          if (room.isEmpty()) {
+            cleanupRoom(state, room);
+            return;
+          }
+          const now = Date.now();
+          if (
+            room.getWebinarAttendeeCount() > 0 &&
+            webinar &&
+            !hasWebinarEnded(webinar, now) &&
+            (webinar.status === "live" || isWithinEarlyEntryWindow(webinar, now))
+          ) {
+            room.startCleanupTimer(checkForHost);
+            return;
+          }
+          endForNoHost(io, state, room);
+        });
       };
       room.startCleanupTimer(checkForHost);
     }

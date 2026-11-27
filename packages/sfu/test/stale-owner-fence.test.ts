@@ -12,7 +12,6 @@ import {
 } from "@conclave/meeting-core/host-commands";
 import { Admin } from "../config/classes/Admin.js";
 import { config } from "../config/config.js";
-import { initScheduledMeetings } from "../server/init.js";
 import {
   createMemoryRoomRecoveryStore,
   createRoomRecoveryLedger,
@@ -27,15 +26,11 @@ import type {
   RoomRegistry,
 } from "../server/roomRegistry.js";
 import { forceCloseRoom, renewRoomOwnerships, ROOM_WRITE_COMMIT_MS } from "../server/rooms.js";
-import {
-  createScheduledMeeting,
-  createScheduledMeetingPersistence,
-  createScheduledMeetingStore,
-  isScheduledMeetingInvitee,
-  loadPersistedMeetings,
-  persistScheduledMeetingChanges,
-  type ScheduledMeetingPersistence,
-} from "../server/scheduledMeetings.js";
+import { createMeeting } from "../server/controlPlane/meetingCommands.js";
+import { bookingInvites, roomBooking, updateRoomInvitation } from "../server/controlPlane/inviteeCommands.js";
+import { createSqliteBackend } from "../server/controlPlane/backends/sqlite.js";
+import { controlPlaneStore, type ControlPlaneStore } from "../server/controlPlane/store.js";
+import { installInviteeStoreProbes, observeInviteeStore } from "./controlPlaneInviteeProbes.js";
 import { forceDrainRooms } from "../server/serverShutdown.js";
 import type { SfuAuthPayload } from "../server/socket/auth.js";
 import { createConnectionContext, setSocketContext } from "../server/socket/context.js";
@@ -147,7 +142,7 @@ const io = {
 
 const startSfu = async (
   registry: RoomRegistry,
-  options: { recovery?: RoomRecoveryStore; persistence?: ScheduledMeetingPersistence } = {},
+  options: { recovery?: RoomRecoveryStore; persistence?: ControlPlaneStore } = {},
 ): Promise<SfuState> => {
   const makeRouter = async () =>
     ({
@@ -158,9 +153,9 @@ const startSfu = async (
   const state = createSfuState({
     roomRegistry: registry,
     roomRecoveryStore: options.recovery ?? createMemoryRoomRecoveryStore(),
+    controlPlane: options.persistence ?? openSchedule(),
   });
   state.workers = [{ pid: 1, closed: false, createRouter: vi.fn(makeRouter) } as unknown as Worker];
-  await initScheduledMeetings(state, options.persistence ?? createScheduledMeetingPersistence());
   return state;
 };
 
@@ -211,7 +206,18 @@ const join = async (state: SfuState, user: SfuAuthPayload, payload: Record<strin
 };
 
 const dirs: string[] = [];
-afterEach(() => {
+const stores: ControlPlaneStore[] = [];
+let schedulePath: string | undefined;
+const openSchedule = () => {
+  if (!schedulePath) return undefined;
+  const store = controlPlaneStore(createSqliteBackend(schedulePath));
+  stores.push(store);
+  return store;
+};
+
+afterEach(async () => {
+  for (const store of stores.splice(0)) await store.close();
+  schedulePath = undefined;
   vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllEnvs();
@@ -221,20 +227,15 @@ afterEach(() => {
 const useSharedSchedule = () => {
   const dir = mkdtempSync(joinPath(tmpdir(), "stale-owner-"));
   dirs.push(dir);
-  vi.stubEnv("SCHEDULED_MEETINGS_PERSISTENCE", "sqlite");
-  vi.stubEnv("SCHEDULED_MEETINGS_SQLITE_PATH", joinPath(dir, "conclave.sqlite"));
-  vi.stubEnv("SCHEDULED_MEETINGS_PATH", joinPath(dir, "scheduled-meetings.json"));
-  vi.stubEnv("REDIS_URL", "");
-  vi.stubEnv("SFU_REDIS_URL", "");
-  vi.stubEnv("SFU_PERSISTENCE_REDIS_URL", "");
+  schedulePath = joinPath(dir, "conclave.sqlite");
+  installInviteeStoreProbes();
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
   vi.setSystemTime(new Date("2026-11-25T09:00:00Z"));
 };
 
 const book = async () => {
-  const booking = createScheduledMeetingStore();
-  const meeting = createScheduledMeeting(
-    booking,
+  const store = openSchedule()!;
+  const result = await store.commit(createMeeting(
     {
       title: "Intro call",
       scheduledStartAt: Date.now(),
@@ -248,14 +249,12 @@ const book = async () => {
       defaultHostEmail: "host@example.com",
       defaultHostUserId: null,
     },
-  );
-  await persistScheduledMeetingChanges(booking, createScheduledMeetingPersistence(), [meeting]);
+  ));
+  expect(result).toMatchObject({ ok: true });
 };
 
 const inviteeIsInvited = async () => {
-  const later = createScheduledMeetingStore();
-  await loadPersistedMeetings(later, createScheduledMeetingPersistence());
-  return isScheduledMeetingInvitee(later, "conclave", CODE, INVITEE);
+  return bookingInvites(await openSchedule()!.read(roomBooking("conclave", CODE)), INVITEE);
 };
 
 const settle = () => vi.advanceTimersByTimeAsync(10);
@@ -394,6 +393,75 @@ describe("what an SFU writes for a room, by the state of the room's lease", () =
       });
     }
   }
+});
+
+describe("overlapping changes to a scheduled invitation", () => {
+  it.each([
+    "commit removal first", "commit admission first", "failed removal commit", "failed removal read", "stalled removal read",
+  ] as const)(
+    "keeps later admission after a future timestamp when actions overlap (%s)",
+    async (delivery) => {
+      useSharedSchedule();
+      await book();
+      const store = openSchedule()!;
+      const booking = await store.read(roomBooking("conclave", CODE));
+      if (!booking) throw Error("Missing booking");
+      expect(await store.commit(updateRoomInvitation(booking.meeting, {
+        kind: "decide", email: INVITEE, removed: false, at: Date.now() + 3_600_000,
+      }))).toMatchObject({ ok: true });
+
+      let resume!: () => void;
+      const paused = new Promise<void>((resolve) => { resume = resolve; });
+      let admit!: () => void;
+      const admissionPaused = new Promise<void>((resolve) => { admit = resolve; });
+      let decisions = 0;
+      const persistence = observeInviteeStore(store, {
+        beforeCommit: async (kind) => {
+          if (kind !== "decide") return;
+          decisions += 1;
+          if (decisions === 2 && delivery === "commit removal first") await admissionPaused;
+          if (decisions !== 1 || delivery.endsWith("read")) return;
+          await paused;
+          if (delivery === "failed removal commit") throw new Error("Injected commit failure");
+        },
+      });
+      const state = await startSfu(sharedLeases().forInstance("sfu-a"), { persistence });
+      const organizer = await join(state, host("a"));
+      expect((await join(state, invitee)).status).toBe("joined");
+      if (delivery === "failed removal read") {
+        vi.spyOn(state.controlPlane, "read").mockRejectedValueOnce(new Error("Injected read failure"));
+      } else if (delivery === "stalled removal read") {
+        const read = state.controlPlane.read.bind(state.controlPlane);
+        vi.spyOn(state.controlPlane, "read").mockImplementationOnce(async (query) => {
+          const result = await read(query);
+          await paused;
+          return result;
+        });
+      }
+
+      const removal = organizer.send("kickUser", { userId: INVITEE_SEAT });
+      await settle();
+      expect((await join(state, invitee)).status).toBe("waiting");
+      const admission = organizer.send("admitUser", { userId: INVITEE });
+      await settle();
+      if (delivery === "commit removal first") {
+        resume();
+        expect(await removal).toEqual({ success: true });
+        expect(await inviteeIsInvited()).toBe(false);
+        admit();
+      } else {
+        if (delivery === "stalled removal read") await vi.advanceTimersByTimeAsync(1_001);
+        expect(await admission).toEqual({ success: true });
+        resume();
+      }
+      await settle();
+      expect(await removal).toEqual(delivery.startsWith("failed") || delivery === "stalled removal read"
+        ? { error: ROOM_LEASE_UNCONFIRMED_ERROR }
+        : { success: true });
+      expect(await admission).toEqual({ success: true });
+      expect(await inviteeIsInvited()).toBe(true);
+    },
+  );
 });
 
 describe("an SFU that lost a room's lease while it was paused", () => {
@@ -535,17 +603,17 @@ describe("an SFU that lost a room's lease while it was paused", () => {
     useSharedSchedule();
     await book();
     const leases = sharedLeases();
-    const persistenceA = createScheduledMeetingPersistence();
-    const decide = persistenceA.setInviteeReadmission!.bind(persistenceA);
     let resume: () => void = () => {};
     const paused = new Promise<void>((resolve) => (resume = resolve));
     let reachedCommit = false;
-    persistenceA.setInviteeReadmission = async (...args) => {
-      reachedCommit = true;
-      await paused;
-      return decide(...args);
-    };
-    const sfuA = await startSfu(leases.forInstance("sfu-a"), { persistence: persistenceA });
+    const persistence = observeInviteeStore(openSchedule()!, {
+      beforeCommit: (kind) => {
+        if (kind !== "decide") return;
+        reachedCommit = true;
+        return paused;
+      },
+    });
+    const sfuA = await startSfu(leases.forInstance("sfu-a"), { persistence });
     const sfuB = await startSfu(leases.forInstance("sfu-b"));
     const hostOnA = await join(sfuA, host("a"));
     expect((await join(sfuA, invitee)).status).toBe("joined");
@@ -571,11 +639,13 @@ describe("a room whose fence did not land", () => {
     useSharedSchedule();
     await book();
     const leases = sharedLeases();
-    const persistence = createScheduledMeetingPersistence();
-    const fence = persistence.fenceMeeting!.bind(persistence);
     let fails = true;
-    persistence.fenceMeeting = (meetingId, generation) =>
-      fails ? false : fence(meetingId, generation);
+    const store = openSchedule()!;
+    const persistence = observeInviteeStore(store, {
+      beforeCommit: (kind) => {
+        if (kind === "fence" && fails) throw new Error("Injected booking fence failure");
+      },
+    });
     const sfuA = await startSfu(leases.forInstance("sfu-a"), { persistence });
 
     const refused = await join(sfuA, host("a"));
@@ -593,7 +663,7 @@ describe("a room whose fence did not land", () => {
     const sqlite = (await import("node:sqlite")) as unknown as {
       DatabaseSync: new (path: string) => { exec: (sql: string) => void; close: () => void };
     };
-    const locker = new sqlite.DatabaseSync(process.env.SCHEDULED_MEETINGS_SQLITE_PATH!);
+    const locker = new sqlite.DatabaseSync(schedulePath!);
     const leases = sharedLeases();
     const sfuA = await startSfu(leases.forInstance("sfu-a"));
     locker.exec("BEGIN IMMEDIATE");
@@ -638,20 +708,13 @@ describe("a room still being made", () => {
     const onItsWay = new Promise<void>((resolve) => (arrive = resolve));
     let fenced = false;
     const held = (what: Wait): Promise<void> | null => (fenced && what === wait ? onItsWay : null);
-    const persistence = createScheduledMeetingPersistence();
-    const fence = persistence.fenceMeeting!.bind(persistence);
-    const readOne = persistence.loadOne!.bind(persistence);
-    persistence.fenceMeeting = (...args) => {
-      fenced = true;
-      return fence(...args);
-    };
-    persistence.flush = async () => {
-      await held("the booking's fence to be flushed");
-    };
-    persistence.loadOne = async (id) => {
-      await held("the booking to be read again");
-      return readOne(id);
-    };
+    const persistence = observeInviteeStore(openSchedule()!, {
+      beforeCommit: (kind) => { if (kind === "fence") fenced = true; },
+      afterCommit: async (kind) => {
+        if (kind === "fence") await held("the booking's fence to be flushed");
+      },
+      beforeRead: async () => { await held("the booking to be read again"); },
+    });
     const slowRecovery: RoomRecoveryStore = {
       ...recovery,
       read: async (channelId) => {
@@ -1011,26 +1074,24 @@ describe("a room whose lease the shared registry forgot", () => {
     expect(knocker.told("joinApproved")).toHaveLength(1);
   });
 
-  it.each(["fence", "read"] as const)(
-    "ends its meeting, and the removals made in it, when its last person leaves while the booking's %s is still on its way",
+  it.each(["fence", "acknowledgment"] as const)(
+    "ends its meeting and clears removals when its last person leaves during the booking's %s",
     async (waitsOn) => {
       useSharedSchedule();
       await book();
       const leases = sharedLeases();
       const recovery = createMemoryRoomRecoveryStore();
-      const persistence = createScheduledMeetingPersistence();
-      const fence = persistence.fenceMeeting!.bind(persistence);
-      const read = persistence.loadOne!.bind(persistence);
       let arrived: () => void = () => {};
       let onItsWay: Promise<void> | null = null;
-      persistence.fenceMeeting = async (...args) => {
-        if (waitsOn === "fence") await onItsWay;
-        return fence(...args);
-      };
-      persistence.loadOne = async (id) => {
-        if (waitsOn === "read") await onItsWay;
-        return read(id);
-      };
+      const persistence = observeInviteeStore(openSchedule()!, {
+        beforeCommit: async (kind) => {
+          if (kind !== "fence") return;
+          if (waitsOn === "fence") await onItsWay;
+        },
+        afterCommit: async (kind) => {
+          if (kind === "fence" && waitsOn === "acknowledgment") await onItsWay;
+        },
+      });
       const sfuA = await startSfu(leases.forInstance("sfu-a"), { recovery, persistence });
       const hostOnA = await join(sfuA, host("a"));
       expect((await join(sfuA, invitee)).status).toBe("joined");
@@ -1064,14 +1125,13 @@ describe("a room whose lease the shared registry forgot", () => {
     useSharedSchedule();
     await book();
     const leases = sharedLeases();
-    const persistence = createScheduledMeetingPersistence();
-    const fence = persistence.fenceMeeting!.bind(persistence);
     let arrived: () => void = () => {};
     let onItsWay: Promise<void> | null = null;
-    persistence.fenceMeeting = async (...args) => {
-      await onItsWay;
-      return fence(...args);
-    };
+    const persistence = observeInviteeStore(openSchedule()!, {
+      beforeCommit: async (kind) => {
+        if (kind === "fence") await onItsWay;
+      },
+    });
     const sfuA = await startSfu(leases.forInstance("sfu-a"), { persistence });
     const hostOnA = await join(sfuA, host("a"));
     expect((await join(sfuA, invitee)).status).toBe("joined");
@@ -1116,11 +1176,10 @@ describe("a room whose lease the shared registry forgot", () => {
     await book();
     const leases = sharedLeases();
     const recovery = createMemoryRoomRecoveryStore();
-    const persistence = createScheduledMeetingPersistence();
-    const fence = persistence.fenceMeeting!.bind(persistence);
     let stalls = false;
-    persistence.fenceMeeting = (...args) =>
-      stalls ? new Promise<boolean>(() => undefined) : fence(...args);
+    const persistence = observeInviteeStore(openSchedule()!, {
+      beforeCommit: (kind) => kind === "fence" && stalls ? new Promise<void>(() => undefined) : undefined,
+    });
     const sfuA = await startSfu(leases.forInstance("sfu-a"), { recovery, persistence });
     const hostOnA = await join(sfuA, host("a"));
     expect((await join(sfuA, invitee)).status).toBe("joined");

@@ -5,7 +5,7 @@ import type { Server as SocketIOServer, Socket } from "socket.io";
 import { Admin } from "../config/classes/Admin.js";
 import type { Room } from "../config/classes/Room.js";
 import { config } from "../config/config.js";
-import { cleanupDeadWorkerRooms, initScheduledMeetings } from "../server/init.js";
+import { cleanupDeadWorkerRooms } from "../server/init.js";
 import { ROOM_OPEN_DEADLINE_MS } from "../server/joinDeadlines.js";
 import {
   createMemoryRoomRecoveryStore,
@@ -15,10 +15,10 @@ import {
 import { startRoomRecoveryPassRefresh } from "../server/roomRecoveryPass.js";
 import { LocalRoomRegistry, type RoomRegistry } from "../server/roomRegistry.js";
 import { renewRoomOwnerships, ROOM_WRITE_COMMIT_MS } from "../server/rooms.js";
-import {
-  createScheduledMeeting,
-  type ScheduledMeetingPersistence,
-} from "../server/scheduledMeetings.js";
+import { createMeeting } from "../server/controlPlane/meetingCommands.js";
+import { createMemoryBackend } from "../server/controlPlane/backends/memory.js";
+import { controlPlaneStore, type ControlPlaneStore } from "../server/controlPlane/store.js";
+import { installInviteeStoreProbes, observeInviteeStore } from "./controlPlaneInviteeProbes.js";
 import type { SfuAuthPayload } from "../server/socket/auth.js";
 import {
   createConnectionContext,
@@ -29,10 +29,9 @@ import {
 import { registerDisconnectHandlers } from "../server/socket/handlers/disconnectHandlers.js";
 import { registerJoinRoomHandler } from "../server/socket/handlers/joinRoom.js";
 import { forceDrainRooms, handOffRooms } from "../server/serverShutdown.js";
-import { createScheduledWebinar } from "../server/scheduledWebinars.js";
+import { advanceWebinars, createWebinar, webinarBySlug } from "../server/controlPlane/webinarCommands.js";
 import { ensureWebinarRoomConfig } from "../server/scheduledWebinarScheduler.js";
 import { createSfuState, type SfuState } from "../server/state.js";
-import type { ScheduledMeeting } from "../types.js";
 import { Logger } from "../utilities/loggers.js";
 
 const CODE = "abc-mnop-xyz";
@@ -238,7 +237,7 @@ type Step =
 type World = {
   random: () => number;
   follows: () => boolean;
-  durable: { recovery: RoomRecoveryStore; schedule: string; fences: Map<string, number> };
+  durable: { recovery: RoomRecoveryStore; schedule: ControlPlaneStore };
   slowed: { what: "record" | "booking"; until: Promise<void> } | null;
   sfu: Sfu;
   generation: number;
@@ -262,6 +261,8 @@ type World = {
 
 const loggedErrors: string[] = [];
 const quietLogs: Array<{ mockClear: () => unknown }> = [];
+beforeAll(installInviteeStoreProbes);
+
 beforeAll(() => {
   quietLogs.push(
     vi.spyOn(Logger, "info").mockImplementation(() => undefined),
@@ -457,32 +458,19 @@ const boot = async (world: World): Promise<Sfu> => {
         : world.durable.recovery.update(channelId, decide);
     },
   };
-  const meetings = () => JSON.parse(world.durable.schedule) as ScheduledMeeting[];
-  const schedule: ScheduledMeetingPersistence = {
-    save: (snapshot) => {
-      if (alive()) world.durable.schedule = JSON.stringify(snapshot);
-    },
-    load: () => meetings(),
-    loadOne: (id) => meetings().find((meeting) => meeting.id === id) ?? null,
-    fenceMeeting: (id, fence, held) => {
-      const land = (): boolean => {
-        if (!alive()) return false;
-        const standing = world.durable.fences.get(id);
-        if (standing !== undefined && standing > fence) return false;
-        if (held !== undefined && standing !== undefined && standing !== held && standing !== fence) {
-          return false;
-        }
-        world.durable.fences.set(id, fence);
-        return true;
-      };
+  const schedule = observeInviteeStore(world.durable.schedule, {
+    beforeCommit: async (kind) => {
+      if (kind !== "fence") return;
+      if (!alive()) throw new Error("The SFU was replaced before its booking fence");
       const slowed = world.slowed;
       const wait = slowed?.what === "booking" ? slowed.until : heldAt("booking");
-      return wait ? wait.then(land) : land();
+      if (wait) await wait;
+      if (!alive()) throw new Error("The SFU was replaced while its booking fence waited");
     },
-    flush: async () => {
-      await heldAt("flush");
+    afterCommit: async (kind) => {
+      if (kind === "fence") await heldAt("flush");
     },
-  };
+  });
   const router = {
     closed: false,
     rtpCapabilities: { codecs: [], headerExtensions: [] },
@@ -506,10 +494,9 @@ const boot = async (world: World): Promise<Sfu> => {
       ttlMs: 45_000,
     }),
   );
-  const state = createSfuState({ roomRegistry: leases.registry, roomRecoveryStore: recovery });
+  const state = createSfuState({ roomRegistry: leases.registry, roomRecoveryStore: recovery, controlPlane: schedule });
   opening.state = state;
   state.workers = [worker];
-  await initScheduledMeetings(state, schedule);
   const sfu: Sfu = {
     generation,
     state,
@@ -541,13 +528,19 @@ const boot = async (world: World): Promise<Sfu> => {
     return removed;
   };
   sfu.stopRefresh = startRoomRecoveryPassRefresh(state, config.sfuSecret);
-  if (world.webinar) scheduleWebinar(state, world.webinar);
+  if (world.webinar) await scheduleWebinar(state, world.webinar);
   return sfu;
 };
 
-const scheduleWebinar = (state: SfuState, gate: WebinarGate): void => {
-  const { webinar, inviteCodeHash } = createScheduledWebinar(
-    state.scheduledWebinars,
+const scheduleWebinar = async (state: SfuState, gate: WebinarGate): Promise<void> => {
+  const existing = await state.controlPlane.read(webinarBySlug(WEBINAR_SLUG));
+  if (existing) {
+    const roomConfig = ensureWebinarRoomConfig(state, existing, () => undefined);
+    if (gate === "locked") roomConfig.locked = true;
+    if (gate === "full") roomConfig.maxAttendees = 0;
+    return;
+  }
+  const booked = await state.controlPlane.commit(createWebinar(
     {
       title: "Model webinar",
       scheduledStartAt: Date.now(),
@@ -557,9 +550,12 @@ const scheduleWebinar = (state: SfuState, gate: WebinarGate): void => {
       inviteCode: gate === "code" ? WEBINAR_CODE : null,
     },
     { clientId: "conclave", createdBy: USERS.owner.email!, defaultHostEmail: USERS.owner.email! },
-  );
+  ));
+  if (!booked.ok) throw Error(booked.message ?? booked.reason);
+  const { webinar } = booked.value;
+  await state.controlPlane.commit(advanceWebinars);
   webinar.status = "live";
-  const roomConfig = ensureWebinarRoomConfig(state, webinar, inviteCodeHash);
+  const roomConfig = ensureWebinarRoomConfig(state, webinar, () => undefined);
   if (gate === "locked") roomConfig.locked = true;
   if (gate === "full") roomConfig.maxAttendees = 0;
 };
@@ -617,7 +613,7 @@ const createWorld = async (options: {
   const world: World = {
     random: options.random,
     follows: options.follows,
-    durable: { recovery: createMemoryRoomRecoveryStore(), schedule: "[]", fences: new Map() },
+    durable: { recovery: createMemoryRoomRecoveryStore(), schedule: controlPlaneStore(createMemoryBackend()) },
     slowed: null,
     sfu: undefined as unknown as Sfu,
     generation: 0,
@@ -648,8 +644,7 @@ const createWorld = async (options: {
   world.sfu = await boot(world);
   if (options.scheduled) {
     const state = world.sfu.state;
-    createScheduledMeeting(
-      state.scheduledMeetings,
+    const booked = await state.controlPlane.commit(createMeeting(
       {
         title: "Model call",
         scheduledStartAt: Date.now(),
@@ -663,8 +658,8 @@ const createWorld = async (options: {
         defaultHostEmail: USERS.owner.email!,
         defaultHostUserId: null,
       },
-    );
-    await state.scheduledMeetingPersistence?.save([...state.scheduledMeetings.byId.values()]);
+    ));
+    if (!booked.ok) throw Error(booked.message ?? booked.reason);
   }
   world.trace.push(options.scheduled ? "a booked code" : "a code nobody booked");
   if (world.hostClaims) world.trace.push("and an app whose joins may claim the host's seat");

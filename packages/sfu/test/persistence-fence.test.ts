@@ -1,326 +1,58 @@
 import { createServer, type Server } from "node:http";
-import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { config } from "../config/config.js";
+import { done } from "../server/controlPlane/model.js";
+import type { ControlPlaneStore } from "../server/controlPlane/store.js";
 import { createSfuApp } from "../server/http/createApp.js";
-import {
-  createPersistenceFence,
-  MAX_PERSISTENCE_FENCE_MS,
-  fenceScheduledMeetingPersistence,
-  fenceScheduledWebinarPersistence,
-  fenceSchedulingPersistence,
-} from "../server/persistenceFence.js";
-import { persistScheduledMeetingChanges, type ScheduledMeetingPersistence } from "../server/scheduledMeetings.js";
-import { persistScheduledWebinarChanges } from "../server/scheduledWebinars.js";
+import { createPersistenceFence, MAX_PERSISTENCE_FENCE_MS } from "../server/persistenceFence.js";
 import { createSfuState } from "../server/state.js";
-import type { ScheduledMeeting, ScheduledWebinar } from "../types.js";
 
-const meeting = (id: string) => ({ id }) as unknown as ScheduledMeeting;
-const store = { byId: new Map() } as never;
+describe("control-plane write fence", () => {
+  afterEach(() => vi.useRealTimers());
 
-// Like the Redis persistence: a write is queued and lands a moment later,
-// each write's promise carries its own result or error, flush() waits for the
-// queue without failing, and a reminder claim reads what has landed.
-const queuedStore = ({ failWrites = false } = {}) => {
-  const stored = new Map<string, ScheduledMeeting>([["m1", meeting("m1")]]);
-  const log: string[] = [];
-  let pending: Promise<void> = Promise.resolve();
-  const queue = (label: string, write: () => void): Promise<void> => {
-    const landed = pending.then(async () => {
-      await delay(5);
-      if (failWrites) throw new Error(`OOM command not allowed (${label})`);
-      write();
-      log.push(label);
+  it("drains an in-flight commit, leaves reads open and returns the queued commit's own result", async () => {
+    let finish = () => {};
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    const failure = new Error("store write failed");
+    const commit = vi.fn().mockImplementationOnce(async () => {
+      await pending;
+      return { ok: true, value: "committed", rev: 1 };
+    }).mockRejectedValueOnce(failure);
+    const store: ControlPlaneStore = { ...createSfuState().controlPlane, commit };
+    const state = createSfuState({ controlPlane: store });
+    const before = state.controlPlane.commit(() => done("before"));
+    let held = false;
+    const hold = state.persistenceFence.hold("backup-one", 10_000).then((lease) => {
+      held = true;
+      return lease;
     });
-    pending = landed.catch(() => undefined);
-    return landed;
-  };
-  const persistence: ScheduledMeetingPersistence = {
-    save: () => undefined,
-    saveChanged: (meetings) => queue("saveChanged", () => meetings.forEach((m) => stored.set(m.id, m))),
-    deleteIds: (ids) => queue("deleteIds", () => ids.forEach((id) => stored.delete(id))),
-    claimEmailReminder: async (claim) => {
-      log.push("claim");
-      return stored.get(claim.meetingId) ?? null;
-    },
-    flush: () => pending,
-    load: () => [],
-  };
-  return { stored, log, persistence };
-};
+    const during = state.controlPlane.commit(() => done("during"));
+    await expect(state.controlPlane.read(() => "read while held")).resolves.toBe("read while held");
+    expect(held).toBe(false);
+    expect(commit).toHaveBeenCalledTimes(1);
 
-describe("persistence fence", () => {
-  afterEach(() => {
-    vi.useRealTimers();
+    finish();
+    await expect(before).resolves.toMatchObject({ value: "committed" });
+    expect(await hold).not.toBeNull();
+    expect(commit).toHaveBeenCalledTimes(1);
+    state.persistenceFence.release("backup-one");
+    await expect(during).rejects.toBe(failure);
+    expect(commit).toHaveBeenCalledTimes(2);
   });
 
-  it("runs a reminder claim made during a hold only after the cancellation made before it has landed", async () => {
-    const fence = createPersistenceFence();
-    const redis = queuedStore();
-    const meetings = fenceScheduledMeetingPersistence(redis.persistence, fence);
-
-    await fence.hold("backup-one", 10_000);
-    const cancel = meetings.deleteIds!(["m1"]);
-    const claim = meetings.claimEmailReminder!({ meetingId: "m1" } as never);
-    expect(redis.log).toEqual([]);
-
-    fence.release("backup-one");
-    await cancel;
-    await expect(claim).resolves.toBeNull();
-    expect(redis.log).toEqual(["deleteIds", "claim"]);
-  });
-
-  it("hands a write that fails after the hold to its caller, so nothing reaches the process", async () => {
-    const fence = createPersistenceFence();
-    const redis = queuedStore({ failWrites: true });
-    const meetings = fenceScheduledMeetingPersistence(redis.persistence, fence);
-    const unhandled: unknown[] = [];
-    const onUnhandled = (reason: unknown) => unhandled.push(reason);
-    process.on("unhandledRejection", onUnhandled);
-    try {
-      await fence.hold("backup-one", 10_000);
-      const persisted = persistScheduledMeetingChanges(store, meetings, [meeting("m2")]);
-      // The backup releases seconds later; the caller's flush() runs first.
-      await delay(10);
-      fence.release("backup-one");
-      await expect(persisted).rejects.toThrow(/OOM command not allowed/);
-      await delay(20);
-      expect(unhandled).toEqual([]);
-    } finally {
-      process.off("unhandledRejection", onUnhandled);
-    }
-  });
-
-  it("reports a hold only after a reminder claim already writing Redis and then SQLite has finished", async () => {
-    const fence = createPersistenceFence();
-    const writes: string[] = [];
-    const meetings = fenceScheduledMeetingPersistence(
-      {
-        save: () => undefined,
-        claimEmailReminder: async () => {
-          await delay(10);
-          writes.push("claim wrote Redis");
-          await delay(10);
-          writes.push("claim wrote SQLite");
-          return null;
-        },
-        load: () => [],
-      },
-      fence,
-    );
-    const claim = meetings.claimEmailReminder!({ meetingId: "m1" } as never);
-    await delay(2);
-    expect(writes).toEqual([]);
-    await fence.hold("backup-one", 5_000);
-    expect(writes).toEqual(["claim wrote Redis", "claim wrote SQLite"]);
-    fence.release("backup-one");
-    await claim;
-  });
-
-  it("reports a hold only after a load already under way has finished, since a load can migrate records", async () => {
-    const fence = createPersistenceFence();
-    let migrated = false;
-    const meetings = fenceScheduledMeetingPersistence(
-      {
-        save: () => undefined,
-        load: async () => {
-          await delay(10);
-          migrated = true;
-          return [];
-        },
-      },
-      fence,
-    );
-    const loading = meetings.load();
-    await fence.hold("backup-one", 5_000);
-    expect(migrated).toBe(true);
-    fence.release("backup-one");
-    await loading;
-  });
-
-  it("starts the calls made during a hold in the order they were made once it lifts, after the earlier ones landed", async () => {
-    const fence = createPersistenceFence();
-    const events: string[] = [];
-    const call = (name: string) =>
-      fence.run(async () => {
-        events.push(`${name} start`);
-        await delay(3);
-        events.push(`${name} end`);
-        return name;
-      });
-
-    const first = call("first");
-    await fence.hold("backup-one", 10_000);
-    const during = [call("second"), call("third")];
-    expect(events).toEqual(["first start", "first end"]);
-    fence.release("backup-one");
-    const after = call("fourth");
-    expect(events).toEqual(["first start", "first end", "second start", "third start", "fourth start"]);
-    await expect(Promise.all([first, ...during, after])).resolves.toEqual(["first", "second", "third", "fourth"]);
-  });
-
-  it("never holds a SQLite webinar save behind a Redis write that has not answered", async () => {
-    const fence = createPersistenceFence();
-    let answer: () => void = () => {};
-    const redis = new Promise<void>((resolve) => (answer = resolve));
-    const meetings = fenceScheduledMeetingPersistence(
-      { save: () => undefined, saveChanged: () => undefined, flush: () => redis, load: () => [] },
-      fence,
-    );
-    const saved: string[] = [];
-    const webinars = fenceScheduledWebinarPersistence(
-      { save: () => void saved.push("webinars"), saveChanged: () => void saved.push("webinar w1"), load: () => [] },
-      fence,
-    );
-
-    const meetingWrite = meetings.saveChanged!([meeting("m1")]);
-    await persistScheduledWebinarChanges(store, webinars, [{ id: "w1" } as never]);
-    await Promise.resolve(webinars.save([]));
-    expect(saved).toEqual(["webinar w1", "webinars"]);
-
-    answer();
-    await meetingWrite;
-  });
-
-  it("answers a hold only once the call already under way has landed", async () => {
-    const fence = createPersistenceFence();
-    let landed = false;
-    const inFlight = fence.run(async () => {
-      await delay(20);
-      landed = true;
-    });
-    const held = fence.hold("backup-one", 5_000).then(() => landed);
-    await expect(held).resolves.toBe(true);
-    await inFlight;
-  });
-
-  it("lets only the owner renew or release a hold, and refuses a second backup's hold", async () => {
-    const fence = createPersistenceFence();
-    expect(await fence.hold("backup-one", 5_000)).not.toBeNull();
-    expect(await fence.hold("backup-two", 5_000)).toBeNull();
-    expect(fence.renew("backup-two", 5_000)).toBeNull();
-    expect(fence.release("backup-two")).toBe(false);
-    expect(fence.holder()).toBe("backup-one");
-
-    const write = fence.run(() => "written");
-    await delay(10);
-    expect(fence.holder()).toBe("backup-one");
-    expect(fence.renew("backup-one", 5_000)).not.toBeNull();
-    expect(fence.release("backup-one")).toBe(true);
-    await expect(write).resolves.toBe("written");
-  });
-
-  it("lifts itself at its deadline when the backup never comes back, and the lapsed hold cannot be renewed", async () => {
+  it("releases queued work at the original hard deadline even if the holder renews", async () => {
     vi.useFakeTimers();
     const fence = createPersistenceFence();
-    await fence.hold("backup-one", 1_000);
-    const written = vi.fn();
-    const write = fence.run(written);
-    await vi.advanceTimersByTimeAsync(999);
-    expect(written).not.toHaveBeenCalled();
+    const start = Date.now();
+    await fence.hold("backup-one", MAX_PERSISTENCE_FENCE_MS);
+    const commit = vi.fn(() => "written");
+    const pending = fence.run(commit);
+    await vi.advanceTimersByTimeAsync(MAX_PERSISTENCE_FENCE_MS - 1);
+    expect(fence.renew("backup-one", MAX_PERSISTENCE_FENCE_MS)).toEqual({ until: start + MAX_PERSISTENCE_FENCE_MS });
+    expect(commit).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    await write;
-    expect(written).toHaveBeenCalledOnce();
-    expect(fence.holder()).toBeNull();
-    expect(fence.renew("backup-one", 1_000)).toBeNull();
-  });
-
-  it("never lets renewals keep writers waiting past the hard limit from when the hold was taken", async () => {
-    vi.useFakeTimers();
-    const fence = createPersistenceFence();
-    const taken = Date.now();
-    await fence.hold("backup-one", 20_000);
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(fence.renew("backup-one", 20_000)).toEqual({ until: taken + MAX_PERSISTENCE_FENCE_MS });
-    const write = fence.run(() => "written");
-    await vi.advanceTimersByTimeAsync(15_000);
-    await expect(write).resolves.toBe("written");
-    expect(fence.holder()).toBeNull();
-  });
-
-  it("leaves the event loop to everything else while calls wait on a hold", async () => {
-    const fence = createPersistenceFence();
-    await fence.hold("backup-one", 10_000);
-    let settled = 0;
-    const waiting = [fence.run(() => "a"), fence.run(() => "b")].map((call) => call.finally(() => (settled += 1)));
-    for (let turn = 0; turn < 20; turn += 1) await new Promise((done) => setImmediate(done));
-    const server = createServer((_req, res) => res.end("pong"));
-    await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-    try {
-      const address = server.address();
-      if (!address || typeof address === "string") throw new Error("no port");
-      expect(await (await fetch(`http://127.0.0.1:${address.port}`)).text()).toBe("pong");
-    } finally {
-      await new Promise((done) => server.close(done));
-    }
-    expect(settled).toBe(0);
-    fence.release("backup-one");
-    await expect(Promise.all(waiting)).resolves.toEqual(["a", "b"]);
-  });
-
-  it("routes scheduling and webinar writes through the same gate, and a webinar write's error reaches its caller", async () => {
-    const fence = createPersistenceFence();
-    const order: string[] = [];
-    const scheduling = fenceSchedulingPersistence(
-      { save: () => void order.push("scheduling"), load: () => ({}) as never },
-      fence,
-    );
-    const webinars = fenceScheduledWebinarPersistence(
-      {
-        save: () => void order.push("webinars.save"),
-        saveChanged: () => {
-          throw new Error("SQLITE_FULL");
-        },
-        load: () => [],
-      },
-      fence,
-    );
-    await fence.hold("backup-one", 10_000);
-    const writes = [Promise.resolve(scheduling.save({} as never)), Promise.resolve(webinars.save([]))];
-    const failed = persistScheduledWebinarChanges(store, webinars, [{ id: "w1" } as never]);
-    expect(order).toEqual([]);
-    fence.release("backup-one");
-    await Promise.all(writes);
-    await expect(failed).rejects.toThrow("SQLITE_FULL");
-    expect(order).toEqual(["scheduling", "webinars.save"]);
-  });
-
-  it("queues a copy of every write made during a hold, so later edits to the same records cannot change it", async () => {
-    const fence = createPersistenceFence();
-    const webinarSaves: string[] = [];
-    const meetingSaves: string[] = [];
-    const webinars = fenceScheduledWebinarPersistence(
-      {
-        save: () => undefined,
-        saveChanged: (list) => void webinarSaves.push(list.map((w) => `${w.id}->${w.linkSlug}`).join(",")),
-        load: () => [],
-      },
-      fence,
-    );
-    const meetings = fenceScheduledMeetingPersistence(
-      {
-        save: () => undefined,
-        saveChanged: (list) => void meetingSaves.push(list.map((m) => `${m.id}->${m.title}`).join(",")),
-        load: () => [],
-      },
-      fence,
-    );
-    const a = { id: "A", linkSlug: "a" } as ScheduledWebinar;
-    const b = { id: "B", linkSlug: "b" } as ScheduledWebinar;
-    const m = { id: "M", title: "first" } as ScheduledMeeting;
-    await fence.hold("backup-one", 10_000);
-    a.linkSlug = "c";
-    const writes = [webinars.saveChanged!([a])];
-    b.linkSlug = "a";
-    writes.push(webinars.saveChanged!([b]));
-    a.linkSlug = "b";
-    writes.push(webinars.saveChanged!([a]));
-    writes.push(meetings.saveChanged!([m]));
-    m.title = "second";
-    fence.release("backup-one");
-    await Promise.all(writes.map((write) => Promise.resolve(write)));
-    expect(webinarSaves).toEqual(["A->c", "B->a", "A->b"]);
-    expect(meetingSaves).toEqual(["M->first"]);
+    await expect(pending).resolves.toBe("written");
+    expect(fence.renew("backup-one", 10_000)).toBeNull();
   });
 });
 

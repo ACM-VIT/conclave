@@ -12,16 +12,8 @@ import {
   RoomOwnershipError,
   type RoomOwnershipClaim,
 } from "./roomRegistry.js";
-import {
-  clearScheduledMeetingRemovals,
-  fenceScheduledMeeting,
-  getScheduledMeetingByRoomCode,
-  persistScheduledMeetingRemovalsEnd,
-  inviteeDecisionTime,
-  persistInviteeReadmission,
-  refreshScheduledMeeting,
-  setScheduledInviteeReadmission,
-} from "./scheduledMeetings.js";
+import { roomBooking, roomInviteeDecision, updateRoomInvitation, type RoomBooking } from "./controlPlane/inviteeCommands.js";
+import { meetingByRoomCode } from "./controlPlane/meetingCommands.js";
 import { cleanupRoomBrowser } from "./socket/handlers/sharedBrowserHandlers.js";
 import type { DeferredRoomWrites, EndedRoom, SfuState } from "./state.js";
 import type { RecalledRoom } from "./roomRecoveryLedger.js";
@@ -190,10 +182,10 @@ export const withSharedWriteScope = <T>(
   return { result, writes: scope.size, settled };
 };
 
-const withDeadline = <T>(work: Promise<T>, fallback: T): Promise<T> => {
+export const withDeadline = <T>(work: Promise<T>, fallback: T, delay = ROOM_WRITE_COMMIT_MS): Promise<T> => {
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<T>((resolve) => {
-    timer = setTimeout(() => resolve(fallback), ROOM_WRITE_COMMIT_MS);
+    timer = setTimeout(() => resolve(fallback), delay);
   });
   return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
 };
@@ -305,14 +297,7 @@ const fenceAgain = async (state: SfuState, room: LeasedRoom, generation: number)
   const [record, booking] = await withDeadline(
     Promise.all([
       state.roomRecovery.reclaim(room, generation),
-      fenceScheduledMeeting(
-        state.scheduledMeetings,
-        state.scheduledMeetingPersistence,
-        room.clientId,
-        room.id,
-        generation,
-        held,
-      ).catch((error: unknown) => {
+      fenceRoomBooking(state, room.clientId, room.id, generation, held).catch((error: unknown) => {
         Logger.error(`Failed to fence the booking of ${room.channelId}`, error);
         return false;
       }),
@@ -448,6 +433,27 @@ export const writeSharedRoomState = (
   return landed;
 };
 
+export const readRoomBooking = (state: SfuState, clientId: string, roomId: string): Promise<RoomBooking | null> =>
+  withDeadline(state.controlPlane.read(roomBooking(clientId, roomId)).catch(() => null), null, 1_000);
+
+const findBookingForWrite = (state: SfuState, room: Pick<LeasedRoom, "clientId" | "id">) =>
+  state.controlPlane.read(meetingByRoomCode(room.clientId, room.id)).then(
+    (meeting) => ({ ok: true, meeting }) as const,
+    (error: unknown) => ({ ok: false, error }) as const,
+  );
+
+const fenceRoomBooking = async (
+  state: SfuState,
+  clientId: string,
+  roomId: string,
+  generation: number,
+  held?: number,
+): Promise<boolean> => {
+  const meeting = await state.controlPlane.read(meetingByRoomCode(clientId, roomId));
+  if (!meeting) return true;
+  return (await state.controlPlane.commit(updateRoomInvitation(meeting, { kind: "fence", generation, held }))).ok;
+};
+
 const noteMeetingOver = (
   state: SfuState,
   room: Pick<
@@ -456,20 +462,16 @@ const noteMeetingOver = (
   > & { ownershipGeneration?: number | null },
 ): void => {
   const over = state.roomRecovery.overRecord(room);
-  const cleared = clearScheduledMeetingRemovals(state.scheduledMeetings, room.clientId, room.id);
-  const persistence = state.scheduledMeetingPersistence;
+  const at = over.overAt ?? Date.now();
+  const booking = findBookingForWrite(state, room);
   void writeSharedRoomState(state, room, "the end of its meeting", (generation) =>
     Promise.all([
       state.roomRecovery.saveRecord(room, over, generation),
-      cleared && persistence
-        ? persistScheduledMeetingRemovalsEnd(
-            state.scheduledMeetings,
-            persistence,
-            cleared,
-            over.overAt ?? Date.now(),
-            generation,
-          )
-        : Promise.resolve(true),
+      booking.then(async (found) => {
+        if (!found.ok) throw found.error;
+        return !found.meeting ||
+          (await state.controlPlane.commit(updateRoomInvitation(found.meeting, { kind: "end", at, generation }))).ok;
+      }),
     ]).then((landed) => landed.every(Boolean)),
   );
 };
@@ -491,43 +493,34 @@ const recordRecoverableChanges = (state: SfuState, room: Room): void => {
   room.onLostCallEnded = () => noteMeetingOver(state, room);
 };
 
-/**
- * A scheduled meeting's invitations outlive its room, so a host removing an
- * invited person has to outlive it too. The room starts with the removals the
- * schedule already holds, and tells the schedule about new ones.
- */
-const bindScheduledInvitations = (state: SfuState, room: Room): void => {
-  const meeting = getScheduledMeetingByRoomCode(
-    state.scheduledMeetings,
-    room.clientId,
-    room.id,
-  );
-  for (const email of meeting?.readmissionRequiredEmails ?? []) {
-    room.requireReadmission(email);
-  }
-  room.onReadmissionChange = (userKey, required) => {
-    const decided = setScheduledInviteeReadmission(
-      state.scheduledMeetings,
-      room.clientId,
-      room.id,
-      userKey,
-      required,
-    );
-    const persistence = state.scheduledMeetingPersistence;
-    if (!decided || !persistence) return;
-    const at = inviteeDecisionTime(decided, userKey);
-    const meeting = Object.freeze(structuredClone(decided));
-    void writeSharedRoomState(state, room, "an invitee's removal", (generation) =>
-      persistInviteeReadmission(
-        state.scheduledMeetings,
-        persistence,
-        meeting,
-        userKey,
-        required,
-        at,
-        generation,
+const bindScheduledInvitations = (state: SfuState, room: Room, booking: RoomBooking | null): void => {
+  for (const email of booking?.removed ?? []) room.requireReadmission(email);
+  const lastDecisionAt = new Map<string, Promise<number>>();
+  room.onReadmissionChange = (email, removed) => {
+    if (!email.includes("@")) return;
+    const now = Date.now();
+    const observed = withDeadline(
+      state.controlPlane.read(roomInviteeDecision(room.clientId, room.id, email)).then(
+        (decision) => ({ ok: true, decision }) as const,
+        (error: unknown) => ({ ok: false, error }) as const,
       ),
+      { ok: false, error: new Error("Invitee decision read timed out") },
+      1_000,
     );
+    // Allocate stamps in host action order, even when the reads or commits finish out of order.
+    const prepared = Promise.all([lastDecisionAt.get(email) ?? 0, observed]).then(([previous, found]) => ({
+      found,
+      at: Math.max(now, previous + 1, found.ok ? (found.decision?.at ?? -1) + 1 : 0),
+    }));
+    lastDecisionAt.set(email, prepared.then(({ at }) => at));
+    void writeSharedRoomState(state, room, "an invitee's readmission decision", async (generation) => {
+      const { found, at } = await prepared;
+      if (!found.ok) throw found.error;
+      if (!found.decision) return true;
+      return (await state.controlPlane.commit(updateRoomInvitation(found.decision.meeting, {
+        kind: "decide", email, removed, at, generation,
+      }))).ok;
+    });
   };
 };
 
@@ -621,20 +614,21 @@ export const getOrCreateRoomWithOrigin = async (
   requestedClientId: string,
   roomId: string,
   options: { createdBy?: string | null } = {},
-): Promise<{ room: Room; created: boolean; recalled: RecalledRoom | null }> => {
+): Promise<{ room: Room; created: boolean; recalled: RecalledRoom | null; booking: RoomBooking | null }> => {
   const clientId = canonicalizeClientId(requestedClientId);
   const channelId = getRoomChannelId(clientId, roomId);
   const existing = await renewLocalRoom(state, clientId, roomId);
   if (existing) {
-    return { room: existing, created: false, recalled: null };
+    return { room: existing, created: false, recalled: null, booking: null };
   }
 
   const pendingCreation = state.roomCreations.get(channelId);
   if (pendingCreation) {
-    return { room: await pendingCreation, created: false, recalled: null };
+    return { room: await pendingCreation, created: false, recalled: null, booking: null };
   }
 
   let recalled: RecalledRoom | null = null;
+  let booking: RoomBooking | null = null;
   const creation = (async (): Promise<Room> => {
     const ownership = await state.roomRegistry.claimRoom({
       channelId,
@@ -658,13 +652,7 @@ export const getOrCreateRoomWithOrigin = async (
             generation,
             options.createdBy ?? null,
           ),
-          fenceScheduledMeeting(
-            state.scheduledMeetings,
-            state.scheduledMeetingPersistence,
-            clientId,
-            roomId,
-            generation,
-          ).catch((error: unknown) => {
+          fenceRoomBooking(state, clientId, roomId, generation).catch((error: unknown) => {
             Logger.error(`Failed to fence the booking of ${channelId}`, error);
             return false;
           }),
@@ -686,14 +674,7 @@ export const getOrCreateRoomWithOrigin = async (
         throw new RoomOpeningError(channelId, "its recovery record was not read in time");
       }
       recalled = record;
-      // Another SFU may have changed this meeting's invitations since this one
-      // loaded them.
-      await refreshScheduledMeeting(
-        state.scheduledMeetings,
-        state.scheduledMeetingPersistence,
-        clientId,
-        roomId,
-      );
+      booking = await readRoomBooking(state, clientId, roomId);
 
       // Reserve the slot before createRouter yields to other room creations.
       worker = getWorker(state.workers, getRoomWorkerLoads(state));
@@ -748,7 +729,7 @@ export const getOrCreateRoomWithOrigin = async (
           createdRoom.linkGuestPasses(others.map((guestProof) => ({ guestProof })), first);
         }
       }
-      bindScheduledInvitations(state, createdRoom);
+      bindScheduledInvitations(state, createdRoom, booking);
       recordRecoverableChanges(state, createdRoom);
       state.rooms.set(channelId, createdRoom);
       Logger.success(`Created room: ${roomId} (${clientId})`);
@@ -772,7 +753,7 @@ export const getOrCreateRoomWithOrigin = async (
 
   try {
     const room = await creation;
-    return { room, created: true, recalled };
+    return { room, created: true, recalled, booking };
   } finally {
     if (state.roomCreations.get(channelId) === creation) {
       state.roomCreations.delete(channelId);

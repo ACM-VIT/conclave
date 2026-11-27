@@ -5,26 +5,9 @@ import createWorkers from "../utilities/createWorkers.js";
 import { Logger } from "../utilities/loggers.js";
 import { forceCloseRoom } from "./rooms.js";
 import type { SfuState } from "./state.js";
-import {
-  fenceScheduledMeetingPersistence,
-  fenceScheduledWebinarPersistence,
-  fenceSchedulingPersistence,
-} from "./persistenceFence.js";
-import {
-  createScheduledWebinarPersistence,
-  loadPersistedSchedules,
-  type ScheduledWebinarPersistence,
-} from "./scheduledWebinars.js";
-import {
-  createScheduledMeetingPersistence,
-  loadPersistedMeetings,
-  type ScheduledMeetingPersistence,
-} from "./scheduledMeetings.js";
-import {
-  createSchedulingPersistence,
-  loadPersistedScheduling,
-  type SchedulingPersistence,
-} from "./scheduling.js";
+import { openControlPlane } from "./controlPlane/open.js";
+import { fenceControlPlane } from "./persistenceFence.js";
+import type { ControlPlaneStore } from "./controlPlane/store.js";
 
 const WORKER_RESTART_NOTICE =
   "The media server for this room restarted. Reconnecting...";
@@ -113,37 +96,13 @@ export const initMediaSoup = async (
   Logger.info(`Created ${state.workers.length} mediasoup workers`);
 };
 
-export const initScheduledWebinars = (
+export const initControlPlane = async (
   state: SfuState,
-  persistence: ScheduledWebinarPersistence = createScheduledWebinarPersistence(),
-): void => {
-  state.scheduledWebinarPersistence = fenceScheduledWebinarPersistence(persistence, state.persistenceFence);
-  const loaded = loadPersistedSchedules(state.scheduledWebinars, persistence);
-  if (loaded > 0) {
-    Logger.info(`Restored ${loaded} scheduled webinar(s) from persistence`);
-  }
-};
-
-export const initScheduledMeetings = (
-  state: SfuState,
-  persistence: ScheduledMeetingPersistence = createScheduledMeetingPersistence(),
+  store?: ControlPlaneStore,
 ): Promise<void> => {
-  state.scheduledMeetingPersistence = fenceScheduledMeetingPersistence(persistence, state.persistenceFence);
-  return loadPersistedMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence).then((loaded) => {
-    if (loaded > 0) {
-      Logger.info(`Restored ${loaded} scheduled meeting(s) from persistence`);
-    }
-  });
-};
-
-export const initScheduling = (
-  state: SfuState,
-  persistence: SchedulingPersistence = createSchedulingPersistence(),
-): Promise<void> => {
-  state.schedulingPersistence = fenceSchedulingPersistence(persistence, state.persistenceFence);
-  return loadPersistedScheduling(state.scheduling, state.schedulingPersistence).then((loaded) => {
-    if (loaded > 0) {
-      Logger.info(`Restored ${loaded} scheduling record(s) from persistence`);
-    }
-  });
+  const opened = store ?? (await openControlPlane());
+  const previous = state.controlPlane;
+  if (previous === opened) return;
+  state.controlPlane = fenceControlPlane(opened, state.persistenceFence);
+  await previous.close();
 };

@@ -49,6 +49,7 @@ import {
   confirmRoomLease,
   forceCloseRoom,
   getRoomChannelId,
+  readRoomBooking,
   holdsRoomLease,
   isCurrentRoom,
   markRoomEnded,
@@ -62,7 +63,7 @@ import { readBoolean, requestBody } from "../../utilities/untrusted.js";
 import { persistenceFenceHoldRequest, persistenceFenceReleaseRequest } from "../persistenceFence.js";
 import { registerScheduledWebinarRoutes } from "./scheduledWebinarRoutes.js";
 import { registerScheduledMeetingRoutes } from "./scheduledMeetingRoutes.js";
-import { isScheduledMeetingInvitee } from "../scheduledMeetings.js";
+import { bookingInvites } from "../controlPlane/inviteeCommands.js";
 import { registerSchedulingRoutes } from "./schedulingRoutes.js";
 import type { SfuState } from "../state.js";
 import type { RedisPublisherHealth } from "../socket/redisPublisher.js";
@@ -486,6 +487,7 @@ export const createSfuApp = ({
         healthy: healthyWorkers.length,
         closed: state.workers.length - healthyWorkers.length,
       },
+      calendarTasks: { failed: state.calendarTasks.failed },
     };
 
     if (!isHealthy) {
@@ -798,7 +800,7 @@ export const createSfuApp = ({
     return res.status(403).json({ error: "Use /admin/rooms for room lists" });
   });
 
-  app.get("/rooms/:roomId", (req, res) => {
+  app.get("/rooms/:roomId", async (req, res) => {
     if (!hasValidSecret(req, config.sfuSecret)) {
       return res.status(401).json({ error: "Unauthorized" });
     }
@@ -810,7 +812,6 @@ export const createSfuApp = ({
 
     const clientId = resolveClientId(req) || "conclave";
     const channelId = getRoomChannelId(clientId, roomId);
-    const room = state.rooms.get(channelId);
     // The web asks on behalf of a visitor and shows the headcount only when
     // that visitor belongs to the room or was invited to it. A host blocking
     // or removing someone outranks their invitation.
@@ -819,6 +820,10 @@ export const createSfuApp = ({
       .flat()
       .flatMap((value) => (typeof value === "string" ? [normalizeIdentifier(value)] : []))
       .filter((value): value is string => Boolean(value));
+    const booking = viewerKey?.includes("@")
+      ? await readRoomBooking(state, clientId, roomId)
+      : null;
+    const room = state.rooms.get(channelId);
     const vouchesFor = (userKey: string): boolean => {
       if (viewerProofs.length > MAX_BROWSER_GUEST_PASSES) return false;
       const proofs = viewerProofs.length > 0 ? viewerProofs : [undefined];
@@ -832,12 +837,7 @@ export const createSfuApp = ({
       return (
         Boolean(room?.isMemberUserKey(userKey)) ||
         viewerProofs.some((proof) => Boolean(room?.isMemberUserKey("", proof))) ||
-        isScheduledMeetingInvitee(
-          state.scheduledMeetings,
-          clientId,
-          roomId,
-          userKey.toLowerCase(),
-        )
+        bookingInvites(booking, userKey.toLowerCase())
       );
     };
     const viewerIsMember =

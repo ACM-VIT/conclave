@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { scheduledMeetingJsonStore } from "../server/scheduledMeetings.js";
-import { scheduledWebinarJsonStore } from "../server/scheduledWebinars.js";
-import { schedulingJsonStore } from "../server/scheduling.js";
+import { specOf } from "../server/controlPlane/entities.js";
+import { readLegacyFile } from "../server/controlPlane/legacy.js";
+import type { LegacyDomain } from "../server/controlPlane/model.js";
 
 export const STAGING_COMMIT = "3d2711d9a056f652ea19bedf74dec4edb192339e";
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -24,24 +24,26 @@ export const STAGING_ROLLBACK_TOKEN_SECRET = "staging-rollback-fixture-secret";
 export const stagingRollbackFixture = (name: string) => join(outputDir, `${name}.staging-${STAGING_COMMIT.slice(0, 8)}.json`);
 
 type Manifest = { stagingCommit: string; files: Record<string, string> };
-type Adapter = { decode: (data: unknown) => unknown; write: (path: string, snapshot: never) => void };
 
 const MANIFEST = "manifest.json";
-const adapters: Record<string, Adapter> = {
-  "scheduled-meetings": scheduledMeetingJsonStore,
-  "scheduled-webinars": scheduledWebinarJsonStore,
-  scheduling: schedulingJsonStore,
+const domains: Record<string, LegacyDomain> = {
+  "scheduled-meetings": "meetings",
+  "scheduled-webinars": "webinars",
+  scheduling: "scheduling",
 };
 
 const sha256 = (content: string) => createHash("sha256").update(content).digest("hex");
 
-const readsBack = (name: string, content: string, scratch: string): string | null => {
-  const adapter = adapters[name];
+const readsBack = (name: string, content: string): string | null => {
   try {
-    const decoded = adapter.decode(JSON.parse(content));
-    const path = join(scratch, `${name}.json`);
-    adapter.write(path, decoded as never);
-    return isDeepStrictEqual(adapter.decode(JSON.parse(readFileSync(path, "utf8"))), decoded) ? null : "does not read back the same after this SFU saves it";
+    const records = readLegacyFile(domains[name], content, name);
+    if (records.length === 0) return "holds no record this SFU imports";
+    const drifted = records.filter((record) => {
+      const spec = specOf(record.kind);
+      const stored = spec.decode(JSON.parse(JSON.stringify(spec.encode(record.value))) as unknown);
+      return !isDeepStrictEqual(stored, record.value);
+    });
+    return drifted.length === 0 ? null : `does not read back the same after this SFU imports it (${drifted.map((record) => record.key).join(", ")})`;
   } catch (error) {
     return `cannot be read by this SFU (${(error as Error).message})`;
   }
@@ -55,7 +57,6 @@ export const verifyStagingRollbackFixtures = (dir: string = outputDir): string[]
   if (manifest.stagingCommit !== STAGING_COMMIT) problems.push(`${manifestPath} records ${manifest.stagingCommit}, not ${STAGING_COMMIT}.`);
   const expected = stagingRollbackStores.map((store) => basename(stagingRollbackFixture(store.name))).sort();
   if (!isDeepStrictEqual(Object.keys(manifest.files).sort(), expected)) problems.push(`${manifestPath} lists ${Object.keys(manifest.files).join(", ")}, not ${expected.join(", ")}.`);
-  const scratch = mkdtempSync(join(tmpdir(), "staging-rollback-check-"));
   const secret = process.env.SCHEDULING_TOKEN_SECRET;
   process.env.SCHEDULING_TOKEN_SECRET = STAGING_ROLLBACK_TOKEN_SECRET;
   try {
@@ -68,13 +69,12 @@ export const verifyStagingRollbackFixtures = (dir: string = outputDir): string[]
       }
       const content = readFileSync(path, "utf8");
       if (sha256(content) !== manifest.files[file]) problems.push(`${path} is not the file staging's code wrote (its SHA-256 differs from ${manifestPath}).`);
-      const readBack = readsBack(store.name, content, scratch);
+      const readBack = readsBack(store.name, content);
       if (readBack) problems.push(`${path} ${readBack}.`);
     }
   } finally {
     if (secret === undefined) delete process.env.SCHEDULING_TOKEN_SECRET;
     else process.env.SCHEDULING_TOKEN_SECRET = secret;
-    rmSync(scratch, { recursive: true, force: true });
   }
   return problems;
 };

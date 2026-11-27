@@ -33,7 +33,8 @@ MAX_HOPS = 40
 DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 READ_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
 STOPPED = ("exited", "dead", "created")
-STORE_VARIABLES = ("SCHEDULING_SQLITE_PATH", "SCHEDULED_MEETINGS_SQLITE_PATH", "SCHEDULED_WEBINARS_SQLITE_PATH")
+LEGACY_MODE_VARIABLES = ("SCHEDULING_PERSISTENCE", "SCHEDULED_MEETINGS_PERSISTENCE", "SCHEDULED_WEBINARS_PERSISTENCE")
+CONTROL_PLANE_MODES = ("memory", "json", "sqlite", "redis")
 
 PAYLOAD_FILES = ("MANIFEST", "SHA256SUMS", "sqlite-databases", "sqlite-links", "sqlite-chains", "sqlite-dirs", "state-files.tar", "redis/dump.rdb", "redis/database")
 
@@ -586,65 +587,66 @@ def redis_target(url):
         return ("unreadable", url)
 
 
-def sfu_redis_source(env, containers, pattern_set=False):
-    url = redis_source_url(env)
-    prefix = redis_key_prefix(env)
-    for found in containers:
-        if found["relation"] not in ("exact", "related") or not is_sfu(found):
-            continue
-        theirs = redis_source_url(found["env"])
-        if not theirs:
-            continue
-        name = found["env"].get("SFU_INSTANCE_ID") or found["id"]
-        if not url or redis_target(theirs) != redis_target(url):
-            named = redis_where(url) if url else "no Redis"
-            raise Refused(f"the SFU {name} keeps its state in the Redis at {redis_where(theirs)}, and the backup config names {named}; set SFU_PERSISTENCE_REDIS_URL in the backup config to that Redis, as this host reaches it")
-        if not pattern_set and redis_key_prefix(found["env"]) != prefix:
-            raise Refused(f"the SFU {name} keeps its state under the Redis key prefix {redis_key_prefix(found['env'])}, not {prefix}; set SFU_PERSISTENCE_REDIS_KEY_PREFIX in the backup config to it")
-    return url
+def sfu_containers(containers):
+    return [found for found in containers if found["relation"] in ("exact", "related") and is_sfu(found)]
+
+
+def control_plane_mode(env):
+    # Keep in step with resolveControlPlaneMode in controlPlane/open.ts.
+    def as_mode(value, name):
+        mode = "json" if value == "file" else value
+        if mode not in CONTROL_PLANE_MODES:
+            raise Refused(f"{name} must name memory, json, sqlite or redis")
+        return mode
+
+    explicit = (env.get("CONTROL_PLANE_PERSISTENCE") or "").strip(JS_SPACE).lower()
+    if explicit:
+        return as_mode(explicit, "CONTROL_PLANE_PERSISTENCE")
+    derived = "redis" if redis_source_url(env) else "sqlite"
+    legacy = [(name, (env.get(name) or "").strip(JS_SPACE).lower()) for name in LEGACY_MODE_VARIABLES]
+    modes = [as_mode(value, name) for name, value in legacy if value]
+    if all(mode == derived for mode in modes):
+        return derived
+    if len(modes) == len(LEGACY_MODE_VARIABLES) and len(set(modes)) == 1:
+        return modes[0]
+    raise Refused("the SFU cannot pick separate persistence modes; set CONTROL_PLANE_PERSISTENCE")
 
 
 def redis_key_pattern(env):
     return re.sub(r"([*?\[\]\\])", r"\\\1", redis_key_prefix(env)) + ":*"
 
 
-def file_backed(env, variable):
-    mode = (env.get(variable.replace("_SQLITE_PATH", "_PERSISTENCE")) or "").strip(JS_SPACE).lower()
-    return mode in ("json", "file")
+def redis_revision_key(env):
+    return redis_key_prefix(env) + ":{control-plane}:rev"
 
 
-def json_store_paths(env):
-    picked = []
-    for variable in STORE_VARIABLES:
-        if file_backed(env, variable):
-            mode = variable.replace("_SQLITE_PATH", "_PERSISTENCE")
-            own = variable.replace("_SQLITE_PATH", "_PATH")
-            picked.append((f"{mode}={env[mode].strip(JS_SPACE).lower()}", own, (env.get(own) or "").strip(JS_SPACE)))
-    return picked
+def sfu_redis_source(env, containers):
+    sfus = sfu_containers(containers)
+    redis = [found for found in sfus if control_plane_mode(found["env"]) == "redis"]
+    if not redis and (sfus or control_plane_mode(env) != "redis"):
+        return ""
+    url = redis_source_url(env)
+    prefix = redis_key_prefix(env)
+    pattern = env.get("BACKUP_REDIS_PATTERN")
+    if pattern and pattern not in ("*", redis_key_pattern(env)):
+        raise Refused("BACKUP_REDIS_PATTERN must include the entire control-plane namespace; leave it unset or use the configured prefix followed by :*")
+    for found in redis:
+        theirs = redis_source_url(found["env"])
+        name = found["env"]["SFU_INSTANCE_ID"]
+        if not theirs:
+            raise Refused(f"the SFU {name} uses Redis control-plane persistence without a Redis URL")
+        if not url or redis_target(theirs) != redis_target(url):
+            named = redis_where(url) if url else "no Redis"
+            raise Refused(f"the SFU {name} keeps its state in the Redis at {redis_where(theirs)}, and the backup config names {named}; set SFU_PERSISTENCE_REDIS_URL in the backup config to that Redis, as this host reaches it")
+        if redis_key_prefix(found["env"]) != prefix:
+            raise Refused(f"the SFU {name} keeps its state under the Redis key prefix {redis_key_prefix(found['env'])}, not {prefix}; set SFU_PERSISTENCE_REDIS_KEY_PREFIX in the backup config to it")
+    if not url:
+        raise Refused("Redis control-plane persistence requires SFU_PERSISTENCE_REDIS_URL, SFU_REDIS_URL, or REDIS_URL")
+    return url
 
 
-def store_paths(env, fallback=None):
-    """(variable, path) for each store's database, the way the SFU picks it:
-    the store's own variable, else CONCLAVE_SQLITE_PATH, else fallback (the
-    compose default), or nothing when there is no fallback. A store whose
-    persistence mode is json or file opens no database."""
-    shared = env.get("CONCLAVE_SQLITE_PATH", "").strip()
-    picked = []
-    for variable in STORE_VARIABLES:
-        if file_backed(env, variable):
-            continue
-        own = env.get(variable, "").strip()
-        if own:
-            picked.append((variable, own))
-        elif shared:
-            picked.append(("CONCLAVE_SQLITE_PATH", shared))
-        elif fallback:
-            picked.append(("the compose default", fallback))
-    return picked
-
-
-def state_path(path, mounts, state):
-    """Where a container path lies below the state dir, read through the
+def state_path(path, mounts, state, allow_root=False):
+    """Where a container path lies in the state dir, read through the
     container's mount whose destination holds it most closely, or None when
     no mount does or it lands outside the state dir."""
     best = None
@@ -662,7 +664,7 @@ def state_path(path, mounts, state):
     for source in (os.path.realpath(best["source"]), os.path.normpath(best["source"])):
         host = os.path.join(source, rest) if rest else source
         for base in (os.path.realpath(state), os.path.normpath(os.path.abspath(state))):
-            if within(host, base) and host != base:
+            if within(host, base) and (allow_root or host != base):
                 return host[len(base):].lstrip("/")
     return None
 
@@ -695,66 +697,71 @@ def state_view_problems(state, containers):
     return problems
 
 
-def configured_json_stores(state, container, containers, env=None):
+def configured_stores(state, container, containers, mode, env=None):
+    """Active file stores seen from Docker. When no SFU is available to
+    inspect, the backup config uses the Compose volume defaults."""
     env = os.environ if env is None else env
-    roots = mount_roots(state, container)
-    sources = [("the backup config", json_store_paths(env), lambda path: under_root(path, roots))]
-    for found in containers:
-        if found["relation"] in ("exact", "related") and is_sfu(found):
-            sources.append((f"the container {found['id']}", json_store_paths(found["env"]), lambda path, mounts=found["mounts"]: state_path(path, mounts, state)))
+    problems = state_view_problems(state, containers)
+    if problems:
+        raise Refused("\n".join(problems))
+    sfus = sfu_containers(containers)
+    sources = [(found["env"], found["working_dir"],
+                f"the container {found['id']}", found["mounts"]) for found in sfus]
+    if not sfus:
+        sources.append((env, container, "the backup config", None))
     stores = []
-    for where, picked, locate in sources:
-        for mode, variable, value in picked:
-            if not value:
-                raise Refused(f"{mode} keeps its file at the SFU's working directory default ({where}), outside the state dir, so it is not on the volume; set {variable} under {container}")
-            if not value.startswith("/"):
-                raise Refused(f"{variable}={value} ({where}) is not an absolute path, so it is not on the volume; set it under {container}")
-            rel = locate(posixpath.normpath(value))
-            if not rel:
-                raise Refused(f"{variable}={value} ({where}) is outside the state dir, so it is not on the volume; move it under {container}")
+    for settings, cwd, where, mounts in sources:
+        if control_plane_mode(settings) != mode:
+            continue
+        if mode == "sqlite":
+            variable = "CONCLAVE_SQLITE_PATH"
+            default_dir = (settings.get("RECORDING_STORAGE_PATH") or "").strip(JS_SPACE)
+            default_dir = (default_dir or "data") if mounts is not None else container
+            default = posixpath.join(default_dir, "conclave.sqlite")
+        else:
+            variable = "CONTROL_PLANE_JSON_PATH"
+            default = "data/control-plane.json" if mounts is not None else posixpath.join(container, "control-plane.json")
+        value = (settings.get(variable) or "").strip(JS_SPACE) or default
+        resolved = "/" + posixpath.normpath(posixpath.join(cwd, value)).lstrip("/")
+        rel = (state_path(resolved, mounts, state) if mounts is not None
+               else under_root(resolved, mount_roots(state, container)))
+        if not rel:
+            raise Refused(f"{variable}={resolved} ({where}) is outside the state dir, so it is not on the volume; move it under {container}")
+        if rel not in [store["rel"] for store in stores]:
             stores.append({"rel": rel, "variable": variable, "where": where})
     return stores
 
 
 def json_coverage_problems(archive, state, container):
     files = {rel for rel, kind in restore_writes(archive, False, True) if kind == "file"}
-    stores = configured_json_stores(state, container, state_mounts(docker_containers(), state))
+    stores = configured_stores(state, container, state_mounts(docker_containers(), state), "json")
     return [f"the backup has no copy of {store['rel']}, the JSON file {store['variable']} ({store['where']}) names"
             for store in stores if store["rel"] not in files]
 
 
-def configured_stores(state, container, containers, env=None):
-    """Every database a store opens, as this host's config sets it and as the
-    env of each SFU container that mounts the state dir sets it, each store's
-    precedence applied: {"rel", "variable", "value", "where"}, one per path.
-    The SFU opens path.resolve(value), which drops ".." without reading the
-    disk, so the same is done here. A path outside the state dir refuses."""
-    env = os.environ if env is None else env
+def fallback_import_dirs(state, container):
+    containers = state_mounts(docker_containers(), state)
     problems = state_view_problems(state, containers)
     if problems:
         raise Refused("\n".join(problems))
-    roots = mount_roots(state, container)
-    sources = [("the backup config", variable, value, lambda path: under_root(path, roots))
-               for variable, value in store_paths(env, f"{container.rstrip('/')}/conclave.sqlite")]
-    for found in containers:
-        if found["relation"] in ("exact", "related") and is_sfu(found):
-            # A container without any of the variables runs with whatever its
-            # compose file set; only what its env says it opens counts here,
-            # read through that container's own mounts.
-            sources += [(f"the container {found['id']}", variable, value, lambda path, mounts=found["mounts"]: state_path(path, mounts, state))
-                        for variable, value in store_paths(found["env"])]
-
-    stores = []
-    for where, variable, value, locate in sources:
-        shown = f"{variable}={value}" if variable != "the compose default" else f"the compose default {value}"
-        if not value.startswith("/"):
-            raise Refused(f"{shown} ({where}) is not an absolute path, so it is not on the volume; set it under {container}")
-        rel = locate(posixpath.normpath(value))
-        if not rel:
-            raise Refused(f"{shown} ({where}) is outside the state dir, so it is not on the volume; move it under {container}")
-        if rel not in [store["rel"] for store in stores]:
-            stores.append({"rel": rel, "variable": variable, "value": value, "where": where})
-    return stores
+    sfus = sfu_containers(containers)
+    variable = "CONCLAVE_FALLBACK_IMPORT_DIR"
+    sources = [(found["env"], found["working_dir"], found["mounts"]) for found in sfus]
+    if not sfus:
+        sources.append((os.environ, container, None))
+    dirs = set()
+    for env, cwd, mounts in sources:
+        default = posixpath.join(container, "json-fallback-import") if mounts is None else ""
+        value = env.get(variable, default).strip(JS_SPACE)
+        if not value or control_plane_mode(env) == "memory":
+            continue
+        resolved = "/" + posixpath.normpath(posixpath.join(cwd, value)).lstrip("/")
+        rel = (state_path(resolved, mounts, state, allow_root=True) if mounts is not None
+               else under_root(resolved, mount_roots(state, container)))
+        if rel is None:
+            raise Refused(f"{variable}={resolved} is outside the state dir, so the restore cannot reconcile its snapshots")
+        dirs.add(rel)
+    return dirs
 
 
 def walk_error(error):
@@ -798,6 +805,7 @@ def docker_containers():
             "status": (entry.get("State") or {}).get("Status") or "unknown",
             "env": env,
             "user": config.get("User") or "",
+            "working_dir": config.get("WorkingDir") or "/",
             "image": entry.get("Image") or "",
             "mounts": [
                 {"source": mount["Source"], "destination": mount.get("Destination") or "", "rw": mount.get("RW", True) is not False}

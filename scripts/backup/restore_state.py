@@ -52,9 +52,12 @@ from statelib import (  # noqa: E402
     at,
     chain_problems,
     configured_stores,
+    redis_revision_key,
+    redis_key_pattern,
     database_files,
     database_paths,
     docker_containers,
+    fallback_import_dirs,
     folded,
     json_coverage_problems,
     log,
@@ -72,6 +75,9 @@ from statelib import (  # noqa: E402
 )
 
 PARTS = ("sqlite", "redis", "files")
+
+# Keep in step with the input names in controlPlane/legacy.ts.
+IMPORT_COPY = re.compile(r"(?:scheduled-meetings|scheduled-webinars|scheduling)\.json(?:\.claimed-[0-9]+-[0-9]+)?")
 
 
 class Builder:
@@ -278,7 +284,7 @@ class StateDir:
             raise Refused(f"the state dir {given} cannot be opened as a directory: {error.strerror}")
         self.dev = os.fstat(self.fd).st_dev
 
-    def live_problems(self, writes, sides):
+    def live_problems(self, writes, retire):
         """The live state dir can take the writes: every directory on their
         way is a real directory on the state dir's file system that this user
         can change, nothing a restore replaces is a directory, and nothing a
@@ -290,7 +296,7 @@ class StateDir:
         for rel, _ in writes:
             parts = rel.split("/")
             dirs.update("/".join(parts[:i]) for i in range(1, len(parts)))
-        paths = {rel for rel, _ in writes} | dirs | set(sides)
+        paths = {rel for rel, _ in writes} | dirs | retire
         seen = {}
 
         def look(rel):
@@ -329,9 +335,47 @@ class StateDir:
                 problems.append(f"{rel} is a directory in the state dir")
             elif info is not None and not (stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)):
                 problems.append(f"{rel} is not a file or link in the state dir")
-            elif (info is not None or rel not in sides) and not can_write(holder):
+            elif (info is not None or rel not in retire) and not can_write(holder):
                 problems.append(f"the directory that holds {rel} is not writable by this user; rerun the restore as root")
         return sorted(set(problems))
+
+
+def live_imports_to_retire(state, dirs, writes):
+    """Live importer inputs to move aside before placing archived copies."""
+    if state.fd is None:
+        return set()
+    def entries(rel):
+        try:
+            fd = open_parts(state.fd, rel.split("/") if rel else [], state.given)
+        except FileNotFoundError:
+            return []
+        try:
+            with os.scandir(fd) as scan:
+                return [(entry.name, entry.is_dir(follow_symlinks=False)) for entry in scan]
+        except OSError as error:
+            raise Refused(f"cannot list {state.given}/{rel}: {error.strerror}")
+        finally:
+            os.close(fd)
+
+    # A live-only .source would change the lineage of a restored snapshot.
+    archived_groups = {os.path.dirname(rel) for rel, kind in writes
+                       if kind != "dir" and IMPORT_COPY.fullmatch(os.path.basename(rel))}
+    retire = set()
+    for root in dirs:
+        for name, is_dir in entries(root):
+            if not is_dir or name.startswith("."):
+                continue
+            service = f"{root}/{name}" if root else name
+            for leaf, is_dir in entries(service):
+                if IMPORT_COPY.fullmatch(leaf):
+                    retire.add(f"{service}/{leaf}")
+                if not is_dir or leaf.startswith("."):
+                    continue
+                group = f"{service}/{leaf}"
+                for file, _ in entries(group):
+                    if IMPORT_COPY.fullmatch(file) or (file == ".source" and group in archived_groups):
+                        retire.add(f"{group}/{file}")
+    return retire - {rel for rel, kind in writes if kind == "dir"}
 
 
 def http_answers(url):
@@ -517,7 +561,7 @@ def is_empty(parent_fd, name):
         os.close(fd)
 
 
-def apply_restore(state, archive, writes, sides, roots, stamp, owner, sqlite):
+def apply_restore(state, archive, writes, retire, roots, stamp, owner, sqlite):
     """Builds the restored tree beside the state dir, checks again, and swaps
     it in; any failure from the first rename on undoes them all."""
     os.makedirs(state.parent_real, mode=0o755, exist_ok=True)
@@ -562,7 +606,7 @@ def apply_restore(state, archive, writes, sides, roots, stamp, owner, sqlite):
                 finally:
                     os.close(state_fd)
                 return None
-            problems = state.live_problems(writes, sides)
+            problems = state.live_problems(writes, retire)
             if problems:
                 raise Refused("; ".join(problems))
             os.mkdir(aside_name, 0o700, dir_fd=parent_fd)
@@ -570,7 +614,9 @@ def apply_restore(state, archive, writes, sides, roots, stamp, owner, sqlite):
             try:
                 with Swap(state.fd, staging_fd, aside_fd) as swap:
                     try:
-                        for rel in sorted(sides):
+                        # Retire old journal files and live importer inputs
+                        # before any restored checkpoint can become visible.
+                        for rel in sorted(retire):
                             parts = rel.split("/")
                             try:
                                 holder = open_parts(state.fd, parts[:-1])
@@ -751,10 +797,13 @@ class RedisRestore:
     def __init__(self, work_real, archive, target, pattern):
         self.target = target
         self.pattern = pattern
-        self.where = f"{target['host']}:{target['port']}"
-        self.live = ["-h", target["host"], "-p", str(target["port"]), "-n", target["db"], "--no-auth-warning"]
-        if target["user"]:
-            self.live += ["--user", target["user"]]
+        if target is not None:
+            self.where = f"{target['host']}:{target['port']}"
+            self.live = ["-h", target["host"], "-p", str(target["port"]), "-n", target["db"], "--no-auth-warning"]
+            if target["user"]:
+                self.live += ["--user", target["user"]]
+        self.source_version = manifest_value(archive, "redis.version")
+        self.revision = manifest_value(archive, "redis.control_plane_revision")
         self.work = os.path.join(work_real, "redis")
         self.dump = os.path.join(archive.payload, "redis", "dump.rdb")
         # The snapshot is read from the database it was taken from, and
@@ -782,6 +831,20 @@ class RedisRestore:
             if any(word in said for word in ("NOAUTH", "WRONGPASS", "NOPERM", "invalid password")):
                 raise Refused(f"the Redis at {self.where} refused this restore ({said}); check the user and password in its URL; nothing was changed")
             raise Refused(f"cannot reach the Redis at {self.where} ({said or 'no answer'}); nothing was changed")
+        self.load_snapshot()
+
+        try:
+            with redis_commands(self.socket, self.source_db) as snapshot:
+                backed_up = scan_redis_keys(snapshot, self.pattern)
+                self.check_revision(snapshot)
+            with self.live_commands() as live:
+                current = scan_redis_keys(live, self.pattern)
+        except Refused as refused:
+            raise Refused(f"cannot scan Redis keys for restore: {refused}; nothing was changed") from refused
+        self.keys = sorted(backed_up)
+        self.stale = sorted(current - backed_up)
+
+    def load_snapshot(self):
         os.mkdir(self.work, 0o700)
         # The host's redis-server first, then the live server's version in
         # Docker: an older host package must not stop a dump it cannot read.
@@ -797,15 +860,12 @@ class RedisRestore:
         else:
             raise Refused(f"the Redis snapshot in the backup does not load ({'; '.join(failures) or 'no redis-server or Docker on this host to load it with'}); nothing was changed")
 
-        try:
-            with redis_commands(self.socket, self.source_db) as snapshot:
-                backed_up = scan_redis_keys(snapshot, self.pattern)
-            with self.live_commands() as live:
-                current = scan_redis_keys(live, self.pattern)
-        except Refused as refused:
-            raise Refused(f"cannot scan Redis keys for restore: {refused}; nothing was changed") from refused
-        self.keys = sorted(backed_up)
-        self.stale = sorted(current - backed_up)
+    def check_revision(self, snapshot):
+        value = snapshot("GET", redis_revision_key(os.environ))
+        if not isinstance(value, bytes) or not value.isdigit() or int(value) < 1:
+            raise Refused("the Redis snapshot is missing the control-plane store revision")
+        if self.revision is not None and value != self.revision.encode():
+            raise Refused("the Redis snapshot does not contain the revision read under the write fence")
 
     def live_commands(self):
         target = self.target
@@ -826,11 +886,13 @@ class RedisRestore:
                  "--save", "", "--appendonly", "no", "--daemonize", "no", "--databases", databases],
                 stdout=self.server_log, stderr=subprocess.STDOUT)
         else:
-            info = run_cli(self.live + ["INFO", "server"], password=self.target["password"])
-            version = re.search(r"^redis_version:(\d+\.\d+)", info, re.M)
+            version = re.match(r"^(\d+\.\d+)", self.source_version or "")
+            if not version and self.target:
+                info = run_cli(self.live + ["INFO", "server"], password=self.target["password"])
+                version = re.search(r"^redis_version:(\d+\.\d+)", info, re.M)
             if not version:
-                raise Refused("cannot tell the live Redis version to load the snapshot with")
-            self.container = f"conclave-restore-redis-{os.getpid()}"
+                raise Refused("cannot tell the Redis version to load the snapshot with")
+            self.container = f"conclave-snapshot-redis-{os.getpid()}"
             started = subprocess.run(
                 ["docker", "run", "--rm", "-d", "--name", self.container, "--network", "host", "-v", f"{self.scratch}:/data",
                  f"redis:{version.group(1)}", "redis-server", "--port", "0", "--unixsocket", "/data/redis.sock",
@@ -887,19 +949,36 @@ def coverage_problems(archive, state, container):
     each SFU container's env) must be in the archive, or that store would
     come back empty while the others are restored."""
     covered = {start for start, _ in archive.chains} | set(archive.databases)
-    stores = configured_stores(state, container, state_mounts(docker_containers(), state))
+    stores = configured_stores(state, container, state_mounts(docker_containers(), state), "sqlite")
     return [f"the backup has no copy of {store['rel']}, the database {store['variable']} ({store['where']}) names, so that store would come back empty"
             for store in stores if store["rel"] not in covered]
 
 
-def require_redis_pattern(archive, pattern):
-    prefix = "redis.pattern="
+def manifest_value(archive, key):
+    prefix = key + "="
     with open(os.path.join(archive.payload, "MANIFEST"), encoding="utf-8") as manifest:
         recorded = [line[len(prefix):].rstrip("\n") for line in manifest if line.startswith(prefix)]
-    if len(recorded) != 1 or not recorded[0]:
+    return recorded[0] if len(recorded) == 1 and recorded[0] else None
+
+
+def require_redis_pattern(archive, pattern):
+    recorded = manifest_value(archive, "redis.pattern")
+    if not recorded:
         raise Refused("the backup does not record exactly one Redis key pattern; nothing was changed")
-    if recorded[0] != pattern:
-        raise Refused(f"the backup's Redis key pattern {recorded[0]!r} does not match the requested pattern {pattern!r}; use a backup for the configured prefix or leave Redis out; nothing was changed")
+    if recorded != pattern:
+        raise Refused(f"the backup's Redis key pattern {recorded!r} does not match the requested pattern {pattern!r}; use a backup for the configured prefix or leave Redis out; nothing was changed")
+    if pattern not in ("*", redis_key_pattern(os.environ)):
+        raise Refused("the Redis key pattern does not cover the entire control-plane namespace; nothing was changed")
+
+
+def validate_redis_snapshot(archive):
+    snapshot = RedisRestore(os.path.dirname(archive.payload), archive, target=None, pattern=None)
+    try:
+        snapshot.load_snapshot()
+        with redis_commands(snapshot.socket, snapshot.source_db) as command:
+            snapshot.check_revision(command)
+    finally:
+        snapshot.stop()
 
 
 def parse_owner(value):
@@ -960,11 +1039,13 @@ def restore(args):
             require_redis_pattern(archive, redis_pattern)
             redis = redis_target()
     writes = restore_writes(archive, sqlite, "files" in wants)
-    sides = side_files(database_files(archive)) if sqlite else set()
+    retire = side_files(database_files(archive)) if sqlite else set()
     state = StateDir(args.state)
     redis_step = None
     try:
-        problems = state.live_problems(writes, sides)
+        if "files" in wants:
+            retire.update(live_imports_to_retire(state, fallback_import_dirs(args.state, args.container), writes))
+        problems = state.live_problems(writes, retire)
         if sqlite and not problems:
             problems = chain_problems(overlay(state.fd, archive, writes), archive, roots)
         if problems:
@@ -978,8 +1059,8 @@ def restore(args):
         if redis:
             redis_step = RedisRestore(work_real, archive, redis, redis_pattern)
             redis_step.prepare()
-        if writes:
-            aside = apply_restore(state, archive, writes, sides, roots, args.stamp, owner, sqlite)
+        if writes or retire:
+            aside = apply_restore(state, archive, writes, retire, roots, args.stamp, owner, sqlite)
             for rel, kind in writes:
                 if kind == "db":
                     log(f"Restored {args.state}/{rel}")

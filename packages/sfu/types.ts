@@ -376,6 +376,7 @@ export interface ScheduledWebinar {
   webinarLink: string;
   coHostInviteTokenHash: string | null;
   coHostInviteTokenCreatedAt: number | null;
+  inviteCodeHash?: string | null;
 }
 
 export interface CreateScheduledWebinarRequest {
@@ -451,7 +452,6 @@ export interface ScheduledMeeting {
   attendeeTimeZone?: string | null;
   // Invited people a host removed from the meeting or took admission back
   // from. They knock like anyone else until a host lets them in again.
-  readmissionRequiredEmails?: string[];
   googleCalendarEventId?: string | null;
   calendarSyncStatus?: "not_required" | "pending" | "synced" | "failed";
   calendarSyncError?: string | null;
@@ -564,6 +564,7 @@ export interface SchedulingEventType {
 
 export interface SchedulingCalendarConnection {
   id: string;
+  grantId: string;
   clientId: string;
   profileId: string;
   userId: string;

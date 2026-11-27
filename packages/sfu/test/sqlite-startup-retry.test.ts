@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createScheduledWebinarPersistence } from "../server/scheduledWebinars.js";
+import { allWebinars } from "../server/controlPlane/webinarCommands.js";
+import { openControlPlane } from "../server/controlPlane/open.js";
 import { retryWhileSqliteLocked } from "../server/sqliteWriteCheck.js";
 
 let dir = "";
@@ -38,12 +39,14 @@ describe("SQLite at startup", () => {
     vi.stubEnv("CONCLAVE_SQLITE_PATH", join(dir, "conclave.sqlite"));
     vi.stubEnv("SCHEDULED_WEBINARS_SQLITE_PATH", "");
     vi.stubEnv("SCHEDULED_WEBINARS_PERSISTENCE", "");
+    vi.stubEnv("CONTROL_PLANE_PERSISTENCE", "sqlite");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { release } = await holdWriteLock(join(dir, "conclave.sqlite"), 6_500);
 
-    const persistence = await retryWhileSqliteLocked(() => createScheduledWebinarPersistence());
+    const store = await openControlPlane();
 
-    expect(persistence.load()).toEqual([]);
+    expect(await store.read(allWebinars)).toEqual([]);
+    await store.close();
     expect(warn.mock.calls.flat().join(" ")).toMatch(/SQLite is locked by another process/);
     await release;
   }, 30_000);

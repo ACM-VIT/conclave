@@ -8,20 +8,17 @@ IST to Azure Blob Storage in another region.
 
 | Data | Where it lives | How it is copied |
 | --- | --- | --- |
-| Scheduled meetings, scheduling, webinars | Every `*.sqlite` under the state dir (`/var/lib/conclave/recordings`, the SFU volume), at any depth, and each store's own database: `SCHEDULING_SQLITE_PATH`, `SCHEDULED_MEETINGS_SQLITE_PATH` or `SCHEDULED_WEBINARS_SQLITE_PATH`, else `CONCLAVE_SQLITE_PATH`, else the compose default `conclave.sqlite`, as the host config and every SFU container's env set them | A private copy of the pinned SQLite inputs, then SQLite's backup API and `PRAGMA integrity_check`. Each keeps its path below the state dir. |
-| Scheduled meetings and scheduling (Redis mode) | Host Redis, keys `conclave:sfu:persistence:*` | `redis-cli --rdb`: the server forks a fresh snapshot, the same way `BGSAVE` does, and streams it. The host's `redis-check-rdb` checks it when installed; when that rejects it (an older package than the live Redis), `redis:<live major.minor>` checks it in Docker, and only a rejection there fails the backup |
-| Anything else in the state dir | JSON stores and similar files | A tar written in Python while the fence still holds |
+| Unified control plane in SQLite mode | `CONCLAVE_SQLITE_PATH`, normally `/var/lib/conclave/recordings/conclave.sqlite` in Compose. Other `*.sqlite` files in the volume are also copied. | SQLite's backup API opens private copies of the database and its side files. The backup runs `PRAGMA integrity_check` on the result. |
+| Unified control plane in JSON mode | `CONTROL_PLANE_JSON_PATH`, normally `/var/lib/conclave/recordings/control-plane.json` in Compose | The file is archived under the write fence. The SFU's temporary writer lock is not archived. |
+| Unified control plane in Redis mode | The configured Redis database and persistence prefix | `redis-cli --rdb` streams a snapshot. A scratch Redis loads the dump and checks the control-plane revision against the value read under the fence before the archive can replace older copies. |
+| Other files | The state directory | A tar written while the fence still holds. |
 
-SQLite and Redis are copied at one point in time. Before either copy, the
-backup asks every SFU in `CONCLAVE_SFU_HEALTH_URLS` to hold its durable
-writes (`POST /admin/persistence-fence`, `BACKUP_FENCE_HOLD_MS` 20 s by
-default). Every persistence call on the SFU passes one gate. While it is
-open, calls run side by side as they always did, so a slow Redis never holds
-up a SQLite save. A hold closes it and answers once every call already under
-way has finished; calls made during the hold queue and start in the order
-they were made when it lifts, and each caller gets its own result or error.
-The SFUs keep serving from memory, and media and signalling never wait on
-it. The hold belongs to
+The backup asks every SFU in `CONCLAVE_SFU_HEALTH_URLS` to hold its
+control-plane writes using `POST /admin/persistence-fence`.
+`BACKUP_FENCE_HOLD_MS` defaults to 20 seconds. The hold waits for in-flight
+commits and queues new ones without blocking reads. Requests that commit
+data wait for their result. A join's webinar metric is written in the background,
+so it does not delay the join. The hold belongs to
 the backup's random owner token: only that token renews or releases it, and
 the SFU lifts it at its deadline, never later than 30 s after it was taken,
 if the backup dies. The backup renews after the SQLite copies and again after
@@ -155,40 +152,28 @@ systemctl enable --now conclave-backup.timer
 systemctl list-timers conclave-backup.timer
 ```
 
-Every store's database (`CONCLAVE_SQLITE_PATH`, or a store's own
-`SCHEDULING_SQLITE_PATH`, `SCHEDULED_MEETINGS_SQLITE_PATH` or
-`SCHEDULED_WEBINARS_SQLITE_PATH`, in the repo `.env` or an SFU container's
-env, each store's precedence applied) must point inside the state dir. A
-store whose `SCHEDULING_PERSISTENCE`, `SCHEDULED_MEETINGS_PERSISTENCE` or
-`SCHEDULED_WEBINARS_PERSISTENCE` is `json` or `file` (trimmed, any case, as
-the SFU reads it) opens no database, so none is required for it. It keeps
-its records in one file, `SCHEDULING_PATH`, `SCHEDULED_MEETINGS_PATH` or
-`SCHEDULED_WEBINARS_PATH`, which must be set and lie inside the state dir: the
-SFU's default (`data/<store>.json` under its working directory) is inside the
-container, not on the volume, so the backup and a restore of files refuse it
-(a restore of SQLite or Redis alone does not read it). The backup must
-capture each configured JSON file to keep a new archive. An unused store
-may have no file until its first save. Until the file exists and can be
-archived, the backup fails and keeps the previous archives. It cannot tell
-an unused store from a missing file that held records. An SFU
-container is one whose env sets `SFU_INSTANCE_ID`, the rule the deploy uses to
-pick its SFU services; another container on the state dir (a maintenance one,
-say) neither chooses the stores nor stops a backup, though any running
-container that can write the state dir still does. A
-container's path is read through that container's own mounts, so a store
-kept under a mount of a dir above the state dir (`/srv/conclave` at
-`/var/lib/conclave`, the state dir `/srv/conclave/recordings`) counts too. An
-SFU container that mounts another host dir inside its view of the state dir
-(say `/srv/other` at `/var/lib/conclave/recordings/data`) opens files the
-backup cannot see there, so the backup and the restore refuse that layout. A path outside the volume lives inside
-the container and is lost on every deploy, so the backup fails until it is
-moved. Each gets the SQLite backup whatever it is named (`live.db` as much as
-`conclave.sqlite`). If it is reached through links, the file they reach is
-backed up once, and every link on the way is recorded relative
-(`conclave.sqlite -> data/live.db`, whether it was written with the
-container's path, the host's or `..` steps) with the directories it passes,
-so a restore into any dir rebuilds the same chain; a link to a file outside
-the state dir fails the backup.
+The backup uses the effective environment and mounts of each SFU container
+that shares the state directory. If there are none, it uses the backup config
+and the Compose path defaults. `CONTROL_PLANE_PERSISTENCE` selects the mode.
+Without it, the SFU derives Redis mode from a configured persistence URL or
+uses SQLite. The SFU still accepts its legacy mode settings when they agree
+with the derived mode or all three select the same mode. Legacy per-store
+paths are migration inputs, not active stores.
+
+The active SQLite database or JSON file must be inside the state directory
+and present in the archive. A path that resolves only inside the container,
+or through a nested mount to another host directory, fails the backup.
+A relative path resolves against the container's working directory. SQLite
+links under the state directory are recorded relative and restored with their
+targets. The backup refuses links that escape that directory.
+
+For Redis mode, the backup checks the database and persistence prefix
+against the container settings. If it cannot find the control-plane revision
+in the chosen database, cannot load the RDB, or sees a different revision in
+the RDB, the backup fails and keeps the previous archives. Install a
+`redis-server` that can read the RDB or make the source's Redis image
+available in Docker. The scratch check runs after the fence is released and
+uses temporary space for another copy of the dump.
 
 If the upload fails, the encrypted archive stays in `/var/backups/conclave`,
 the job fails, and the heartbeat is not sent. The newest
@@ -235,11 +220,8 @@ To apply it:
      is there. It refuses while an SFU answers, while any running container
      mounts the state dir or a dir above or inside it, or while a process
      holds a database open.
-   - Every store's database, by its own precedence (its own variable, else
-     `CONCLAVE_SQLITE_PATH`, else the compose default, from this host's config
-     and every SFU container's env), must be in the archive; one it lacks
-     would come back empty, so the restore refuses unless `--only` leaves
-     SQLite out. With Redis configured, the archive must hold a Redis
+   - Each configured control-plane database or JSON file must be in the
+     archive unless `--only` leaves that part out. With Redis configured, the archive must hold a Redis
      snapshot (or `--only sqlite,files` leaves Redis out), the live Redis
      must answer and take the URL's credentials, and the snapshot must load
      into a throwaway server: this host's `redis-server`, else the live
@@ -270,7 +252,7 @@ To apply it:
    `SFU_PERSISTENCE_REDIS_URL`, else `SFU_REDIS_URL`, else `REDIS_URL`, each
    trimmed first, so a blank value falls through to the next as it does for
    the SFU (the backup suite checks both rules agree over a table of settings).
-   Every SFU container that mounts the state dir and names a Redis of its own
+   Every SFU container in Redis mode that mounts the state directory
    (staging builds its URL in its compose file) must name the same Redis
    (scheme, host, port and database, defaults filled in; its own account may
    differ) and key prefix as the backup config, or the backup and the restore
@@ -285,7 +267,7 @@ To apply it:
    it has are restored, and those it lacks are deleted, so a meeting created
    after the backup cannot outlive the restore. Other keys, such as room
    leases, are left alone. `--redis-pattern '*'` makes the whole database match
-   the backup. A TLS (`rediss://`) Redis is refused before anything changes;
+   the backup. A custom pattern other than the persistence prefix or '*' is\n   refused because it could omit part of the control plane. A TLS (`rediss://`) Redis is refused before anything changes;
    use `--only sqlite,files` there.
    The entries the restore creates, and only those, go to the user the SFU
    runs as, each through its own fd as it is made (a file that gains a second

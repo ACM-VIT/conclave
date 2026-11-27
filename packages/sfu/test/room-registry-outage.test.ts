@@ -78,7 +78,7 @@ describe("rooms during a shared registry outage", () => {
 
     await expect(
       getOrCreateRoomWithOrigin(state, "conclave", "room"),
-    ).resolves.toEqual({ room, created: false, recalled: null });
+    ).resolves.toMatchObject({ room, created: false, recalled: null });
     expect(closeRouter).not.toHaveBeenCalled();
   });
 
