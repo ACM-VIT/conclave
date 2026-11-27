@@ -3158,6 +3158,116 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(notification.locked)
     }
 
+    func testAppsStateDecodesTheRevisionAndSavedAppsANewerSfuAdds() throws {
+        let json = """
+        {
+          "roomId": "room-a",
+          "activeAppId": "wheel",
+          "locked": false,
+          "revision": 7,
+          "savedAppIds": ["watch", "whiteboard"],
+          "docGeneration": 3
+        }
+        """.data(using: .utf8)!
+
+        let notification = try JSONDecoder().decode(AppsStateNotification.self, from: json)
+
+        XCTAssertEqual(notification.roomId, "room-a")
+        XCTAssertEqual(notification.activeAppId, "wheel")
+        XCTAssertFalse(notification.locked)
+        XCTAssertEqual(notification.revision, 7)
+        XCTAssertEqual(notification.docGeneration, 3)
+    }
+
+    func testAppsStateFromAnOlderSfuHasNoRevisionOrDocumentGeneration() throws {
+        let json = """
+        {
+          "roomId": "room-a",
+          "activeAppId": "whiteboard",
+          "locked": false
+        }
+        """.data(using: .utf8)!
+
+        let notification = try JSONDecoder().decode(AppsStateNotification.self, from: json)
+
+        XCTAssertNil(notification.revision)
+        XCTAssertNil(notification.docGeneration)
+    }
+
+    func testOnlyTheSameAppStartingOverReplacesItsDocument() {
+        XCTAssertTrue(AppDocumentPolicy.replacesDocument(appId: "whiteboard", generation: 4,
+                                                         previousAppId: "whiteboard", previousGeneration: 2))
+        XCTAssertFalse(AppDocumentPolicy.replacesDocument(appId: "whiteboard", generation: 2,
+                                                          previousAppId: "whiteboard", previousGeneration: 2))
+        XCTAssertFalse(AppDocumentPolicy.replacesDocument(appId: "wheel", generation: 4,
+                                                          previousAppId: "whiteboard", previousGeneration: 2))
+        XCTAssertFalse(AppDocumentPolicy.replacesDocument(appId: "whiteboard", generation: 4,
+                                                          previousAppId: "whiteboard", previousGeneration: nil))
+        XCTAssertFalse(AppDocumentPolicy.replacesDocument(appId: "whiteboard", generation: nil,
+                                                          previousAppId: "whiteboard", previousGeneration: nil))
+    }
+
+    @MainActor
+    func testReturningAfterTheHostClearedTheWhiteboardStartsAFreshAppSession() async throws {
+        let viewModel = isolatedViewModel()
+        viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
+        viewModel.state.roomId = "demo-room"
+        viewModel.state.connectionState = ConnectionState.joined
+
+        await applyServerWhiteboardState(viewModel, revision: 10, docGeneration: 1)
+        let firstSession = viewModel.activeAppSession.appSessionId
+        XCTAssertFalse(firstSession.isEmpty)
+        await applyServerWhiteboardState(viewModel, revision: 11, docGeneration: 1, locked: true)
+        XCTAssertEqual(viewModel.activeAppSession.appSessionId, firstSession)
+
+        await applyServerWhiteboardState(viewModel, revision: 20, docGeneration: 2)
+
+        XCTAssertFalse(viewModel.activeAppSession.appSessionId.isEmpty)
+        XCTAssertNotEqual(viewModel.activeAppSession.appSessionId, firstSession)
+    }
+
+    @MainActor
+    func testClosingTheWhiteboardPromisesASavedBoardOnlyWhenTheSfuKeepsIt() async throws {
+        let viewModel = isolatedViewModel()
+        viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
+        viewModel.state.roomId = "demo-room"
+        viewModel.state.connectionState = ConnectionState.joined
+
+        await applyServerWhiteboardState(viewModel, revision: nil, docGeneration: nil)
+        XCTAssertEqual(viewModel.activitySession.activities.snapshot.nowPlayingItem(kind: ActivityKind.app)?.closeEffect,
+                       AppCloseEffect.clearsBoard)
+        XCTAssertEqual(viewModel.activitySession.appHost.model.closeEffect, AppCloseEffect.clearsBoard)
+
+        await applyServerWhiteboardState(viewModel, revision: 4, docGeneration: 1)
+        XCTAssertEqual(viewModel.activitySession.activities.snapshot.nowPlayingItem(kind: ActivityKind.app)?.closeEffect,
+                       AppCloseEffect.keepsBoard)
+        XCTAssertEqual(viewModel.activitySession.appHost.model.closeEffect, AppCloseEffect.keepsBoard)
+        XCTAssertEqual(AppCloseEffect.of(appId: "wheel", keepsAppDocuments: false), AppCloseEffect.returnsToMeeting)
+    }
+
+    @MainActor
+    func testLeavingARoomForgetsWhetherItsSfuKeepsBoards() async throws {
+        let viewModel = isolatedViewModel()
+        viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
+        viewModel.state.roomId = "demo-room"
+        viewModel.state.connectionState = ConnectionState.joined
+        await applyServerWhiteboardState(viewModel, revision: 4, docGeneration: 1)
+        XCTAssertEqual(viewModel.state.appsRevision, 4)
+
+        await viewModel.cleanup(notifyLocalState: false)
+
+        XCTAssertNil(viewModel.state.appsRevision)
+        XCTAssertNil(viewModel.state.activeAppId)
+    }
+
+    @MainActor
+    private func applyServerWhiteboardState(_ viewModel: MeetingViewModel, revision: Int?, docGeneration: Int?,
+                                            locked: Bool = false) async {
+        viewModel.bufferPendingAppsState(AppsStateNotification(activeAppId: "whiteboard", locked: locked, roomId: "demo-room",
+                                                               revision: revision, docGeneration: docGeneration))
+        await replayPendingPreAckRoomEvents(on: viewModel, includeDeferredRoomState: true)
+    }
+
     @MainActor
     func testActiveAppNameUsesReadableFallbackForUnknownIds() throws {
         let state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")

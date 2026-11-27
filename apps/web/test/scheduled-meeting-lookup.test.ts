@@ -16,6 +16,7 @@ vi.mock("@/lib/sfu-url", () => ({ resolveSfuUrls: () => sfuUrls }));
 vi.mock("@/app/lib/utils", () => ({ readResponseError: async () => "Unavailable" }));
 vi.mock("@/lib/sfu-client-id", () => import("../src/lib/sfu-client-id"));
 
+const destination = { clientId: "conclave", roomCode: "abc-mnop-xyz" };
 const meeting = { id: "m1", roomCode: "abc-mnop-xyz", status: "scheduled" };
 const notFound = () => Response.json({ error: "Scheduled meeting not found" }, { status: 404 });
 
@@ -45,12 +46,12 @@ afterEach(() => {
 describe("looking up whether a link is a scheduled meeting", () => {
   it("finds the meeting, and the client and SFU it belongs to", async () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string) =>
-      url.includes("clientId=public") ? Response.json({ scheduledMeeting: meeting }) : notFound()));
+      url.includes("clientId=conclave") ? Response.json({ scheduledMeeting: meeting }) : notFound()));
 
-    expect(await lookupScheduledMeetingForCode("abc-mnop-xyz")).toEqual({
+    expect(await lookupScheduledMeetingForCode(destination)).toEqual({
       kind: "scheduled",
       sfuUrl: "http://sfu.test",
-      clientId: "public",
+      clientId: "conclave",
       meeting,
     });
   });
@@ -58,7 +59,7 @@ describe("looking up whether a link is a scheduled meeting", () => {
   it("says a code nobody scheduled is not a scheduled meeting", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => notFound()));
 
-    expect(await lookupScheduledMeetingForCode("abc-mnop-xyz")).toEqual({
+    expect(await lookupScheduledMeetingForCode(destination)).toEqual({
       kind: "unscheduled",
     });
   });
@@ -70,7 +71,7 @@ describe("looking up whether a link is a scheduled meeting", () => {
   ])("does not call a meeting unscheduled when %s", async (_case, respond) => {
     vi.stubGlobal("fetch", vi.fn(respond));
 
-    expect(await lookupScheduledMeetingForCode("abc-mnop-xyz")).toEqual({
+    expect(await lookupScheduledMeetingForCode(destination)).toEqual({
       kind: "unknown",
     });
   });
@@ -81,7 +82,7 @@ describe("looking up whether a link is a scheduled meeting", () => {
       sfuUrls = [await stalledSfu(stallAt)];
       const started = Date.now();
 
-      expect(await lookupScheduledMeetingForCode("abc-mnop-xyz")).toEqual({
+      expect(await lookupScheduledMeetingForCode(destination)).toEqual({
         kind: "unknown",
       });
       expect(Date.now() - started).toBeLessThan(4000);
@@ -97,7 +98,7 @@ describe("looking up whether a link is a scheduled meeting", () => {
         ? Response.json({ scheduledMeeting: meeting })
         : realFetch(url, init)));
 
-    expect(await lookupScheduledMeetingForCode("abc-mnop-xyz")).toMatchObject({
+    expect(await lookupScheduledMeetingForCode(destination)).toMatchObject({
       kind: "scheduled",
       meeting,
     });
@@ -108,7 +109,7 @@ describe("looking up whether a link is a scheduled meeting", () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string) =>
       url.startsWith("http://sfu-a.test") ? notFound() : new Response(null, { status: 503 })));
 
-    expect(await lookupScheduledMeetingForCode("abc-mnop-xyz")).toEqual({
+    expect(await lookupScheduledMeetingForCode(destination)).toEqual({
       kind: "unknown",
     });
   });
@@ -117,28 +118,27 @@ describe("looking up whether a link is a scheduled meeting", () => {
     sfuUrls = ["http://sfu-a.test", "http://sfu-b.test"];
     vi.stubGlobal("fetch", vi.fn(async () => notFound()));
 
-    expect(await lookupScheduledMeetingForCode("abc-mnop-xyz")).toEqual({
+    expect(await lookupScheduledMeetingForCode(destination)).toEqual({
       kind: "unscheduled",
     });
   });
 
-  it("still finds the meeting when another client's lookup failed", async () => {
-    vi.stubGlobal("fetch", vi.fn(async (url: string) =>
+  it("does not look for a booking in other tenants", async () => {
+    const request = vi.fn(async (url: string) =>
       url.includes("clientId=public")
         ? Response.json({ scheduledMeeting: meeting })
-        : new Response(null, { status: 503 })));
+        : notFound());
+    vi.stubGlobal("fetch", request);
 
-    expect(await lookupScheduledMeetingForCode("abc-mnop-xyz")).toMatchObject({
-      kind: "scheduled",
-      clientId: "public",
-    });
+    expect(await lookupScheduledMeetingForCode(destination)).toEqual({ kind: "unscheduled" });
+    expect(request.mock.calls.map(([url]) => new URL(url).searchParams.get("clientId"))).toEqual(["conclave"]);
   });
 });
 
 describe("checking whether the visitor hosts a scheduled meeting", () => {
   const hosted = { ...meeting, hostEmail: "Host@Example.com" };
   const found = async () => {
-    const lookup = await lookupScheduledMeetingForCode("abc-mnop-xyz");
+    const lookup = await lookupScheduledMeetingForCode(destination);
     if (lookup.kind !== "scheduled") throw new Error(`Lookup was ${lookup.kind}`);
     return lookup;
   };

@@ -5,11 +5,7 @@ import {
 import { resolveSfuSecret, resolveSfuUrl } from "@/lib/sfu-admin-auth";
 import { resolveSfuUrls } from "@/lib/sfu-url";
 import { readResponseError } from "@/app/lib/utils";
-import {
-  canonicalizeSfuClientId,
-  CONCLAVE_SFU_CLIENT_ID,
-  resolveSfuClientIdCandidates,
-} from "@/lib/sfu-client-id";
+import type { RoomDestination } from "@/lib/meeting-links";
 
 export interface PublicScheduledMeeting {
   id: string;
@@ -85,40 +81,27 @@ const fetchPublicScheduledMeeting = async (
   return data?.scheduledMeeting ?? null;
 };
 
-// Asks every SFU, for every client the code could belong to, at once. The
-// code is unscheduled only when all of them said so.
 export const lookupScheduledMeetingForCode = async (
-  roomCode: string,
-  preferredClientId?: string,
+  { roomCode, clientId }: RoomDestination,
 ): Promise<ScheduledMeetingLookup> => {
   const deadline = AbortSignal.timeout(LOOKUP_DEADLINE_MS);
   const sfuUrls = resolveSfuUrls();
-  const answers = await Promise.all(
-    resolveSfuClientIdCandidates(preferredClientId).map(async (clientId) => ({
-      clientId,
-      results: await Promise.allSettled(
-        sfuUrls.map((sfuUrl) =>
-          fetchPublicScheduledMeeting(sfuUrl, clientId, roomCode, deadline),
-        ),
-      ),
-    })),
+  const results = await Promise.allSettled(
+    sfuUrls.map((sfuUrl) => fetchPublicScheduledMeeting(sfuUrl, clientId, roomCode, deadline)),
   );
-  for (const { clientId, results } of answers) {
-    for (const [index, result] of results.entries()) {
-      if (result.status === "fulfilled" && result.value) {
-        return {
-          kind: "scheduled",
-          sfuUrl: sfuUrls[index],
-          clientId,
-          meeting: result.value,
-        };
-      }
+  for (const [index, result] of results.entries()) {
+    if (result.status === "fulfilled" && result.value) {
+      return {
+        kind: "scheduled",
+        sfuUrl: sfuUrls[index],
+        clientId,
+        meeting: result.value,
+      };
     }
   }
-  const failed = answers.some(({ results }) =>
-    results.some((result) => result.status === "rejected"),
-  );
-  return failed ? { kind: "unknown" } : { kind: "unscheduled" };
+  return results.some((result) => result.status === "rejected")
+    ? { kind: "unknown" }
+    : { kind: "unscheduled" };
 };
 
 export const lookupScheduledMeetingHostEmail = async ({
@@ -127,9 +110,7 @@ export const lookupScheduledMeetingHostEmail = async ({
   meeting,
 }: FoundScheduledMeeting): Promise<string | null> => {
   try {
-    const resolvedClientId =
-      canonicalizeSfuClientId(clientId) || CONCLAVE_SFU_CLIENT_ID;
-    const url = `${scheduledMeetingsBase(sfuUrl)}/by-room/${encodeURIComponent(meeting.roomCode)}?clientId=${encodeURIComponent(resolvedClientId)}`;
+    const url = `${scheduledMeetingsBase(sfuUrl)}/by-room/${encodeURIComponent(meeting.roomCode)}?clientId=${encodeURIComponent(clientId)}`;
     const response = await fetch(url, {
       method: "GET",
       headers: {

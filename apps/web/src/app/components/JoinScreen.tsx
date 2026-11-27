@@ -14,6 +14,7 @@ import {
   ChevronDown,
   Check,
   Link2,
+  Link2Off,
   Info,
   X,
   type LucideIcon,
@@ -25,8 +26,8 @@ import type { Dispatch, SetStateAction } from "react";
 import { Avatar } from "@conclave/ui-tokens/web";
 import { signOut, useSession } from "@/lib/auth-client";
 import { getMeetingLinkOrigins } from "@/lib/site-url";
-import { buildMeetingPath, buildMeetingUrl } from "@/lib/meeting-links";
-import { canonicalizeSfuClientId, resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
+import { buildMeetingPath, buildMeetingUrl, type RoomDestination } from "@/lib/meeting-links";
+import { resolveMeetingClientId } from "@/lib/sfu-client-id";
 import type { RoomInfo } from "@/lib/sfu-types";
 import type {
   ConnectionState,
@@ -179,7 +180,7 @@ interface JoinScreenProps {
   clientId?: string;
   showPermissionHint: boolean;
   rooms: RoomInfo[];
-  onRefreshRooms: () => void;
+  onRefreshRooms: (id?: string) => void;
   displayNameInput: string;
   onDisplayNameInputChange: (value: string) => void;
   onUserChange: (user: { id: string; email: string; name: string } | null) => void;
@@ -337,10 +338,12 @@ function JoinScreen({
   user,
   userEmail,
   connectionState,
+  enableRoomRouting,
   forceJoinOnly,
   clientId,
   showPermissionHint,
   rooms,
+  onRefreshRooms,
   displayNameInput,
   onDisplayNameInputChange,
   onUserChange,
@@ -355,12 +358,13 @@ function JoinScreen({
   onPrejoinMediaCommit,
   onEnterStart,
 }: JoinScreenProps) {
-  const pageClientId = canonicalizeSfuClientId(clientId) ?? resolveBrowserSfuClientId();
-  const codeField = useCodeField(roomId, onRoomIdChange, getMeetingLinkOrigins(), pageClientId);
+  const pageClientId = resolveMeetingClientId(clientId);
+  const codeField = useCodeField(roomId, getMeetingLinkOrigins(), pageClientId, enableRoomRouting || forceJoinOnly);
   const isRoutedRoom = forceJoinOnly;
   const nameInputId = useId();
   const codeInputId = useId();
   const codeProblemId = useId();
+  const noLinkReasonId = useId();
 
   useEffect(() => {
     prefetchConclaveAnimation();
@@ -393,7 +397,7 @@ function JoinScreen({
   const [videoInputs, setVideoInputs] = useState<DeviceOption[]>([]);
   const [selectedAudioId, setSelectedAudioId] = useState("");
   const [selectedVideoId, setSelectedVideoId] = useState("");
-  const [pending, setPending] = useState<{ mode: "new" | "join"; roomId: string } | null>(null);
+  const [pending, setPending] = useState<{ mode: "new" | "join"; destination: RoomDestination } | null>(null);
 
   const { data: session } = useSession();
   const isSignedInUser = Boolean(
@@ -815,11 +819,21 @@ function JoinScreen({
     if (!pending || !hasIdentity) return;
     const wantAdmin = pending.mode === "new";
     if (Boolean(isAdmin) !== wantAdmin) return;
-    const { roomId: targetId } = pending;
+    const { destination } = pending;
     setPending(null);
-    onRoomIdChange(targetId);
-    onJoinRoom(targetId);
-  }, [pending, hasIdentity, isAdmin, onJoinRoom, onRoomIdChange]);
+    const targetPath = buildMeetingPath(destination);
+    if (
+      enableRoomRouting &&
+      !forceJoinOnly &&
+      typeof window !== "undefined" &&
+      targetPath &&
+      `${window.location.pathname}${window.location.search}` !== targetPath
+    ) {
+      window.history.pushState(null, "", targetPath);
+    }
+    onRoomIdChange(destination.roomCode);
+    onJoinRoom(destination.roomCode);
+  }, [pending, hasIdentity, isAdmin, enableRoomRouting, forceJoinOnly, onJoinRoom, onRoomIdChange]);
 
   const ensureGuest = (): boolean => {
     const name = liveDisplayName;
@@ -868,25 +882,27 @@ function JoinScreen({
     onIsAdminChange(true);
     const roomId = generateRoomCode();
     markMeetingCreatedHere(roomId);
-    setPending({ mode: "new", roomId });
+    setPending({ mode: "new", destination: { roomCode: roomId, clientId: pageClientId } });
   };
   const joinMeeting = () => {
-    const candidate = codeField.resolution.code;
-    if (!candidate || !ensureGuest()) return;
-    const skipMutedMicWarmup = settlePreviewForEntry();
-    if (!codeField.tenant.onThisPage) {
-      const target = { roomCode: candidate, clientId: codeField.tenant.clientId };
+    const { destination, onThisPage } = codeField;
+    if (!destination.roomCode || !ensureGuest()) return;
+    if (!onThisPage) {
+      const path = buildMeetingPath(destination);
+      if (!path) return;
+      settlePreviewForEntry();
       saveRejoinIntent(
-        { roomId: target.roomCode, clientId: target.clientId },
+        { roomId: destination.roomCode, clientId: destination.clientId },
         previewMedia(livePreviewTracks()),
       );
-      window.location.assign(buildMeetingPath(target));
+      window.location.assign(path);
       return;
     }
+    const skipMutedMicWarmup = settlePreviewForEntry();
     onEnterStart?.("join");
     commitPrejoinMedia(skipMutedMicWarmup);
     onIsAdminChange(false);
-    setPending({ mode: "join", roomId: candidate });
+    setPending({ mode: "join", destination });
   };
 
   const retryBlockedDevices = async (
@@ -974,7 +990,7 @@ function JoinScreen({
     const start = input.selectionStart ?? input.value.length;
     const end = input.selectionEnd ?? start;
     if (paste.kind === "replace") {
-      const keepsTenant = paste.clientId !== null && paste.clientId !== pageClientId;
+      const keepsTenant = resolveMeetingClientId(paste.clientId) !== pageClientId;
       const replacement = keepsTenant ? text.trim() : paste.code;
       shapeCodeEdit(event, input, [0, input.value.length], replacement, false);
     } else {
@@ -1026,7 +1042,16 @@ function JoinScreen({
   const nameReady = hasIdentity || liveDisplayName.length > 0;
   const canSubmit = canJoin && nameReady && !isLoading;
 
-  const presenceTarget = codeField.tenant.onThisPage && codeField.settled ? joinCode : "";
+  const { lookup: presenceTarget, settledLookup } = codeField;
+  useEffect(() => {
+    if (!settledLookup && !isAdmin) return;
+    const refresh = () => onRefreshRooms(isAdmin ? undefined : settledLookup);
+    refresh();
+    if (!settledLookup) return;
+    const interval = setInterval(refresh, 10_000);
+    return () => clearInterval(interval);
+  }, [settledLookup, isAdmin, onRefreshRooms]);
+
   const matchedRoom = presenceTarget
     ? rooms.find(
         (room) => room.id.toLowerCase() === presenceTarget.toLowerCase(),
@@ -1084,12 +1109,9 @@ function JoinScreen({
 
   const inviteLink =
     typeof window !== "undefined" && joinCode
-      ? buildMeetingUrl(window.location.origin, {
-          roomCode: joinCode,
-          clientId: codeField.tenant.clientId,
-        })
+      ? buildMeetingUrl(window.location.origin, codeField.destination)
       : "";
-  const linkCopy = useClipboardCopy(inviteLink);
+  const linkCopy = useClipboardCopy(inviteLink ?? "");
   const previewHint =
     permissionRequestError ?? (showPermissionHint ? "Permission needed" : null);
   const handleNameInputChange = (nextName: string) => {
@@ -1349,15 +1371,23 @@ function JoinScreen({
 
 
               <div className="space-y-1.5">
-                <div className="flex min-h-[16px] items-center justify-between gap-3">
+                <div className="flex min-h-[16px] items-center gap-2">
                   <label
                     htmlFor={codeInputId}
-                    className="text-[11.5px] font-semibold text-[#fafafa]/40"
+                    className="shrink-0 whitespace-nowrap text-[11.5px] font-semibold text-[#fafafa]/40"
                   >
                     {isRoutedRoom ? "Room" : "Join with a code"}
                   </label>
+                  {inviteLink === null ? (
+                    <span id={noLinkReasonId} className="ml-auto shrink-0 text-[11.5px] leading-none text-[#fafafa]/55">
+                      No shareable link
+                    </span>
+                  ) : null}
                   {matchedRoom ? (
-                    <RoomPresenceBadge count={matchedRoom.userCount} />
+                    <RoomPresenceBadge
+                      className={inviteLink === null ? "min-w-0" : "ml-auto"}
+                      count={matchedRoom.userCount}
+                    />
                   ) : null}
                 </div>
                 <div className="relative">
@@ -1375,7 +1405,7 @@ function JoinScreen({
                     onKeyDown={(e) => {
                       if (e.key !== "Enter" || e.nativeEvent.isComposing || !canSubmit) return;
                       const input = e.currentTarget;
-                      if (codeField.tenant.onThisPage && input.value !== joinCode) {
+                      if (codeField.onThisPage && input.value !== joinCode) {
                         applyFieldEdit(input, { start: 0, end: input.value.length, text: joinCode });
                       }
                       joinMeeting();
@@ -1384,7 +1414,9 @@ function JoinScreen({
                     readOnly={isRoutedRoom}
                     autoFocus={isRoutedRoom}
                     aria-invalid={codeResolution.tooLong || undefined}
-                    aria-describedby={codeResolution.tooLong ? codeProblemId : undefined}
+                    aria-describedby={
+                      codeResolution.tooLong ? codeProblemId : inviteLink === null ? noLinkReasonId : undefined
+                    }
                     className={`${FIELD} ${codeResolution.tooLong ? "pr-32" : "pr-12"}`}
                   />
                   {codeResolution.tooLong ? (
@@ -1416,6 +1448,16 @@ function JoinScreen({
                       ) : (
                         <Link2 size={16} aria-hidden="true" />
                       )}
+                    </button>
+                  ) : inviteLink === null ? (
+                    <button
+                      type="button"
+                      disabled
+                      aria-label="Copy joining link"
+                      aria-describedby={noLinkReasonId}
+                      className="absolute right-1.5 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 cursor-not-allowed items-center justify-center rounded-lg text-[#fafafa]/25"
+                    >
+                      <Link2Off size={16} aria-hidden="true" />
                     </button>
                   ) : null}
                   <span aria-live="polite" className="sr-only">

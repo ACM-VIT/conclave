@@ -2,7 +2,6 @@ import { Suspense } from "react";
 import { headers as nextHeaders } from "next/headers";
 import MeetsClientShell from "../meets-client-shell";
 import RouteLoadingState from "../components/RouteLoadingState";
-import { sanitizeRoomCode, sanitizeWebinarLinkCode } from "../lib/utils";
 import ScheduledMeetingLanding from "../components/ScheduledMeetingLanding";
 import {
   isMeetingJoinable,
@@ -10,6 +9,8 @@ import {
   lookupScheduledMeetingHostEmail,
 } from "@/lib/scheduled-meetings";
 import { auth } from "@/lib/auth";
+import { resolveMeetingClientId } from "@/lib/sfu-client-id";
+import { roomIdFromMeetingPath, webinarSlugFromPath, type RoomDestination } from "@/lib/meeting-links";
 
 type MeetRoomPageProps = {
   params: Promise<{ code: string }>;
@@ -32,14 +33,6 @@ const isTruthyParam = (value: string | string[] | undefined): boolean => {
   if (value === undefined) return false;
   if (value.trim() === "") return true;
   return ["1", "true", "yes", "y", "on"].includes(value.trim().toLowerCase());
-};
-
-const sanitizeClientId = (
-  value: string | string[] | undefined,
-): string | undefined => {
-  const candidate = getParamValue(value)?.trim();
-  if (!candidate) return undefined;
-  return /^[a-zA-Z0-9._:-]{1,64}$/.test(candidate) ? candidate : undefined;
 };
 
 const resolveSessionEmail = async (): Promise<string | null> => {
@@ -77,8 +70,6 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
   )));
   const rawCode = typeof code === "string" ? code : "";
   const roomCode = decodeURIComponent(rawCode);
-  const resolvedRoomCode =
-    roomCode === "undefined" || roomCode === "null" ? "" : roomCode;
   const bypassMediaPermissions = isTruthyParam(resolvedSearchParams.recorder);
   const devOverridesEnabled = process.env.NODE_ENV === "development";
   const safeBotOverridesEnabled =
@@ -92,32 +83,21 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
     : undefined;
   const joinMode =
     joinModeParam === "webinar_attendee" ? "webinar_attendee" : undefined;
-  const sanitizedRoomCode =
-    joinMode === "webinar_attendee"
-      ? sanitizeWebinarLinkCode(resolvedRoomCode)
-      : sanitizeRoomCode(resolvedRoomCode);
+  const destination: RoomDestination = {
+    roomCode: joinMode === "webinar_attendee" ? webinarSlugFromPath(roomCode) : roomIdFromMeetingPath(roomCode),
+    clientId: resolveMeetingClientId(getParamValue(resolvedSearchParams.clientId)),
+  };
   const displayName = safeBotOverridesEnabled
     ? getParamValue(resolvedSearchParams.name)
     : undefined;
-  const sfuClientId = sanitizeClientId(resolvedSearchParams.clientId);
-  let resolvedSfuClientId = sfuClientId;
-  // A join may open the room when the code is a scheduled meeting. If the
-  // lookup failed, the code may be one too, so its first visitor is not told
-  // to check their meeting code.
   let mayOpenRoom = false;
   const user = displayName ? { name: displayName } : undefined;
   const isAdmin =
     devOverridesEnabled && isTruthyParam(resolvedSearchParams.admin);
 
-  if (sanitizedRoomCode) {
-    const lookup = await lookupScheduledMeetingForCode(
-      sanitizedRoomCode,
-      sfuClientId,
-    );
+  if (destination.roomCode) {
+    const lookup = await lookupScheduledMeetingForCode(destination);
     mayOpenRoom = lookup.kind !== "unscheduled";
-    if (lookup.kind === "scheduled") {
-      resolvedSfuClientId = lookup.clientId;
-    }
     // Recorders go straight to the join.
     if (
       lookup.kind === "scheduled" &&
@@ -143,11 +123,11 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
 
   return (
     <MeetsClientShell
-      initialRoomId={sanitizedRoomCode}
+      initialRoomId={destination.roomCode}
       forceJoinOnly={true}
       allowRoomCreation={mayOpenRoom}
       bypassMediaPermissions={bypassMediaPermissions}
-      sfuClientId={resolvedSfuClientId}
+      sfuClientId={destination.clientId}
       autoJoinOnMount={autoJoinOnMount}
       hideJoinUI={hideJoinUI}
       joinMode={joinMode}

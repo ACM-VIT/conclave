@@ -9,11 +9,12 @@ export type JsonStoreClaim<Row> = {
 };
 
 export type JsonStoreCollection<Snapshot, Row> = {
-  index: string;
+  index?: string;
   rows: (snapshot: Snapshot) => Row[];
   key: (row: Row) => string;
   stamp: (row: Row, snapshot: Snapshot) => number;
   claims: Record<string, JsonStoreClaim<Row>>;
+  canDelete?: boolean;
 };
 
 type ErasedCollection<Snapshot> = JsonStoreCollection<Snapshot, unknown>;
@@ -100,8 +101,9 @@ const mergeSources = <Snapshot>(adapter: JsonStoreAdapter<Snapshot>, sources: So
   const merged: Record<string, unknown[]> = {};
   for (const [name, collection] of Object.entries(adapter.collections)) {
     const winners = new Map<string, { row: unknown; stamp: number; json: string; from: string }>();
-    for (const source of sources) {
-      for (const row of collection.rows(source.snapshot)) {
+    const copies = sources.map((source) => ({ ...source, rows: collection.rows(source.snapshot) }));
+    for (const source of copies) {
+      for (const row of source.rows) {
         const key = collection.key(row);
         const stamp = collection.stamp(row, source.snapshot);
         const json = stableJson(row);
@@ -114,6 +116,13 @@ const mergeSources = <Snapshot>(adapter: JsonStoreAdapter<Snapshot>, sources: So
       }
     }
     const kept = [...winners.entries()];
+    if (collection.canDelete && copies.length > 1) {
+      const keysByCopy = copies.map(({ path, rows }) => ({ path, keys: new Set(rows.map(collection.key)) }));
+      for (const [key, { from }] of kept) {
+        const missing = keysByCopy.find(({ keys }) => !keys.has(key));
+        if (missing) problems.push(`${name} ${key} is present in ${from} but missing from ${missing.path} (possible deletion).`);
+      }
+    }
     for (const [index, claim] of Object.entries(collection.claims)) {
       const owners = new Map<string, string>();
       for (const [key, { row }] of kept) {
@@ -137,7 +146,7 @@ export const adoptRecoveredJsonStore = <Snapshot>(activePath: string, fileName: 
   const { merged, problems } = mergeSources(adapter, sources);
   if (problems.length > 0) {
     throw new Error(
-      `Could not combine ${sources.map((source) => source.path).join(", ")} without losing a change:\n- ${problems.join("\n- ")}\nResolve these records by hand, then rename each copy with a .adopted suffix.`,
+      `Could not combine ${sources.map((source) => source.path).join(", ")} without losing a change:\n- ${problems.join("\n- ")}\nBack up the files and write the reconciled store to ${activePath}, then rename each copy with a .adopted suffix.`,
     );
   }
   const result = adapter.build(active?.snapshot ?? sources[0].snapshot, merged);

@@ -1115,6 +1115,7 @@
     <string name="act_apps">Apps</string>
     <string name="act_below_range">%1$s needs %2$s players. %3$d people are here.</string>
     <string name="act_below_range_generic">Not enough people are here yet.</string>
+    <string name="act_board_saved_message">The board stays saved for this meeting.</string>
     <string name="act_browser">Shared browser</string>
     <string name="act_cancel_vote">Cancel vote</string>
     <string name="act_char_count">%1$d of %2$d characters</string>

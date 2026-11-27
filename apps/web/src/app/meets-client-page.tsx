@@ -8,10 +8,7 @@ import {
 } from "./lib/guest-pass-session";
 import type { JoinMode } from "./lib/types";
 import type { RoomInfo } from "@/lib/sfu-types";
-import {
-  canonicalizeSfuClientId,
-  resolveBrowserSfuClientId,
-} from "@/lib/sfu-client-id";
+import { resolveMeetingClientId } from "@/lib/sfu-client-id";
 import { requestJoinInfo } from "./lib/join-info";
 import { getOrCreateSessionId, readResponseError } from "./lib/utils";
 
@@ -24,7 +21,6 @@ const reactionAssets = [
   "yawn.gif",
 ];
 
-const defaultClientId = resolveBrowserSfuClientId();
 type MeetsClientPageProps = {
   initialRoomId?: string;
   forceJoinOnly?: boolean;
@@ -64,8 +60,7 @@ export default function MeetsClientPage({
   useEffect(() => guestPass.pageLoaded(), [guestPass]);
   const defaultUser = user;
   const resolvedIsAdmin = isAdmin;
-  const resolvedClientId =
-    canonicalizeSfuClientId(sfuClientId) || defaultClientId;
+  const resolvedClientId = resolveMeetingClientId(sfuClientId);
   const usesRoomRouting = resolvedClientId === "conclave";
 
   const getJoinInfo = useCallback(
