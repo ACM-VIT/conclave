@@ -16,6 +16,7 @@ let now: number;
 const entriesOf = (labels: string[]) => labels.map((label, index) => ({ id: `entry-${index}`, label }));
 
 type StageOptions = {
+  listEntries?: WheelEntry[];
   spin?: WheelSpin | null;
   onPointerLabel?: (label: string | null) => void;
   onSettled?: (spin: WheelSpin, fresh: boolean) => void;
@@ -26,6 +27,7 @@ const renderStage = (labels: string[], options: StageOptions = {}) => {
     root.render(
       <WheelStage
         entries={entriesOf(labels)}
+        listEntries={options.listEntries ?? entriesOf(labels)}
         spin={options.spin ?? null}
         canSpin
         sounds={null}
@@ -91,6 +93,44 @@ afterEach(() => {
   container.remove();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+const numbersDrawn = (): string[] => Array.from(container.querySelectorAll(NUMBER_SELECTOR), (element) => element.textContent ?? "");
+
+describe("wheel stage list numbers", () => {
+  const labels = ["Ada", "Grace", CONJUNCT, "Alan", "Ken", "Radia"];
+  const dial = entriesOf(labels);
+
+  it("draws on a slice the number its name has in the names list now, while the dial keeps its own order", () => {
+    renderStage(labels);
+    runFrames(2);
+    expect(numbersDrawn()).toEqual(["3"]);
+
+    const sorted = [dial[2], dial[0], dial[3], dial[1], dial[4], dial[5]];
+    renderStage(labels, { listEntries: sorted });
+    runFrames(2);
+    expect(numbersDrawn()).toEqual(["1"]);
+    expect(Array.from(container.querySelectorAll("svg text"), (element) => element.textContent)).toEqual(["Ada", "Grace", "1", "Alan", "Ken", "Radia"]);
+
+    renderStage(labels, { listEntries: [dial[0], { id: "new", label: "New" }, dial[1], dial[2]] });
+    runFrames(2);
+    expect(numbersDrawn()).toEqual(["4"]);
+  });
+
+  it("draws no number on a slice whose name is no longer in the list", () => {
+    renderStage(labels, { listEntries: dial.filter((entry) => entry.label !== CONJUNCT) });
+    runFrames(2);
+    expect(numbersDrawn()).toEqual([]);
+    expect(Array.from(container.querySelectorAll("svg text"), (element) => element.textContent)).toEqual(["Ada", "Grace", "Alan", "Ken", "Radia"]);
+    expect(container.querySelectorAll("svg g path").length).toBeGreaterThanOrEqual(6);
+  });
+
+  it("keeps numbering a running spin's slices from the list, so a remove on an old client cannot shift them", () => {
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    renderStage(labels, { spin: spinOver(dial, 1), listEntries: dial.slice(1) });
+    runFrames(4);
+    expect(numbersDrawn()).toEqual(["2"]);
+  });
 });
 
 describe("wheel stage frames", () => {

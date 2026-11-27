@@ -10,7 +10,8 @@ import { cutText } from "../../../../sdk/text";
 import { hasVisibleText } from "../labels";
 
 const ROOT_KEY = "wheel";
-const ENTRIES_KEY = "entries";
+const ENTRIES_ROOT = "wheel.entries";
+const ORDER_KEY = "order";
 const SPIN_KEY = "spin";
 const HISTORY_KEY = "history";
 const SETTINGS_KEY = "settings";
@@ -48,14 +49,9 @@ export type WheelResult = {
   byName: string;
 };
 
-type EntriesArray = Y.Array<WheelEntry>;
-
 const getRoot = (doc: Y.Doc): Y.Map<unknown> => getAppRoot(doc, ROOT_KEY);
 
-const readEntriesArray = (doc: Y.Doc): EntriesArray | null => {
-  const value = getRoot(doc).get(ENTRIES_KEY);
-  return value instanceof Y.Array ? (value as EntriesArray) : null;
-};
+const entriesOf = (doc: Y.Doc): Y.Array<unknown> => doc.getArray(ENTRIES_ROOT);
 
 const CONTROL_CHARACTERS = /\p{Cc}/gu;
 
@@ -83,9 +79,8 @@ const readEntry = (value: unknown): WheelEntry | null => {
 
 type Accepted<T> = { kept: T[]; indexes: number[] };
 
-const accept = <T>(
+const readable = <T>(
   records: readonly unknown[],
-  limit: number,
   read: (record: unknown) => T | null,
   keyOf: (record: T) => string
 ): Accepted<T> => {
@@ -93,7 +88,6 @@ const accept = <T>(
   const kept: T[] = [];
   const indexes: number[] = [];
   records.forEach((record, index) => {
-    if (kept.length >= limit) return;
     const value = read(record);
     if (value === null || seen.has(keyOf(value))) return;
     seen.add(keyOf(value));
@@ -110,13 +104,13 @@ const pruneTo = (array: Y.Array<unknown>, indexes: number[]): void => {
   }
 };
 
-const acceptEntries = (records: readonly unknown[]): Accepted<WheelEntry> =>
-  accept(records, MAX_WHEEL_ENTRIES, readEntry, (entry) => entry.id);
+const readNames = (records: readonly unknown[]): Accepted<WheelEntry> =>
+  readable(records, readEntry, (entry) => entry.id);
 
-const prunedEntries = (entries: EntriesArray): WheelEntry[] => {
-  const accepted = acceptEntries(entries.toArray());
-  pruneTo(entries as Y.Array<unknown>, accepted.indexes);
-  return accepted.kept;
+const prunedNames = (entries: Y.Array<unknown>): WheelEntry[] => {
+  const names = readNames(entries.toArray());
+  pruneTo(entries, names.indexes);
+  return names.kept;
 };
 
 export const createEntryId = (): string =>
@@ -124,15 +118,32 @@ export const createEntryId = (): string =>
 
 export const createWheelDoc = (): Y.Doc => createAppDoc(ROOT_KEY);
 
-export const getEntries = (doc: Y.Doc): WheelEntry[] => {
-  const entries = readEntriesArray(doc);
-  return entries ? acceptEntries(entries.toArray()).kept : [];
+export type WheelNames = { shown: WheelEntry[]; waiting: WheelEntry[] };
+
+export const getWheelNames = (doc: Y.Doc): WheelNames => {
+  const members = readNames(entriesOf(doc).toArray()).kept;
+  const remaining = new Map(members.map((entry) => [entry.id, entry]));
+  const order = getRoot(doc).get(ORDER_KEY);
+  const names: WheelEntry[] = [];
+  if (Array.isArray(order)) {
+    for (const id of order) {
+      if (typeof id !== "string") continue;
+      const entry = remaining.get(id);
+      if (!entry) continue;
+      names.push(entry);
+      remaining.delete(id);
+    }
+  }
+  names.push(...remaining.values());
+  return { shown: names.slice(0, MAX_WHEEL_ENTRIES), waiting: names.slice(MAX_WHEEL_ENTRIES) };
 };
+
+export const getEntries = (doc: Y.Doc): WheelEntry[] => getWheelNames(doc).shown;
 
 const pushLabels = (doc: Y.Doc, labels: readonly string[]): number => {
   if (labels.length === 0) return 0;
-  const entries = ensureAppArray(getRoot(doc), ENTRIES_KEY) as EntriesArray;
-  const room = MAX_WHEEL_ENTRIES - prunedEntries(entries).length;
+  const entries = entriesOf(doc);
+  const room = MAX_WHEEL_ENTRIES - prunedNames(entries).length;
   if (room <= 0) return 0;
   const batch = labels.slice(0, room).map((label) => ({ id: createEntryId(), label }));
   entries.push(batch);
@@ -144,44 +155,63 @@ export const addEntries = (doc: Y.Doc, rawLabels: string[]): number => {
   return labels.length === 0 ? 0 : doc.transact(() => pushLabels(doc, labels));
 };
 
-type AddReceipt = readonly string[];
+type AddReceipt = { at: number; floor: number; tokens: readonly string[] };
+
+const RECEIPT_FIXED_BYTES = 32;
+
+const isStamp = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0;
 
 const readReceipt = (value: unknown): AddReceipt | null => {
-  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_WHEEL_ENTRIES) return null;
-  const tokens: unknown[] = value;
-  return tokens.every(isValidIdentifier) ? tokens : null;
+  if (!isRecord(value) || !isStamp(value.at) || !isStamp(value.floor)) return null;
+  const tokens: unknown = value.tokens;
+  if (!Array.isArray(tokens) || tokens.length === 0 || tokens.length > MAX_WHEEL_ENTRIES) return null;
+  const list: unknown[] = tokens;
+  return list.every(isValidIdentifier) ? { at: value.at, floor: value.floor, tokens: list } : null;
 };
 
 const receiptBytes = (receipt: AddReceipt): number =>
-  receipt.reduce((bytes, token) => bytes + token.length + 2, 2);
+  receipt.tokens.reduce((bytes, token) => bytes + token.length + 2, RECEIPT_FIXED_BYTES);
 
-const acceptReceipts = (records: readonly unknown[]): Accepted<AddReceipt> => {
-  const kept: AddReceipt[] = [];
+type ReceiptLedger = { tokens: Set<string>; floor: number; indexes: number[] };
+
+const readLedger = (records: readonly unknown[]): ReceiptLedger => {
+  const tokens = new Set<string>();
   const indexes: number[] = [];
+  let floor = 0;
   let bytes = 0;
-  for (let index = records.length - 1; index >= 0 && kept.length < WHEEL_RECEIPT_LIMITS.count; index -= 1) {
+  let held = true;
+  for (let index = records.length - 1; index >= 0; index -= 1) {
     const receipt = readReceipt(records[index]);
     if (receipt === null) continue;
+    floor = Math.max(floor, receipt.floor);
     bytes += receiptBytes(receipt);
-    if (bytes > WHEEL_RECEIPT_LIMITS.bytes) break;
-    kept.push(receipt);
+    held &&= indexes.length < WHEEL_RECEIPT_LIMITS.count && bytes <= WHEEL_RECEIPT_LIMITS.bytes;
+    if (!held) {
+      floor = Math.max(floor, receipt.at);
+      continue;
+    }
     indexes.push(index);
+    for (const token of receipt.tokens) tokens.add(token);
   }
-  return { kept, indexes };
+  return { tokens, floor, indexes };
 };
 
-const tokensIn = (records: readonly unknown[]): Set<string> => new Set(acceptReceipts(records).kept.flat());
+export type AddRecord = { added: ReadonlySet<string>; reachesBack: boolean };
 
-export const getAddedTokens = (doc: Y.Doc): ReadonlySet<string> =>
-  tokensIn(doc.getArray<unknown>(ADD_RECEIPTS_ROOT).toArray());
+export const readAddRecord = (doc: Y.Doc, sentAt: number): AddRecord => {
+  const ledger = readLedger(doc.getArray<unknown>(ADD_RECEIPTS_ROOT).toArray());
+  const complete = !doc.store.pendingStructs && !doc.store.pendingDs;
+  return { added: ledger.tokens, reachesBack: complete && sentAt > ledger.floor };
+};
 
 export type TokenedLabel = { token: string; label: string };
 
-export const addEntriesOnce = (doc: Y.Doc, lines: readonly TokenedLabel[]): string[] =>
+export const addEntriesOnce = (doc: Y.Doc, lines: readonly TokenedLabel[], sentAt: number): string[] =>
   doc.transact(() => {
     const receipts = doc.getArray<unknown>(ADD_RECEIPTS_ROOT);
     const records = receipts.toArray();
-    const taken = tokensIn(records);
+    const taken = readLedger(records).tokens;
     const fresh = lines
       .map((line) => ({ token: line.token, label: normalizeLabel(line.label) }))
       .filter((line) => {
@@ -192,8 +222,9 @@ export const addEntriesOnce = (doc: Y.Doc, lines: readonly TokenedLabel[]): stri
     const count = pushLabels(doc, fresh.map((line) => line.label));
     if (count === 0) return [];
     const tokens = fresh.slice(0, count).map((line) => line.token);
-    receipts.push([tokens]);
-    pruneTo(receipts, acceptReceipts([...records, tokens]).indexes);
+    const ledger = readLedger([...records, { at: sentAt, floor: 0, tokens }]);
+    receipts.push([{ at: sentAt, floor: ledger.floor, tokens }]);
+    pruneTo(receipts, ledger.indexes);
     return tokens;
   });
 
@@ -201,28 +232,23 @@ export const addEntry = (doc: Y.Doc, rawLabel: string): boolean =>
   addEntries(doc, [rawLabel]) === 1;
 
 export const removeEntryById = (doc: Y.Doc, entryId: string): void => {
-  const entries = readEntriesArray(doc);
-  if (!entries) return;
+  const entries = entriesOf(doc);
   doc.transact(() => {
-    const index = prunedEntries(entries).findIndex((entry) => entry.id === entryId);
+    const index = prunedNames(entries).findIndex((entry) => entry.id === entryId);
     if (index < 0) return;
     entries.delete(index, 1);
   });
 };
 
 export const clearEntries = (doc: Y.Doc): void => {
-  const entries = readEntriesArray(doc);
-  if (!entries || entries.length === 0) return;
-  entries.delete(0, entries.length);
+  const entries = entriesOf(doc);
+  if (entries.length > 0) entries.delete(0, entries.length);
 };
 
-export const replaceEntries = (doc: Y.Doc, next: WheelEntry[]): void => {
-  doc.transact(() => {
-    const entries = ensureAppArray(getRoot(doc), ENTRIES_KEY) as EntriesArray;
-    const kept = acceptEntries(next).kept;
-    entries.delete(0, entries.length);
-    entries.push(kept);
-  });
+export const reorderEntries = (doc: Y.Doc, next: WheelEntry[]): void => {
+  const shown = new Set(getEntries(doc).map(({ id }) => id));
+  const order = next.flatMap(({ id }) => shown.delete(id) ? [id] : []);
+  getRoot(doc).set(ORDER_KEY, order);
 };
 
 const isSpin = (value: unknown): value is WheelSpin => {
@@ -310,8 +336,10 @@ const readResult = (value: unknown): WheelResult | null => {
   return label === result.label ? result : { ...result, label };
 };
 
-const acceptResults = (records: readonly unknown[]): Accepted<WheelResult> =>
-  accept(records, MAX_HISTORY_LENGTH, readResult, (result) => result.spinId);
+const acceptResults = (records: readonly unknown[]): Accepted<WheelResult> => {
+  const results = readable(records, readResult, (result) => result.spinId);
+  return { kept: results.kept.slice(0, MAX_HISTORY_LENGTH), indexes: results.indexes.slice(0, MAX_HISTORY_LENGTH) };
+};
 
 export const getHistory = (doc: Y.Doc): WheelResult[] => {
   const value = getRoot(doc).get(HISTORY_KEY);

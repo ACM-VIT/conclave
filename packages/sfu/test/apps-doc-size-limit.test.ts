@@ -13,15 +13,16 @@ type Listener = (...args: unknown[]) => unknown;
 
 const MAX_DOC_BYTES = 1024 * 1024;
 
-const joinBoardApp = (id: string) => {
+const joinApp = (id: string, appId = "board") => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
   const listeners = new Map<string, Listener>();
+  const emit = vi.fn();
   const socket = {
     id: `s-${id}`,
     data: { user: {} },
     on: (event: string, listener: Listener) => { listeners.set(event, listener); return socket; },
     to: () => ({ emit: vi.fn() }),
-    emit: vi.fn(),
+    emit,
   } as unknown as Socket;
   const state = createSfuState({
     roomRegistry: new LocalRoomRegistry({ instanceId: id, instanceUrl: "http://localhost", ttlMs: 45000 }),
@@ -30,14 +31,15 @@ const joinBoardApp = (id: string) => {
   state.rooms.set(room.channelId, room);
   const admin = new Admin({ id: `a#${id}`, socket });
   room.addClient(admin);
-  room.appsState.activeAppId = "board";
+  room.appsState.activeAppId = appId;
   const context = createConnectionContext({ to: () => ({ emit: vi.fn() }) } as unknown as SocketIOServer, socket, state);
   context.currentRoom = room;
   context.currentClient = admin;
   registerAppsHandlers(context);
   return {
-    send: (update: Uint8Array) => listeners.get("apps:yjs:update")!({ appId: "board", update }),
-    serverDoc: () => room.getOrCreateAppDoc("board"),
+    send: (update: Uint8Array) => listeners.get("apps:yjs:update")!({ appId, update }),
+    serverDoc: () => room.getOrCreateAppDoc(appId),
+    emit,
   };
 };
 
@@ -71,7 +73,7 @@ const everyOtherClock = (from: number, to: number) => {
 
 describe("app document size", () => {
   it("stops growing a document at the size a sync can still deliver", () => {
-    const { send, serverDoc } = joinBoardApp("inserts");
+    const { send, serverDoc } = joinApp("inserts");
 
     const attacker = new Y.Doc();
     const text = attacker.getText("t");
@@ -103,7 +105,7 @@ describe("app document size with deletions", () => {
   });
 
   it("refuses deletions whose item splits would push the document past the limit", () => {
-    const { send, serverDoc } = joinBoardApp("deletions");
+    const { send, serverDoc } = joinApp("deletions");
     const serverText = () => serverDoc().getText("t").length;
     const attacker = new Y.Doc();
     attacker.clientID = 0xffffffff;
@@ -129,4 +131,21 @@ describe("app document size with deletions", () => {
     expect(serverText()).toBe(78_552);
     expect(Y.encodeStateAsUpdate(serverDoc()).length).toBe(MAX_DOC_BYTES);
   }, 30_000);
+});
+
+it.each(["wheel", "board"])("echoes accepted updates to the writer only for %s when it needs publication proof", (appId) => {
+  const { send, serverDoc, emit } = joinApp(`receipt-${appId}`, appId);
+  const writer = new Y.Doc();
+  writer.getArray("wheel.entries").push([{ id: "ada", label: "Ada" }]);
+  const update = Y.encodeStateAsUpdate(writer);
+  emit.mockImplementation(() => {
+    expect(serverDoc().getArray("wheel.entries").toArray()).toEqual([{ id: "ada", label: "Ada" }]);
+  });
+  send(update);
+  if (appId === "wheel") expect(emit).toHaveBeenCalledExactlyOnceWith("apps:yjs:update", { appId, update });
+  else expect(emit).not.toHaveBeenCalled();
+
+  send(Uint8Array.of(255));
+  send(new Uint8Array(MAX_DOC_BYTES));
+  expect(emit).toHaveBeenCalledTimes(appId === "wheel" ? 1 : 0);
 });
