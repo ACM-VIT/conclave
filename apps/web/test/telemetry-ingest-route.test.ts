@@ -44,6 +44,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 const post = async () => {
@@ -90,7 +91,9 @@ describe("the /ingest route's PostHog host", () => {
 });
 
 describe("the /ingest route's rate limit", () => {
-  it("answers 429 with Retry-After once one client passes its limit, and forwards nothing for it", async () => {
+  it("answers 429 with Retry-After once the process budget is spent and forwards nothing more", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.advanceTimersByTime(60_000);
     vi.stubEnv("POSTHOG_INGEST_HOST", "https://ingest.example");
     const { INGEST_RATE_LIMITS } = await import("../src/app/lib/ingest-quota");
     const { POST } = await import("../src/app/ingest/[...path]/route");
@@ -110,6 +113,7 @@ describe("the /ingest route's rate limit", () => {
     expect(limited.status).toBe(429);
     expect(limited.headers.get("retry-after")).toBe("60");
     expect(upstream).toHaveLength(forwarded);
-    expect((await from("198.51.100.8")).status).toBe(200);
+    expect((await from("198.51.100.8")).status).toBe(429);
+    expect(upstream).toHaveLength(forwarded);
   });
 });
