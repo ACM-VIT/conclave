@@ -57,6 +57,7 @@ export type LiveTranscriptionConnectOptions = {
   localizationPrompt?: string;
   signal?: AbortSignal;
   socketBudget?: SocketBudget;
+  onSocketBudgetWait?: () => void;
   callbacks: LiveTranscriptionCallbacks;
 };
 

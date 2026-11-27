@@ -33,21 +33,26 @@ afterEach(() => {
 const fixture = (transcriptModel: string, env: Partial<Env> = {}) =>
   transcriptRoomRig(lookup, transcriptModel, env);
 
+const fullSarvamRoom = async () => {
+  const rig = await fixture(SARVAM);
+  await rig.start("hi");
+  const oldSpeakers = Array.from({ length: SARVAM_MAX_LANES }, (_, i) => ({
+    userId: `old-${i}`, displayName: `Old speaker ${i}`,
+  }));
+  for (const speaker of oldSpeakers) {
+    await rig.speak(speaker);
+    await settle();
+  }
+  const oldSockets = rig.providerSockets();
+  expect(oldSockets).toHaveLength(SARVAM_MAX_LANES);
+  for (const socket of oldSockets) expect(socket.sent).toHaveLength(1);
+  return { ...rig, oldSpeakers, oldSockets };
+};
+
 describe("switching the caption language keeps speech the old provider already has", () => {
   it("flushes saturated Sarvam turns, then replays new audio when the first old final frees a slot", async () => {
     vi.useFakeTimers();
-    const { room, providerSockets, start, switchTo, speak, endTurn, savedTexts } = await fixture(SARVAM);
-    await start("hi");
-    const oldSpeakers = Array.from({ length: SARVAM_MAX_LANES }, (_, i) => ({
-      userId: `old-${i}`, displayName: `Old speaker ${i}`,
-    }));
-    for (const speaker of oldSpeakers) {
-      await speak(speaker);
-      await settle();
-    }
-    const oldSockets = providerSockets();
-    expect(oldSockets).toHaveLength(SARVAM_MAX_LANES);
-    for (const socket of oldSockets) expect(socket.sent).toHaveLength(1);
+    const { room, providerSockets, switchTo, speak, endTurn, savedTexts, oldSockets } = await fullSarvamRoom();
 
     const switched = switchTo("ta");
     await settle();
@@ -55,8 +60,10 @@ describe("switching the caption language keeps speech the old provider already h
     await speak(newSpeaker);
     await endTurn(newSpeaker);
     expect(providerSockets()).toEqual(oldSockets);
-    expect(oldSockets.map((socket) => socket.closed)).toEqual(oldSpeakers.map(() => false));
-    expect(oldSockets.map((socket) => socket.sentTypes().at(-1))).toEqual(oldSpeakers.map(() => "flush"));
+    for (const socket of oldSockets) {
+      expect(socket.closed).toBe(false);
+      expect(socket.sentTypes().at(-1)).toBe("flush");
+    }
 
     oldSockets[0].emit(sarvamFinal("old-first", "First old final."));
     await settle();
@@ -73,6 +80,26 @@ describe("switching the caption language keeps speech the old provider already h
     await settle();
 
     expect(savedTexts()).toEqual(["First old final.", "Later old final.", "New language final."]);
+  });
+
+  it("leaves an old Sarvam turn live during the switch if a finished turn can free a slot", async () => {
+    vi.useFakeTimers();
+    const { switchTo, speak, endTurn, connectPlans, oldSpeakers, oldSockets } = await fullSarvamRoom();
+    await endTurn(oldSpeakers[0]);
+    oldSockets[0].emit(sarvamFinal("old-first", "First old final."));
+    await settle();
+    connectPlans.push({ lateMs: 500 });
+
+    const switched = switchTo("ta");
+    await settle();
+    expect(oldSockets[0].closed).toBe(true);
+    await speak(oldSpeakers[1]);
+    expect(oldSockets[1].sent).toHaveLength(2);
+    expect(oldSockets[1].sentTypes()).not.toContain("flush");
+
+    await vi.advanceTimersByTimeAsync(500);
+    await switched;
+    expect(oldSockets[1].sentTypes().at(-1)).toBe("flush");
   });
   it("Sarvam: saves a final that arrives after the switch with no partial before it", async () => {
     vi.useFakeTimers();
