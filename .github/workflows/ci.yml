@@ -91,7 +91,11 @@ jobs:
     runs-on: *ci-runner
     timeout-minutes: 10
     env:
-      CI_JOB: test
+      CI_JOB: ${{ matrix.job }}
+    strategy:
+      fail-fast: false
+      matrix:
+        job: [test, test-web-unit-b]
     steps: *ci-steps
 
   test-sfu:

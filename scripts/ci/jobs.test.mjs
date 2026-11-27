@@ -50,7 +50,19 @@ test("SFU unit tests and the full app room model have separate runners", async (
   assert.deepEqual(jobs["test-sfu-app-model"]?.tasks, [{ dir: "packages/sfu", script: "test:apps-room-model" }]);
   assert.equal(workflow.jobs["test-sfu"].env.CI_JOB, "test-sfu");
   assert.equal(workflow.jobs["test-sfu-app-model"].env.CI_JOB, "test-sfu-app-model");
-  assert.equal(workflow.jobs["test-unit"].env.CI_JOB, "test");
+});
+
+test("the unit runner includes both web shards without ignoring failures", async () => {
+  const workflow = parse(await readFile(path.join(repoRoot, ".github/workflows/ci.yml"), "utf8"));
+  const runner = workflow.jobs["test-unit"];
+  assert.equal(runner.env.CI_JOB, "${{ matrix.job }}");
+  assert.equal(runner.strategy["fail-fast"], false);
+  assert.deepEqual(runner.strategy.matrix.job, ["test", "test-web-unit-b"]);
+  assert.deepEqual(jobs.test.tasks.filter(({ dir }) => dir === "apps/web"), [
+    { dir: "apps/web", script: "test:unit-a" },
+  ]);
+  assert.deepEqual(jobs["test-web-unit-b"].tasks, [{ dir: "apps/web", script: "test:unit-b" }]);
+  assert.deepEqual(runStepProblems(runner), []);
 });
 
 test("the full transcript oracle has its own runner", async () => {
@@ -95,7 +107,7 @@ test("test budgets always start with the run step", async () => {
   const bin = await mkdtemp(path.join(tmpdir(), "ci-test-clock-"));
   try {
     await writeFile(path.join(bin, "pnpm"), "#!/bin/sh\nexit 0\n", { mode: 0o700 });
-    for (const job of ["test", "test-sfu", "test-sfu-app-model"]) {
+    for (const job of ["test", "test-web-unit-b", "test-sfu", "test-sfu-app-model"]) {
       for (const miss of [false, true]) {
         const result = spawnSync(process.execPath, ["scripts/ci/run.mjs", job], {
           cwd: repoRoot,
