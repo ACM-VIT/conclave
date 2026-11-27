@@ -36,13 +36,16 @@ afterEach(() => {
 const setup = () => {
   type Listener = (...args: unknown[]) => void;
   const listeners = new Map<string, Listener>();
+  let connected = true;
   const messages: {
     event: string;
     payload: Record<string, unknown>;
     ack?: (reply: unknown) => void;
   }[] = [];
-  const socket = {
-    connected: true,
+  const socket: AuthoritySocket = {
+    get connected() {
+      return connected;
+    },
     on: (event, listener) => listeners.set(event, listener),
     off: (event) => listeners.delete(event),
     emit: (event, payload, ack) => {
@@ -52,7 +55,7 @@ const setup = () => {
         ack: ack as (reply: unknown) => void,
       });
     },
-  } satisfies AuthoritySocket;
+  };
   const push = (event: string, payload?: unknown) => listeners.get(event)?.(payload);
   const client = new AuthorityClient({ socket, ackTimeoutMs });
   clients.push(client);
@@ -86,11 +89,11 @@ const setup = () => {
     ready,
     begin,
     disconnect: () => {
-      socket.connected = false;
+      connected = false;
       push("disconnect");
     },
     reconnect: () => {
-      socket.connected = true;
+      connected = true;
       push("connect");
     },
     attempts: () => messages.filter(({ event }) => event === AUTHORITY_EVENTS.act),
