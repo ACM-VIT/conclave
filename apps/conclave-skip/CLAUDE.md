@@ -642,7 +642,188 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   single-flight flags restored only in the same session
   (`audioBandwidthRefreshInFlight`, `screenBandwidthRefreshInFlight`,
   `suppressLocalStateCallbacks`), `audioStartTask` identity and
-  `audioCaptureRestartToken`. A new guard belongs in this list.
+  `audioCaptureRestartToken`. Flags outside the client keep one owner too:
+  `CameraFacingCatalog.refreshQueued` is a cross-thread compare-and-set
+  cleared only by the probe it queued, and a `RetiredTransportReaper` entry
+  becomes ready only in its own lane's final step. A new guard belongs in
+  this list.
+- Android disposes retired mediasoup objects only through
+  `RetiredTransportReaper` (`retiredTransports`). A receive transport is
+  ready at once; a send transport and its Device are ready only after their
+  `SendTransportLane` ran the close as its final operation (`retireAfter`),
+  behind any produce still waiting for its ack. Disposal runs only while no
+  Device, transport or lane is live and every retired entry is ready (at the
+  next `configure()` or after 45 s idle), and then it disposes them all, so
+  a newer call's entry never goes ahead of an older call's unfinished lane.
+  Destroying mediasoup's per-Device factory unregisters its voiceengine JNI
+  natives class-wide, which would crash native work still running on any
+  lane. Never dispose a transport or Device directly, and never on a lane.
+  Creating a factory is as dangerous as destroying one, and `Device.load`
+  builds and destroys a temporary factory to probe codecs. So `configure()`
+  loads the Device at once only while no retired entry is waiting on its
+  lane; otherwise it defers the load (`deviceLoadJob`) until every lane has
+  finished, disposes the retired objects, then loads. Send and receive
+  transport creation wait for that load first (`awaitDeviceLoad`). A stuck
+  native close must never block joining, so that wait has a deadline
+  (`RetiredTransportReaper.LANE_DEADLINE_MILLIS`, 5 s; a session end already
+  cuts short any ack a lane waits on). After it, every entry still waiting is
+  abandoned: its close keeps running on its own lane thread, it stops holding
+  up the Device load and the disposal of other entries, it is disposed only
+  once its close finishes, and `onTeardownStuck` records
+  `media.teardownStuck.transport`. The new load then risks the factory
+  probe running beside that close; that trade was chosen over a call that
+  can never join again.
+- Android disposes every track it creates exactly once, through the field
+  that holds it, on every path that drops it. The microphone track
+  (`localAudioTrack`, and the route-recovery and noise-suppression
+  replacements) goes through `disposeAudioTrack`, after the lane's queued
+  work. The camera (`localVideoTrack`, `videoSource`, `videoCapturer`,
+  `surfaceTextureHelper`) goes through `releaseLocalCameraCapture()` and the
+  share (`screenVideoTrack` and the rest) through `releaseScreenCapture()`:
+  camera-off by the server, a superseded or failed start, stop share and
+  `cleanup()`. A camera switch keeps its track. A video track and its source
+  are disposed on the main thread, where renderers add and remove sinks,
+  after both the capturer has stopped and the lane has closed the producer.
+- Hang-up never waits on a capture thread. `SurfaceTextureHelper.dispose()`
+  and `ScreenCapturerAndroid.stopCapture()` block their caller on the
+  capture thread, which takes the shared EGL lock that tile rendering also
+  takes, so `CaptureTeardown` stops and disposes each capturer and helper
+  on a thread of its own (`CaptureTeardown.camera`, `CaptureTeardown.screen`).
+  A camera-off keeps its synchronous `stopCapture()` on the main thread,
+  because a restart must run after it; that call waits only while a camera
+  open is in progress.
+- A capture start never opens a device something else may still hold
+  (`awaitCaptureDeviceFree`): the camera start (which camera recovery and
+  rejoin go through), the camera switch and the share start. Each first
+  waits for its kind's earlier teardowns, up to
+  `CaptureTeardown.DEADLINE_MILLIS` (3 s). WebRTC's `stopCapture()` waits
+  while a camera open is pending, a hung driver never releases it, and a
+  healthy stop can take longer than the deadline, so past the deadline the
+  start records `media.teardownStuck.<kind>` (`onTeardownStuck`) and waits
+  up to `CaptureTeardown.DEVICE_WAIT_MILLIS` (5 s) more for the device to be
+  free (`awaitDeviceFreed`, whichever comes first): for a camera,
+  CameraManager reporting that camera id available (`CameraAvailability`,
+  an `AvailabilityCallback`) or the teardown finishing; for a share, the
+  teardown finishing. A device still held fails
+  the start visibly instead of opening it twice: a camera start marks the
+  call camera `inUseByAnotherClient` and throws a "device busy" error the
+  view model shows as "Another app is using your camera." with the camera
+  left off, and a share start fails into the share failure path. Tapping
+  again retries. So a device a stuck teardown still holds is never opened
+  again, and a start behind it adds no capture for another teardown thread
+  to strand. A second stuck thread of a kind needs the system to have
+  reported the device free in between. Camera names are CameraManager ids,
+  except on the Camera1 fallback, where only the finished teardown frees the
+  device, and the start opens as soon as it finishes.
+- A capture's texture helper is created off the main thread
+  (`CaptureTeardown.createHelper`, 2 s bound, one creation per kind at a
+  time), before its capturer is opened. `SurfaceTextureHelper.create` builds
+  an EGL context under the shared EGL lock, so a stalled swap anywhere can
+  hold it: past the bound the start fails, nothing has been opened, and a
+  helper that arrives late is disposed on its own thread. A start that
+  finds a creation still stuck fails at once instead of adding another.
+- Every capture operation holds a `CaptureClaim`: the call generation
+  (`configurationGeneration`, bumped by `cleanup()` and `configure()`), the
+  camera-off intent (`localVideoOffIntentGeneration`, camera operations
+  only) and, once it has one, its capture session. `holdsCapture(claim)` is
+  the one check, and it runs after every suspension point of a camera start,
+  camera switch and share start. Only an operation that still holds its
+  claim may write shared state: `activeCameraFacing` (except a switch result,
+  below), the capture fields, `LocalPreviewController`'s call camera
+  interruption, or a "device busy" failure. The device wait
+  (`awaitCaptureDeviceFree`) returns `free`, `busy` or `stale`. A stale
+  operation returns or throws "session replaced" without touching anything,
+  and only a holder calls `failCaptureDeviceBusy`. The desired camera is read
+  after the waits, never before: the camera start re-reads it
+  (`cameraToOpen()`) after the device wait and the helper creation, and waits
+  again for a newly chosen camera, so a flip during either opens the camera
+  the user chose. A flip during the produce ack only records the facing,
+  because the capturer is not live yet; the start applies it through the
+  normal switch once it has published (`applyCameraFacingChosenDuringStart`).
+  A camera switch whose facing a later flip already reverted does nothing.
+- A release follows the capture session, never the generation. A start owns
+  the `CaptureSession` it created until it publishes it (`published`, set
+  where it commits `videoProducer` or `screenProducer`); after that the call
+  owns it. A start that fails or turns stale releases its session only if
+  `cameraCapture` or `screenCapture` still holds that session, whatever the
+  generation (`clearLocalWebcamCaptureState`, `releaseScreenCapture`), and
+  leaves any other session alone. Every reconfigure leaves each capture with
+  an owner that can release it: `cleanup()` releases all of them, and
+  `configure()` releases every unpublished session at once
+  (`releaseUnpublishedCaptures`), because its start can no longer publish,
+  and hands each published one to the new session, whose stop, server close,
+  projection stop and `cleanup()` still release it. Releasing a share
+  releases its own consent and service too
+  (`ScreenCaptureManager.releaseConsent(grant)`). The case that broke:
+  a share started while the Device load waited on an old lane, then a
+  recovery `configure()` (the view model skips `cleanup()` while
+  `isConfigured` is false) left `screenCapture` set, and every later share
+  failed with "already starting or active".
+- A share request owns what it acquires from the moment its consent dialog
+  opens. `ScreenCaptureManager` numbers every consent it installs and gives
+  the grant id only to the request that asked (`requestConsent`). The client
+  starts a share from a named grant (`startScreenSharing(consentGrant:)`) and
+  its capture session keeps that grant. The view model's Android share flow
+  (`runConsentScreenShareToggle`, behind `ScreenShareConsentPort` so macOS
+  tests drive the same code with a fake) records the grant in a
+  `ScreenShareConsentHold` as soon as it arrives and clears it only when the
+  share goes live. Every other exit, stale or not, ends in
+  `releaseScreenShareHold`: it closes the client share that holds the grant
+  (`closeLocalScreenProducer(consentGrant:)`) and releases that grant's
+  consent, service and notification (`releaseConsent`). Stale means drop the
+  result and release your own grant, never another one. A release by grant
+  never resumes another request's waiters, and a newer request's start,
+  refusal, cancellation or late dialog result never clears an older grant's
+  consent or resets its host and service state (those reset when a consent is
+  installed, not when a request starts). A standalone capture service stop
+  from a grant release checks the grant again on delivery. A service instance
+  reports destruction only for the grant it foregrounded, so a delayed stop
+  or destroy cannot revoke a newer approval. The share phase ends consistent
+  with what is live on every exit: the Android toggle settles it when it
+  still owns the guard or when no newer toggle owns it
+  (`finishScreenShareToggle`). The case
+  that broke: during a muted quick rejoin with the Device load deferred,
+  recovery replaced the toggle while the consent dialog was open, both
+  recovery cleanups skipped the unconfigured client, and approving the dialog
+  started the share service and its notification while the call said
+  sharing was off. `ScreenShareConsentRequestTests` covers every exit before
+  the share goes live.
+- Every capture callback applies its effect through one function on the main
+  thread (`applyCaptureCallback`), which checks the callback's session at the
+  moment of the mutation (`isCurrentCapture`: still held in `cameraCapture`
+  or `screenCapture`, which the release clears, its capturer still the
+  installed one, and for a share its consent still the current one), not the
+  generation, so a session `configure()` handed over still hears its own
+  projection stop and camera events. That covers the projection stop, the
+  camera events handler (`cameraEvents(capture)`: open, error, disconnect)
+  and the camera switch's done and error, which records the facing the
+  camera reached even when the switch's own claim went stale. Never check on
+  the callback's thread and then act: an old projection stop passed its
+  check, waited on the share manager's lock, and then cleared the next
+  share's consent. A camera switch that resumes after its session ended
+  changes nothing, and the switch re-checks the session before it restarts
+  capture, so it never calls into a retired capturer. The capturer observer (`SessionCapturerObserver`) checks
+  the session on the capture thread itself, because frames are too frequent
+  to post and each session forwards only to its own source.
+- Renderers attach sinks through `VideoSinkAttachment`, and an attach skips
+  `addSink` on any track `VideoTrackLedger` has marked disposed. Every track a
+  renderer can be given goes through the ledger: local camera and share
+  tracks are disposed through `VideoTrackLedger.dispose`, and a remote
+  consumer's track is marked by `VideoTrackLedger.recordClosed(consumer)`
+  just before native code frees it: in `removeConsumer` (consumer close,
+  producer close, participant leave, stale consumer sweep) before
+  `Consumer.close()`, in `cleanup()` for every consumer on leave, and
+  first thing in `onTransportClose(consumer)`, which native `Transport.close()`
+  calls for each of its consumers, so a transport close is marked before its
+  main-thread removal runs. A new path that closes a consumer or disposes a
+  video track must go through the ledger. `addSink` on a disposed track
+  wraps the sink (a native wrapper and a global JNI reference) before it
+  throws, and a later `removeSink` throws before freeing it, so each such
+  attach leaked. The attachment still removes a sink only if adding it
+  succeeded and never throws on detach, for tracks disposed elsewhere.
+  `CameraFacingCatalog` numbers its scans and keeps a result only if no newer
+  scan has been stored, so a slow older scan cannot bring a vanished camera
+  back.
 - Every input that changes publish settings goes through
   `publishSettingsChanged()` on Android (camera and share settings, video
   quality), which bumps `mediaPublishSettingsRevision`. A video produce in
@@ -670,10 +851,11 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   it: the unmute confirmation (it bypasses the guard via
   `allowCurrentMuteToggle`), the chat camera-on commit, the
   `enableOrStartLocalVideo` recreate fallback, the camera-switch PiP refresh
-  and the screen-share close. An orphaned screen-share toggle stops the
+  and the screen-share close. An orphaned iOS screen-share toggle stops the
   shared capture (and clears its end callback) only while no newer toggle
   owns the guard and no share is live
-  (`canOrphanedScreenShareToggleStopCapture()`). A toggle that still owns
+  (`canOrphanedScreenShareToggleStopCapture()`); an Android one releases its
+  own grant (above). A toggle that still owns
   its token keeps suppressing the `handleLocalProducerClosed` restart.
 - The newest local media intent wins (WP2-S1c, fixed 2026-10-24, covered by
   `LocalToggleGuardRecoveryTests`). A mute is never dropped or deferred: a

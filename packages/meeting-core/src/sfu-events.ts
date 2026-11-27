@@ -41,6 +41,8 @@ export const SFU_EVENTS = {
     requestProducerKeyFrame: "requestProducerKeyFrame",
     getProducers: "getProducers",
     restartIce: "restartIce",
+    getSenderPacketCounts: "getSenderPacketCounts",
+    getOwnPacketCounts: "getOwnPacketCounts",
     toggleMute: "toggleMute",
     toggleCamera: "toggleCamera",
     closeRemoteProducer: "closeRemoteProducer",
@@ -91,6 +93,7 @@ export const SFU_EVENTS = {
     // Apps SDK / collaborative docs
     appsOpen: "apps:open",
     appsClose: "apps:close",
+    appsDiscard: "apps:discard",
     appsLock: "apps:lock",
     appsGetState: "apps:getState",
     appsYjsSync: "apps:yjs:sync",

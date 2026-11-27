@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
 import { isIP } from "node:net";
+import { realpathSync } from "node:fs";
 import { posix } from "node:path";
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { readRtcPortRange, readWorkerSizing, resolveWebRtcPortBudget } from "../packages/sfu/config/workerSettings.mjs";
 
 const REGION_PATTERN = /^[a-z0-9](?:[a-z0-9._:-]{0,62}[a-z0-9])?$/;
@@ -392,8 +394,51 @@ export const resolveSfuTargets = ({ allowPublicRedis = false, compose, serviceNa
     }
   }
 
+  checkOwnRedis({ services, selectedNames, errors });
+
   if (errors.length > 0) throw new SfuDeployPreflightError(errors);
   return targets;
+};
+
+// Every Redis variable an SFU reads. Redis pub/sub ignores the database
+// number, so one of them on another Redis joins that Redis's channels.
+const SFU_REDIS_VARIABLES = ["REDIS_URL", "SFU_REDIS_URL", "SFU_PERSISTENCE_REDIS_URL"];
+
+// A compose file that runs its own Redis (staging's) must point every SFU's
+// every Redis variable at it, on 127.0.0.1 and the port it listens on, so a
+// Redis URL inherited from the shell or a production .env can never reach
+// another deployment's Redis.
+const checkOwnRedis = ({ services, selectedNames, errors }) => {
+  const redis = services.redis;
+  if (!redis) return;
+  const redisEnv = parseEnvironment(redis.environment);
+  const command = Array.isArray(redis.command) ? redis.command.join(" ") : String(redis.command ?? "");
+  const port = String(redisEnv.REDIS_PORT || command.match(/--port\s+"?(\d+)/)?.[1] || "6379");
+  for (const service of selectedNames) {
+    const definition = services[service];
+    if (!definition) continue;
+    const env = parseEnvironment(definition.environment);
+    for (const name of SFU_REDIS_VARIABLES) {
+      const value = String(env[name] ?? "").trim();
+      if (!value) {
+        errors.push(`${service}: ${name} must be set to this compose file's own Redis on 127.0.0.1:${port}.`);
+        continue;
+      }
+      let host = "";
+      let urlPort = "";
+      try {
+        const url = new URL(value);
+        host = url.hostname.toLowerCase();
+        urlPort = url.port || "6379";
+      } catch {
+        errors.push(`${service}: ${name} is not a valid URL.`);
+        continue;
+      }
+      if (!["127.0.0.1", "localhost"].includes(host) || urlPort !== port) {
+        errors.push(`${service}: ${name} points at ${host}:${urlPort}, not this compose file's own Redis on 127.0.0.1:${port}.`);
+      }
+    }
+  }
 };
 
 const readJsonResponse = async ({ fetchImpl, url, headers, timeoutMs }) => {
@@ -555,6 +600,22 @@ const main = async () => {
   }
 };
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Node gives this module its real path but leaves argv[1] as typed, so both
+// sides are resolved before comparing; a checkout reached through a symlink
+// must still run the checks. An entry that names this file but does not
+// resolve to it is an error, never a silent pass.
+const realPath = (file) => {
+  try {
+    return realpathSync.native(file);
+  } catch {
+    return null;
+  }
+};
+const self = fileURLToPath(import.meta.url);
+const entry = process.argv[1];
+if (entry && realPath(entry) === realPath(self)) {
   await main();
+} else if (entry && path.basename(entry) === path.basename(self)) {
+  console.error(`deploy-sfu-preflight.mjs cannot tell whether ${entry} is this file (${self}); refusing to report a result.`);
+  process.exitCode = 1;
 }

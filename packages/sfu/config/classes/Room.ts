@@ -2,6 +2,7 @@ import { GUEST_SEAT_KEY_PREFIX } from "@conclave/meeting-core/guest-join-claims"
 import { isGuestUserKey } from "../../server/identity.js";
 import { AdmissionLedger, type AdmissionScope } from "./AdmissionLedger.js";
 import { RoomAiCredentials } from "../../server/roomAiCredentials.js";
+import { RoomApps } from "../../server/roomApps.js";
 import { newInviteCodeVersion } from "../../server/inviteCodeVersion.js";
 import type {
   AudioLevelObserver,
@@ -14,13 +15,6 @@ import type {
 } from "mediasoup/types";
 import type { Socket } from "socket.io";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import {
-  Awareness,
-  applyAwarenessUpdate,
-  encodeAwarenessUpdate,
-  removeAwarenessStates,
-} from "y-protocols/awareness";
-import * as Y from "yjs";
 import type {
   ActiveSpeakerChangedNotification,
   ChatMessage,
@@ -63,11 +57,6 @@ export interface RoomOptions {
   workerPid: number | null;
   webcamVp9Enabled?: boolean;
 }
-
-type AppAwarenessRemoval = {
-  appId: string;
-  awarenessUpdate: Uint8Array;
-};
 
 type ProducerIndexEntry = {
   producer: Producer;
@@ -139,7 +128,27 @@ export type GuestLinkPlan = {
   // Whether the room may record the passes as one guest. It does not
   // record a guest of more than `GUEST_PASS_GROUP_LIMIT` passes.
   readonly recordable: boolean;
+  readonly merges: readonly GuestIdentityMerge[];
+  readonly staged: StagedGuestMerge | null;
 };
+
+export type GuestIdentityMerge = { readonly from: string; readonly into: string };
+
+export type StagedGuestMerge = {
+  commit(): boolean;
+  afterCommit?(): void;
+};
+
+export type GuestIdentityMerger = (
+  merges: readonly GuestIdentityMerge[],
+) => StagedGuestMerge | null;
+
+const sameMerges = (
+  one: readonly GuestIdentityMerge[],
+  other: readonly GuestIdentityMerge[],
+): boolean =>
+  one.length === other.length &&
+  one.every((merge, index) => merge.from === other[index].from && merge.into === other[index].into);
 
 // The passes a join may lean on for a right: the plan's, when the room
 // would record them, else what the room already links.
@@ -194,22 +203,6 @@ const normalizeInviteCode = (value: unknown): string => {
   return normalized;
 };
 
-const getAwarenessStateUserId = (state: unknown): string | null => {
-  if (!state || typeof state !== "object" || Array.isArray(state)) {
-    return null;
-  }
-  const record = state as { user?: unknown };
-  if (
-    !record.user ||
-    typeof record.user !== "object" ||
-    Array.isArray(record.user)
-  ) {
-    return null;
-  }
-  const user = record.user as { id?: unknown };
-  return typeof user.id === "string" ? user.id : null;
-};
-
 const hashInviteCode = (inviteCode: string): string =>
   createHmac("sha256", config.sfuSecret).update(inviteCode).digest("hex");
 
@@ -235,6 +228,8 @@ export type WaitingRequest = {
   socket: Socket;
   displayName?: string;
 };
+
+export type SettledWaitingRequest = { request: WaitingRequest; admitted: boolean };
 
 /**
  * `membership`: a seat was added, removed, replaced or promoted.
@@ -334,14 +329,9 @@ export class Room {
   private _participantVideoAllowed: boolean = true;
   private _meetingInviteCodeHash: string | null = null;
   private _meetingInviteCodeVersion = "";
-  public appsState: { activeAppId: string | null; locked: boolean } = {
-    activeAppId: null,
-    locked: false,
-  };
-  private appsDocs: Map<string, Y.Doc> = new Map();
-  private appsAwareness: Map<string, Awareness> = new Map();
-  private appAwarenessClientIdsByUser: Map<string, Map<string, Set<number>>> =
-    new Map();
+  public readonly apps = new RoomApps(
+    (userId) => this.userKeysById.get(userId) ?? userId,
+  );
   // Server-authoritative game runtime (parallel to the collaborative apps
   // relay above). At most one game runs per room. The tick timer is owned here
   // so it is torn down with the room; the handler layer drives broadcasts.
@@ -389,9 +379,7 @@ export class Room {
     WebcamReceiverCapacityProofCoordinator;
 
   private readonly webcamVp9Enabled: boolean;
-  private readonly guestIdentityMergeListeners = new Set<
-    (from: string, into: string) => void
-  >();
+  private guestIdentityMerger: GuestIdentityMerger | null = null;
   private readonly lifecycleListeners = new Set<
     (event: RoomLifecycleEvent) => void
   >();
@@ -433,9 +421,8 @@ export class Room {
    * Lets room-scoped state that lives outside this class, such as the apps
    * authority runtime, follow who is in the room and when it closes.
    */
-  onGuestIdentityMerged(listener: (from: string, into: string) => void): () => void {
-    this.guestIdentityMergeListeners.add(listener);
-    return () => this.guestIdentityMergeListeners.delete(listener);
+  setGuestIdentityMerger(merger: GuestIdentityMerger): void {
+    this.guestIdentityMerger = merger;
   }
 
   onLifecycle(listener: (event: RoomLifecycleEvent) => void): () => void {
@@ -852,10 +839,13 @@ export class Room {
   claimGuestIdentity(
     userKey: string,
     guestProof: string | undefined,
-  ): { ok: false } | { ok: true; bindTo: string | undefined } {
+  ): { ok: false } | { ok: true; bindTo: string | undefined; clearUnheldBinding?: () => void } {
     if (!this.holdsUserKey(userKey)) {
-      this.unbindGuestProof(userKey);
-      return { ok: true, bindTo: guestProof };
+      return {
+        ok: true,
+        bindTo: guestProof,
+        clearUnheldBinding: () => this.unbindGuestProof(userKey),
+      };
     }
     const bound = this.guestProofsByUserKey.get(userKey);
     if (bound !== undefined && bound !== guestProof) {
@@ -1051,7 +1041,10 @@ export class Room {
    * chose itself, speaks only for itself.
    */
   private principalOf(userKey: string): string {
-    const guestProof = this.guestProofsByUserKey.get(userKey);
+    return this.admissionPrincipal(userKey, this.guestProofsByUserKey.get(userKey));
+  }
+
+  private admissionPrincipal(userKey: string, guestProof: string | undefined): string {
     return guestProof !== undefined && userKey.startsWith(GUEST_SEAT_KEY_PREFIX)
       ? `pass:${guestProof}`
       : `key:${userKey}`;
@@ -1144,11 +1137,16 @@ export class Room {
       grows = true;
     }
     if (!grows) return undefined;
+    const { merges } = this.guestLinkOf(passes);
+    const blocked = this.guestHolds(this.blockedUsers, "", guestProof, passes);
+    const staged = !blocked && passes.size <= GUEST_PASS_GROUP_LIMIT ? this.stageGuestMerges(merges) : null;
     return {
       guestProof,
       passes,
-      blocked: this.guestHolds(this.blockedUsers, "", guestProof, passes),
-      recordable: passes.size <= GUEST_PASS_GROUP_LIMIT,
+      blocked,
+      recordable: staged !== null,
+      merges,
+      staged,
     };
   }
 
@@ -1171,38 +1169,27 @@ export class Room {
    * waits: from then on decisions and blocks under any of them hold under
    * all. A plan of more than `GUEST_PASS_GROUP_LIMIT` passes is not
    * recorded: the room never drops a pass it links to make room.
-   *
-   * The guest's waiting requests are then judged again, now that the room
-   * knows more of the guest (returned). A request is answered only by a
-   * decision made after it arrived: a denial turns it away, and an
-   * admission lets it in while the guest still holds it. Any other request
-   * stays in the lobby. Nothing is recorded: an earlier decision keeps the
-   * time it was made.
    */
-  commitGuestLink(
-    link: GuestLinkPlan,
-  ): Array<{ request: WaitingRequest; admitted: boolean }> {
-    if (link.blocked) return [];
-    if (!link.recordable) {
+  commitGuestLink(link: GuestLinkPlan):
+    | { linked: false }
+    | { linked: true; settleWaiting: () => SettledWaitingRequest[] } {
+    if (link.blocked) return { linked: false };
+    const { passes, held, kept, merges } = this.guestLinkOf(link.passes);
+    if (!link.staged) {
       Logger.warn(
-        `Room ${this.id}: a guest showed ${link.passes.size} passes; the room links at most ${GUEST_PASS_GROUP_LIMIT}, so this link is not recorded.`,
+        link.passes.size > GUEST_PASS_GROUP_LIMIT
+          ? `Room ${this.id}: a guest showed ${link.passes.size} passes; the room links at most ${GUEST_PASS_GROUP_LIMIT}, so this link is not recorded.`
+          : `Room ${this.id}: an app could not merge what a guest keeps under ${link.merges.length + 1} of its passes, so this link is not recorded.`,
       );
-      return [];
+      return { linked: false };
+    }
+    if (!sameMerges(merges, link.merges) || !link.staged.commit()) {
+      Logger.warn(
+        `Room ${this.id}: what a guest keeps in the room's apps changed after this link was planned, so it is not recorded.`,
+      );
+      return { linked: false };
     }
     const guestsBefore = [...new Set([...link.passes].map((proof) => this.guestOfPass(proof)))];
-    const passes = new Set(link.passes);
-    const known = new Set<GuestRecord>();
-    for (const proof of link.passes) {
-      const record = this.guestRecords.get(proof);
-      if (!record) continue;
-      known.add(record);
-      for (const pass of record.passes) passes.add(pass);
-    }
-    const held = [...known].filter((record) => record.heldAt !== null);
-    const kept = (held.length > 0 ? held : [...known]).reduce<GuestRecord | undefined>(
-      (earliest, record) => (!earliest || record.since < earliest.since ? record : earliest),
-      undefined,
-    );
     const merged: GuestRecord = {
       identity: kept?.identity ?? link.guestProof,
       since: kept?.since ?? (this.guestPassClock += 1),
@@ -1220,22 +1207,20 @@ export class Room {
       }
       this.guestRecords.set(proof, merged);
     }
-    for (const record of held) {
-      if (record.identity === merged.identity) continue;
-      for (const listener of this.guestIdentityMergeListeners) {
-        try {
-          listener(record.identity, merged.identity);
-        } catch (error) {
-          Logger.warn(`Room ${this.id}: an identity merge listener failed`, error);
-        }
-      }
+    try {
+      link.staged.afterCommit?.();
+    } catch (error) {
+      Logger.warn(`Room ${this.id}: an identity merge listener failed`, error);
     }
     if (seatedIdentityChanged) this.notifyLifecycle("membership");
-    this.mergeWaitingGuests(guestsBefore, this.guestOfPass(link.guestProof));
-    const settled: Array<{ request: WaitingRequest; admitted: boolean }> = [];
-    for (const userKey of [
-      ...(this.waitingKeysByGuest.get(this.guestOfPass(link.guestProof)) ?? []),
-    ]) {
+    const guest = this.guestOfPass(link.guestProof);
+    this.mergeWaitingGuests(guestsBefore, guest);
+    return { linked: true, settleWaiting: () => this.settleLinkedWaitingRequests(guest) };
+  }
+
+  private settleLinkedWaitingRequests(guest: string): SettledWaitingRequest[] {
+    const settled: SettledWaitingRequest[] = [];
+    for (const userKey of this.waitingKeysByGuest.get(guest) ?? []) {
       const request = this.pendingClients.get(userKey);
       const arrival = this.waitingGuestByKey.get(userKey)?.arrival;
       if (!request || arrival === undefined) continue;
@@ -1255,6 +1240,38 @@ export class Room {
     return settled;
   }
 
+  private guestLinkOf(linkPasses: ReadonlySet<string>): {
+    passes: Set<string>;
+    held: GuestRecord[];
+    kept: GuestRecord | undefined;
+    merges: GuestIdentityMerge[];
+  } {
+    const passes = new Set(linkPasses);
+    const known = new Set<GuestRecord>();
+    for (const proof of linkPasses) {
+      const record = this.guestRecords.get(proof);
+      if (!record) continue;
+      known.add(record);
+      for (const pass of record.passes) passes.add(pass);
+    }
+    const held = [...known].filter((record) => record.heldAt !== null);
+    const kept = (held.length > 0 ? held : [...known]).reduce<GuestRecord | undefined>(
+      (earliest, record) => (!earliest || record.since < earliest.since ? record : earliest),
+      undefined,
+    );
+    const merges = kept
+      ? held
+          .filter((record) => record.identity !== kept.identity)
+          .map((record) => ({ from: record.identity, into: kept.identity }))
+      : [];
+    return { passes, held, kept, merges };
+  }
+
+  private stageGuestMerges(merges: readonly GuestIdentityMerge[]): StagedGuestMerge | null {
+    if (merges.length === 0 || !this.guestIdentityMerger) return { commit: () => true };
+    return this.guestIdentityMerger(merges);
+  }
+
   /**
    * A join's link in one step, as `planGuestLink` and then either
    * `refuseBlockedLink` or `commitGuestLink`.
@@ -1269,7 +1286,8 @@ export class Room {
     const link = this.planGuestLink(otherSeats, guestProof);
     if (!link) return { blocked: [], settled: [] };
     if (link.blocked) return { blocked: this.refuseBlockedLink(link).userKeys, settled: [] };
-    return { blocked: [], settled: this.commitGuestLink(link) };
+    const committed = this.commitGuestLink(link);
+    return { blocked: [], settled: committed.linked ? committed.settleWaiting() : [] };
   }
 
   /** How many passes the room links to another, for its memory bound. */
@@ -1509,18 +1527,22 @@ export class Room {
     return { admissionCode, expiresAt };
   }
 
-  redeemAdmission(
+  planAdmissionRedemption(
     admissionCode: string,
     userKey: string,
     guestProof: string | undefined,
-  ): boolean {
+  ): (() => void) | null {
     const expiresAt = this.openAdmissions.get(admissionCode);
-    if (expiresAt === undefined || expiresAt <= Date.now()) return false;
-    if (!this.restoreAdmission(userKey, guestProof, { pastLock: true })) {
-      return false;
-    }
-    this.openAdmissions.delete(admissionCode);
-    return true;
+    if (expiresAt === undefined || expiresAt <= Date.now()) return null;
+    if (this.isBlocked(userKey, guestProof)) return null;
+    const principal = this.admissionPrincipal(userKey, guestProof);
+    if (!this.admissions.hasRoomFor(new Set([principal]))) return null;
+    return () => {
+      if (this.openAdmissions.get(admissionCode) !== expiresAt) return;
+      if (this.restoreAdmission(userKey, guestProof, { pastLock: true })) {
+        this.openAdmissions.delete(admissionCode);
+      }
+    };
   }
 
   private releaseUnheldGuestIdentities(): void {
@@ -2485,6 +2507,15 @@ export class Room {
   }
 
   getProducerInfoById(producerId: string): ProducerInfo | null {
+    const producer = this.getActiveProducerById(producerId);
+    if (!producer) {
+      return null;
+    }
+    const entry = this.producerIndex.get(producerId);
+    return entry ? this.producerInfoFromIndexEntry(entry) : null;
+  }
+
+  getActiveProducerById(producerId: string): Producer | null {
     const entry = this.producerIndex.get(producerId);
     if (!entry) {
       return null;
@@ -2493,7 +2524,7 @@ export class Room {
       this.removeProducerIndexById(producerId, entry.producer);
       return null;
     }
-    return this.producerInfoFromIndexEntry(entry);
+    return entry.producer;
   }
 
   producerMatchesCurrentWebcamCodecPolicy(
@@ -3217,191 +3248,6 @@ export class Room {
     return null;
   }
 
-  private getOrCreateAwarenessUserMap(appId: string): Map<string, Set<number>> {
-    const existing = this.appAwarenessClientIdsByUser.get(appId);
-    if (existing) return existing;
-    const map = new Map<string, Set<number>>();
-    this.appAwarenessClientIdsByUser.set(appId, map);
-    return map;
-  }
-
-  private trackAwarenessClientForUser(
-    appId: string,
-    userId: string,
-    clientId: number,
-  ): void {
-    const users = this.getOrCreateAwarenessUserMap(appId);
-    const existing = users.get(userId);
-    if (existing) {
-      existing.add(clientId);
-      return;
-    }
-    users.set(userId, new Set([clientId]));
-  }
-
-  private untrackAwarenessClientForUser(
-    appId: string,
-    userId: string,
-    clientId: number,
-  ): void {
-    const users = this.appAwarenessClientIdsByUser.get(appId);
-    if (!users) return;
-    const clientIds = users.get(userId);
-    if (!clientIds) return;
-    clientIds.delete(clientId);
-    if (clientIds.size === 0) {
-      users.delete(userId);
-    }
-    if (users.size === 0) {
-      this.appAwarenessClientIdsByUser.delete(appId);
-    }
-  }
-
-  getOrCreateAppDoc(appId: string): Y.Doc {
-    const existing = this.appsDocs.get(appId);
-    if (existing) return existing;
-    const doc = new Y.Doc();
-    this.appsDocs.set(appId, doc);
-    return doc;
-  }
-
-  getOrCreateAppAwareness(appId: string): Awareness {
-    const existing = this.appsAwareness.get(appId);
-    if (existing) return existing;
-    const awareness = new Awareness(this.getOrCreateAppDoc(appId));
-    this.appsAwareness.set(appId, awareness);
-    return awareness;
-  }
-
-  applyAppAwarenessUpdate(
-    appId: string,
-    awarenessUpdate: Uint8Array,
-    userId?: string,
-    clientId?: number,
-  ): void {
-    const awareness = this.getOrCreateAppAwareness(appId);
-    applyAwarenessUpdate(awareness, awarenessUpdate, userId ?? "socket");
-    if (!userId || typeof clientId !== "number" || !Number.isFinite(clientId)) {
-      return;
-    }
-    if (awareness.getStates().has(clientId)) {
-      this.trackAwarenessClientForUser(appId, userId, clientId);
-      return;
-    }
-    this.untrackAwarenessClientForUser(appId, userId, clientId);
-  }
-
-  encodeAppAwarenessSnapshot(appId: string): Uint8Array | null {
-    const awareness = this.appsAwareness.get(appId);
-    if (!awareness) return null;
-    const clientIds = Array.from(awareness.getStates().keys());
-    if (clientIds.length === 0) return null;
-    return encodeAwarenessUpdate(awareness, clientIds);
-  }
-
-  clearAppAwareness(appId: string): Uint8Array | null {
-    const awareness = this.appsAwareness.get(appId);
-    this.appAwarenessClientIdsByUser.delete(appId);
-    if (!awareness) return null;
-
-    const clientIds = Array.from(awareness.getStates().keys());
-    let removalUpdate: Uint8Array | null = null;
-    if (clientIds.length > 0) {
-      removeAwarenessStates(awareness, clientIds, "app-close");
-      removalUpdate = encodeAwarenessUpdate(awareness, clientIds);
-    }
-
-    try {
-      awareness.destroy();
-    } catch {}
-    this.appsAwareness.delete(appId);
-    return removalUpdate;
-  }
-
-  clearAppState(appId: string): Uint8Array | null {
-    const awarenessUpdate = this.clearAppAwareness(appId);
-    const doc = this.appsDocs.get(appId);
-    if (doc) {
-      try {
-        doc.destroy();
-      } catch {}
-      this.appsDocs.delete(appId);
-    }
-    if (this.appsState.activeAppId === appId) {
-      this.appsState.activeAppId = null;
-      this.appsState.locked = false;
-    }
-    return awarenessUpdate;
-  }
-
-  clearUserAwareness(userId: string): AppAwarenessRemoval[] {
-    const removals: AppAwarenessRemoval[] = [];
-
-    const appIds = new Set<string>([
-      ...this.appsAwareness.keys(),
-      ...this.appAwarenessClientIdsByUser.keys(),
-    ]);
-
-    for (const appId of appIds) {
-      const awareness = this.appsAwareness.get(appId);
-      if (!awareness) {
-        continue;
-      }
-
-      const users = this.appAwarenessClientIdsByUser.get(appId);
-      const trackedClientIds = users?.get(userId);
-      if (users) {
-        users.delete(userId);
-        if (users.size === 0) {
-          this.appAwarenessClientIdsByUser.delete(appId);
-        }
-      }
-
-      const clientIds = new Set<number>(trackedClientIds ?? []);
-      if (clientIds.size === 0) {
-        for (const [clientId, state] of awareness.getStates().entries()) {
-          if (getAwarenessStateUserId(state) === userId) {
-            clientIds.add(clientId);
-          }
-        }
-      }
-
-      const removableClientIds = Array.from(clientIds).filter((id) =>
-        awareness.meta.has(id),
-      );
-      if (removableClientIds.length === 0) {
-        continue;
-      }
-
-      removeAwarenessStates(awareness, removableClientIds, userId);
-      removals.push({
-        appId,
-        awarenessUpdate: encodeAwarenessUpdate(awareness, removableClientIds),
-      });
-    }
-
-    return removals;
-  }
-
-  clearApps(): void {
-    for (const awareness of this.appsAwareness.values()) {
-      try {
-        awareness.destroy();
-      } catch {}
-    }
-    this.appsAwareness.clear();
-    this.appAwarenessClientIdsByUser.clear();
-
-    for (const doc of this.appsDocs.values()) {
-      try {
-        doc.destroy();
-      } catch {}
-    }
-    this.appsDocs.clear();
-    this.appsState.activeAppId = null;
-    this.appsState.locked = false;
-  }
-
   clearGame(): void {
     this.gameGeneration?.controller.abort();
     this.gameGeneration = null;
@@ -3416,7 +3262,7 @@ export class Room {
   close(): void {
     this.notifyLifecycle("closed");
     this.lifecycleListeners.clear();
-    this.guestIdentityMergeListeners.clear();
+    this.guestIdentityMerger = null;
     this.aiCredentials.clear();
     this.stopCleanupTimer();
     this.cancelWebcamCodecPolicyUpgrade();
@@ -3435,7 +3281,7 @@ export class Room {
     this.producerIndex.clear();
     this.webinarAttendeeCount = 0;
     this.meetingParticipantCount = 0;
-    this.clearApps();
+    this.apps.clear();
     this.clearGame();
     for (const expiryTimer of this.chatImageExpiryTimers.values()) {
       clearTimeout(expiryTimer);

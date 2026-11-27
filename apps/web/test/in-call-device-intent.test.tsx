@@ -513,6 +513,37 @@ describe("presses and publishes that race each other", () => {
     return [streamMicrophones, producerMicrophone ? [producerMicrophone] : []];
   };
 
+  it.each(["capture", "noiseSetup", "replaceTrack"] satisfies Hold[])(
+    "leaving with a microphone switch waiting on %s retires it and does not start its queued successor",
+    async (hold) => {
+      const rig = await join({ noiseCancellation: true });
+      world.holds.add(hold);
+      const capture = vi.mocked(navigator.mediaDevices.getUserMedia);
+      let first: Promise<void> = Promise.resolve();
+      let second: Promise<void> = Promise.resolve();
+      await act(async () => {
+        first = rig.rig().media.handleAudioInputDeviceChange("mic-2");
+        second = rig.rig().media.handleAudioInputDeviceChange("default");
+      });
+      await until("the first microphone switch", () => pendingOf(hold) === 1);
+      const requestedBeforeLeaving = capture.mock.calls.length;
+
+      rig.unmount();
+      current = null;
+      rig.rig().socket.closeConnection();
+      const liveAudioAtLeave = world.tracks
+        .filter((track) => track.kind === "audio" && track.readyState === "live")
+        .map((track) => track.id);
+      await releaseAll(rig, first, second);
+
+      expect({
+        liveAudioAtLeave,
+        extraRequests: capture.mock.calls.length - requestedBeforeLeaving,
+        live: leftAfterEnd(world),
+      }).toEqual({ liveAudioAtLeave: [], extraRequests: 0, live: [] });
+    },
+  );
+
   it("a microphone switch that lands while a camera switch swaps keeps the new microphone in the local stream", async () => {
     const rig = await join();
     world.holds.add("replaceTrack");
@@ -1304,6 +1335,12 @@ describe("fixed in-call model runs from reviews", () => {
     world = new World();
     installMediaWorld(world);
     await runSeed(404, MODEL_STEPS);
+  }, 120_000);
+
+  it("seed 19, a reconnect drops pending camera publishes on the old send transport", async () => {
+    world = new World();
+    installMediaWorld(world);
+    await runSeed(19, 24, 5, STEPS_WITH_RECONNECTS);
   }, 120_000);
 
   it("a 13 ms produce round trip with 32 steps, seeds 1 to 30", async () => {

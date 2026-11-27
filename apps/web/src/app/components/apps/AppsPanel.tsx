@@ -2,7 +2,11 @@
 
 import React, { useState } from "react";
 import { Blocks, ExternalLink, LoaderCircle } from "lucide-react";
-import { useApps } from "@conclave/apps-sdk";
+import {
+  useApps,
+  type AppsCommandResult,
+  type AppsState,
+} from "@conclave/apps-sdk";
 import { color } from "@conclave/ui-tokens";
 import {
   GAME_DOCK_HEADER_CLASS,
@@ -14,42 +18,109 @@ import {
 } from "../games/gameUi";
 import PanelNoticeSlot from "../PanelNoticeSlot";
 
+/**
+ * An app that opens beside the call for this viewer alone. Opening one
+ * changes nothing for anyone else and leaves the stage as it is.
+ */
+export type PanelAppEntry = {
+  id: string;
+  name: string;
+  description?: string;
+  icon: React.ReactNode;
+  isOpen: boolean;
+  /** Something in the app is waiting for this viewer. */
+  needsAttention?: boolean;
+  /**
+   * The server cannot run this app: it is an older one, or has such apps
+   * turned off. The app is listed all the same, switched off, with the
+   * reason, so its absence is explained.
+   */
+  needsServerUpdate?: boolean;
+  onToggle: () => void;
+};
+
+const NEEDS_SERVER_UPDATE = "Needs a server update";
+
+/** "Polls and Q&A need a server update.", for the apps named. */
+const needsServerUpdateNote = (names: string[]): string =>
+  `${names.join(" and ")} ${names.length > 1 ? "need" : "needs"} a server update.`;
+
+const commandFailureCopy = (result: AppsCommandResult): string | null => {
+  if (result.ok) return null;
+  return result.reason === "roomFull"
+    ? "Too many saved apps. Clear one to present another."
+    : "That did not go through. Try again.";
+};
+
 const APPS_SDK_DOCS_URL =
   "https://github.com/ACM-VIT/conclave/blob/main/packages/apps-sdk/docs/guides/add-a-new-app-integration.md";
 
 export function AppsPanel({
   onClose,
+  panelApps = [],
   rightOffset = 0,
   dockWidth,
   maxDockWidth,
   onDockWidthChange,
 }: {
   onClose: () => void;
+  panelApps?: PanelAppEntry[];
   rightOffset?: number;
   dockWidth?: number;
   maxDockWidth?: number;
   onDockWidthChange?: (width: number) => void;
 }) {
-  const { apps, state, openApp, closeApp, setLocked, isAdmin, isReadOnly } =
-    useApps();
+  const {
+    apps,
+    state,
+    presentApp,
+    closeApp,
+    clearApp,
+    setLocked,
+    isAdmin,
+    isReadOnly,
+  } = useApps();
   const [busyAppId, setBusyAppId] = useState<string | null>(null);
+  // The confirm step is armed for one app against one room state, so any
+  // change in between, including a move to another room, asks again.
+  const [confirmingClear, setConfirmingClear] = useState<{
+    appId: string;
+    state: AppsState;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const canManage = Boolean(isAdmin) && !isReadOnly;
+  const noneAvailable =
+    panelApps.length > 0 && panelApps.every((app) => app.needsServerUpdate);
 
-  const run = async (appId: string, action: () => Promise<boolean>) => {
+  const run = async (
+    appId: string,
+    action: () => Promise<AppsCommandResult>,
+  ) => {
     setBusyAppId(appId);
     setError(null);
-    const ok = await action();
+    const result = await action();
     setBusyAppId(null);
-    if (!ok) setError("That did not go through. Try again.");
-    return ok;
+    setError(commandFailureCopy(result));
   };
 
   const handlePick = (appId: string) => {
     if (!canManage || busyAppId) return;
     const isActive = state.activeAppId === appId;
-    void run(appId, () => (isActive ? closeApp() : openApp(appId)));
+    void run(appId, () => (isActive ? closeApp() : presentApp(appId)));
+  };
+
+  const isConfirmingClear = (appId: string) =>
+    confirmingClear?.appId === appId && confirmingClear.state === state;
+
+  const handleClear = (appId: string) => {
+    if (!canManage || busyAppId) return;
+    if (!isConfirmingClear(appId)) {
+      setConfirmingClear({ appId, state });
+      return;
+    }
+    setConfirmingClear(null);
+    void run(appId, () => clearApp(appId));
   };
 
   return (
@@ -71,97 +142,219 @@ export function AppsPanel({
       <PanelNoticeSlot />
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         <div className="flex flex-col gap-2">
-          <p className="mb-1 text-[13px] leading-relaxed text-[#a1a1aa]">
-            {isReadOnly
-              ? "Observer mode can use apps but not open them."
-              : canManage
-                ? "Open a shared app for everyone in the room."
-                : "The host opens apps; they appear here for everyone."}
-          </p>
-
-          {apps.map((app) => {
-            const isActive = state.activeAppId === app.id;
-            const isBusy = busyAppId === app.id;
-            const interactive = canManage && !busyAppId;
-            return (
-              <button
-                key={app.id}
-                type="button"
-                disabled={!interactive}
-                onClick={() => handlePick(app.id)}
-                aria-label={
-                  isActive ? `Close ${app.name}` : `Open ${app.name}`
-                }
-                className="group relative flex w-full items-center gap-3 overflow-hidden rounded-xl border p-3 text-left transition-colors disabled:cursor-default"
-                style={{
-                  borderColor: isActive ? color.accent : "rgba(255,255,255,0.1)",
-                  background: color.surfaceRaised,
-                  cursor: interactive ? "pointer" : "default",
-                }}
+          {panelApps.length > 0 && (
+            <>
+              <p
+                className="mb-1 text-[13px] leading-relaxed text-[#a1a1aa]"
+                data-testid={noneAvailable ? "panel-apps-unavailable" : undefined}
               >
-                <span
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border"
+                {noneAvailable
+                  ? needsServerUpdateNote(panelApps.map((app) => app.name))
+                  : "Open beside the call. Only you see the panel."}
+              </p>
+              {panelApps.map((app) => (
+                <button
+                  key={app.id}
+                  type="button"
+                  data-testid={`panel-app-${app.id}`}
+                  disabled={app.needsServerUpdate}
+                  title={app.needsServerUpdate ? NEEDS_SERVER_UPDATE : undefined}
+                  onClick={app.onToggle}
+                  aria-pressed={app.needsServerUpdate ? undefined : app.isOpen}
+                  aria-label={
+                    app.needsServerUpdate
+                      ? `${app.name}: ${NEEDS_SERVER_UPDATE.toLowerCase()}`
+                      : app.isOpen
+                        ? `Close ${app.name}`
+                        : `Open ${app.name}`
+                  }
+                  className="group relative flex w-full cursor-pointer items-center gap-3 overflow-hidden rounded-xl border p-3 text-left transition-colors disabled:cursor-default"
                   style={{
-                    borderColor: "rgba(255,255,255,0.08)",
-                    background: "rgba(255,255,255,0.04)",
-                    color: isActive ? color.accent : "#d4d4d8",
+                    borderColor: app.isOpen ? color.accent : "rgba(255,255,255,0.1)",
+                    background: app.needsServerUpdate
+                      ? "transparent"
+                      : color.surfaceRaised,
                   }}
-                  aria-hidden="true"
                 >
-                  {app.icon ?? <Blocks size={19} strokeWidth={1.75} />}
-                </span>
-                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                  <span className="text-[14.5px] font-medium text-[#fafafa]">
-                    {app.name}
+                  <span
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.08)",
+                      background: "rgba(255,255,255,0.04)",
+                      color: app.needsServerUpdate
+                        ? "#71717a"
+                        : app.isOpen
+                          ? color.accent
+                          : "#d4d4d8",
+                    }}
+                    aria-hidden="true"
+                  >
+                    {app.icon}
                   </span>
-                  {app.description && (
-                    <span className="truncate text-[12px] text-[#a1a1aa]">
-                      {app.description}
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span
+                      className="text-[14.5px] font-medium"
+                      style={{ color: app.needsServerUpdate ? "#a1a1aa" : "#fafafa" }}
+                    >
+                      {app.name}
                     </span>
-                  )}
-                </span>
-                <span className="flex shrink-0 items-center gap-2">
-                  {isBusy ? (
-                    <LoaderCircle
-                      size={15}
-                      strokeWidth={2}
-                      className="animate-spin text-[#a1a1aa]"
-                      aria-hidden="true"
-                    />
-                  ) : isActive ? (
-                    <>
-                      {canManage && (
-                        <span className="text-[11.5px] text-[#71717a] opacity-0 transition-opacity group-hover:opacity-100">
-                          Close
+                    {app.needsServerUpdate ? (
+                      <span className="truncate text-[12px] text-[#a1a1aa]">
+                        {NEEDS_SERVER_UPDATE}
+                      </span>
+                    ) : (
+                      app.description && (
+                        <span className="truncate text-[12px] text-[#a1a1aa]">
+                          {app.description}
                         </span>
-                      )}
+                      )
+                    )}
+                  </span>
+                  {app.needsAttention && !app.isOpen && (
+                    <span className="flex shrink-0 items-center">
                       <span
                         aria-hidden="true"
                         className="h-1.5 w-1.5 rounded-full"
                         style={{ background: color.accent }}
                       />
-                      <span className="sr-only">Open now</span>
-                    </>
-                  ) : canManage ? (
-                    <svg
-                      width={16}
-                      height={16}
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      aria-hidden="true"
-                      className="text-[#71717a]"
-                    >
-                      <path
-                        d="M9 6l6 6-6 6"
-                        stroke="currentColor"
-                        strokeWidth={1.6}
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
+                      <span className="sr-only">Waiting for you</span>
+                    </span>
+                  )}
+                </button>
+              ))}
+              <div className="my-2 h-px bg-white/10" aria-hidden="true" />
+            </>
+          )}
+          <p className="mb-1 text-[13px] leading-relaxed text-[#a1a1aa]">
+            {isReadOnly
+              ? "Observer mode can use apps but not present them."
+              : canManage
+                ? "Present an app to everyone in the room."
+                : "The host presents apps here for everyone."}
+          </p>
+
+          {apps.map((app) => {
+            const isActive = state.activeAppId === app.id;
+            const isSaved = state.savedAppIds.includes(app.id);
+            const isBusy = busyAppId === app.id;
+            const interactive = canManage && !busyAppId;
+            const confirming = isConfirmingClear(app.id);
+            const canClear = canManage && isSaved && !isBusy;
+            const subtitle = isSaved ? "Saved" : app.description;
+            return (
+              <div
+                key={app.id}
+                className="group relative flex w-full items-center overflow-hidden rounded-xl border transition-colors"
+                style={{
+                  borderColor: isActive ? color.accent : "rgba(255,255,255,0.1)",
+                  background: color.surfaceRaised,
+                }}
+                onMouseLeave={() => {
+                  if (confirming) setConfirmingClear(null);
+                }}
+              >
+                <button
+                  type="button"
+                  disabled={!interactive}
+                  onClick={() => handlePick(app.id)}
+                  aria-label={
+                    isActive ? `Close ${app.name}` : `Present ${app.name}`
+                  }
+                  className="flex min-w-0 flex-1 items-center gap-3 p-3 text-left disabled:cursor-default"
+                  style={{ cursor: interactive ? "pointer" : "default" }}
+                >
+                  <span
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.08)",
+                      background: "rgba(255,255,255,0.04)",
+                      color: isActive ? color.accent : "#d4d4d8",
+                    }}
+                    aria-hidden="true"
+                  >
+                    {app.icon ?? <Blocks size={19} strokeWidth={1.75} />}
+                  </span>
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="text-[14.5px] font-medium text-[#fafafa]">
+                      {app.name}
+                    </span>
+                    {subtitle && (
+                      <span className="truncate text-[12px] text-[#a1a1aa]">
+                        {subtitle}
+                      </span>
+                    )}
+                  </span>
+                  <span className="flex shrink-0 items-center gap-2">
+                    {isBusy ? (
+                      <LoaderCircle
+                        size={15}
+                        strokeWidth={2}
+                        className="animate-spin text-[#a1a1aa]"
+                        aria-hidden="true"
                       />
-                    </svg>
-                  ) : null}
-                </span>
-              </button>
+                    ) : isActive ? (
+                      <>
+                        {canManage && (
+                          <span className="text-[11.5px] text-[#71717a] opacity-0 transition-opacity group-hover:opacity-100">
+                            Close
+                          </span>
+                        )}
+                        <span
+                          aria-hidden="true"
+                          className="h-1.5 w-1.5 rounded-full"
+                          style={{ background: color.accent }}
+                        />
+                        <span className="sr-only">Presenting now</span>
+                      </>
+                    ) : canManage ? (
+                      <>
+                        {!canClear && (
+                          <span className="text-[11.5px] text-[#71717a] opacity-0 transition-opacity group-hover:opacity-100">
+                            Present
+                          </span>
+                        )}
+                        <svg
+                          width={16}
+                          height={16}
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          aria-hidden="true"
+                          className="text-[#71717a]"
+                        >
+                          <path
+                            d="M9 6l6 6-6 6"
+                            stroke="currentColor"
+                            strokeWidth={1.6}
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </>
+                    ) : null}
+                  </span>
+                </button>
+                {canClear && (
+                  <button
+                    type="button"
+                    disabled={!interactive}
+                    onClick={() => handleClear(app.id)}
+                    onBlur={() => {
+                      if (confirming) setConfirmingClear(null);
+                    }}
+                    aria-label={
+                      confirming
+                        ? `Clear ${app.name} for everyone`
+                        : `Clear ${app.name}`
+                    }
+                    className="mr-2 shrink-0 rounded-md px-2 py-1 text-[12px] transition-colors hover:bg-white/[0.06] disabled:cursor-default"
+                    style={{
+                      color: confirming ? color.danger : "#a1a1aa",
+                    }}
+                  >
+                    {confirming ? "Confirm clear" : "Clear"}
+                  </button>
+                )}
+              </div>
             );
           })}
 

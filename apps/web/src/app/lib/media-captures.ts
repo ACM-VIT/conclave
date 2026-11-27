@@ -1,3 +1,5 @@
+import { logCallError } from "./call-error-capture";
+
 const heldTracks = new Set<MediaStreamTrack>();
 const releaseListeners = new Set<() => void>();
 let generation = 0;
@@ -103,7 +105,7 @@ export const releaseAllCaptures = (): void => {
     try {
       listener();
     } catch (error) {
-      console.error("[Meets] A capture owner failed to release:", error);
+      logCallError("[Meets] A capture owner failed to release", error);
     }
   }
   const tracks = [...heldTracks];

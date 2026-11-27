@@ -38,6 +38,8 @@ final class WebRTCClient {
     var onLocalVideoEnabledChanged: ((Bool) -> Void)?
     var onTransportConnectionStateChanged: ((String, String) -> Void)?
     var onCallAudioRouteChanged: (() -> Void)?
+    var onCameraFacingsChanged: (() -> Void)?
+    var onTeardownStuck: ((String) -> Void)?
     var onLocalAudioProducerLost: (() -> Void)?
     var onLocalVideoProducerLost: (() -> Void)?
     var onLocalScreenProducerLost: (() -> Void)?
@@ -113,14 +115,16 @@ final class WebRTCClient {
     func reassertLocalAudioProducerUnmuted() async throws { fatalError() }
     func setVideoEnabled(_ enabled: Bool) async throws { fatalError() }
     func suspendLocalVideoForRecovery() async { fatalError() }
+    var isCameraSwitchInFlight: Bool { fatalError() }
     func canSwitchCamera() -> Bool { fatalError() }
     func setPreferredCameraFacing(_ facing: LocalCameraFacing) { fatalError() }
     func switchCamera() async throws { fatalError() }
     func closeLocalAudioProducer() async { fatalError() }
     func closeLocalVideoProducer() async { fatalError() }
     func closeLocalScreenProducer() async { fatalError() }
+    func closeLocalScreenProducer(consentGrant: Int) async { fatalError() }
     func closeLocalMedia(kind: String, type: String, producerId: String? = nil) async -> Bool { fatalError() }
-    func startScreenSharing() async throws { fatalError() }
+    func startScreenSharing(consentGrant: Int) async throws { fatalError() }
     func stopScreenSharing() async { fatalError() }
 
     func getCaptureSession() -> Any? { nil }

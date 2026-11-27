@@ -33,6 +33,23 @@ const parseScoreValue = (value: unknown): number | null =>
     ? value
     : null;
 
+/**
+ * How well the sender of a consumed stream reaches the server: the best
+ * score among its encodings, or the aggregate when no per-encoding scores
+ * came. Zero means the server gets nothing from that sender.
+ */
+export const readProducerScore = (score: unknown): number | null => {
+  if (!isRecord(score)) return null;
+  const perEncoding = Array.isArray(score.producerScores)
+    ? score.producerScores
+        .map(parseScoreValue)
+        .filter((value): value is number => value !== null)
+    : [];
+  return perEncoding.length > 0
+    ? Math.max(...perEncoding)
+    : parseScoreValue(score.producerScore);
+};
+
 export const classifyConsumerScoreQuality = (
   score: number | null,
 ): ConsumerScoreQuality => {

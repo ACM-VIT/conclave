@@ -5,14 +5,11 @@ import {
 import { resolveSfuSecret, resolveSfuUrl } from "@/lib/sfu-admin-auth";
 import { readResponseError } from "@/app/lib/utils";
 import {
-  canonicalizeSfuClientId,
-  CONCLAVE_SFU_CLIENT_ID,
-} from "@/lib/sfu-client-id";
-import {
   fetchPublicScheduledMeeting,
   isSfuTooOldForBookings,
   type PublicScheduledMeeting,
 } from "@/lib/scheduled-meeting-lookup";
+import type { RoomDestination } from "@/lib/meeting-links";
 
 export type { PublicScheduledMeeting };
 
@@ -31,16 +28,16 @@ export const readScheduledMeetingError = (
 ): Promise<string> => readResponseError(response);
 
 export const lookupPublicScheduledMeetingByRoomCode = async (
-  clientId: string,
-  roomCode: string,
+  { clientId, roomCode }: RoomDestination,
 ): Promise<PublicScheduledMeeting | null> => {
   try {
-    return await fetchPublicScheduledMeeting(
+    const meeting = await fetchPublicScheduledMeeting(
       resolveScheduledMeetingsBase(),
       resolveSfuSecret(),
-      canonicalizeSfuClientId(clientId) || CONCLAVE_SFU_CLIENT_ID,
+      clientId,
       roomCode,
     );
+    return meeting?.clientId === clientId ? meeting : null;
   } catch (error) {
     if (isSfuTooOldForBookings(error)) throw error;
     return null;
@@ -48,14 +45,11 @@ export const lookupPublicScheduledMeetingByRoomCode = async (
 };
 
 export const lookupScheduledMeetingHostEmail = async (
-  clientId: string,
-  roomCode: string,
+  { clientId, roomCode }: RoomDestination,
 ): Promise<string | null> => {
   try {
-    const resolvedClientId =
-      canonicalizeSfuClientId(clientId) || CONCLAVE_SFU_CLIENT_ID;
     const base = resolveScheduledMeetingsBase();
-    const url = `${base}/by-room/${encodeURIComponent(roomCode)}?clientId=${encodeURIComponent(resolvedClientId)}`;
+    const url = `${base}/by-room/${encodeURIComponent(roomCode)}?clientId=${encodeURIComponent(clientId)}`;
     const response = await fetch(url, {
       method: "GET",
       headers: {

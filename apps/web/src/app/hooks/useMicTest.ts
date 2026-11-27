@@ -6,6 +6,7 @@ import {
   captureUserMedia,
   createHeldDestination,
   isCaptureReleased,
+  onCapturesReleased,
 } from "../lib/media-captures";
 import { DEFAULT_AUDIO_CONSTRAINTS } from "../lib/constants";
 import { createNoiseCancellationPipeline } from "../lib/noise-cancellation";
@@ -176,6 +177,18 @@ export function useMicTest({
     let cancelled = false;
     const scope = createResourceScope();
 
+    const dispose = () => {
+      if (cancelled) return;
+      cancelled = true;
+      stopLoopback();
+      scope.close();
+      levelRef.current = 0;
+      setIsRunning(false);
+      setIsStarting(false);
+      setUsingNoiseCancellation(false);
+    };
+    const unsubscribe = onCapturesReleased(dispose);
+
     setIsStarting(true);
     setError(null);
 
@@ -298,12 +311,8 @@ export function useMicTest({
     void run();
 
     return () => {
-      cancelled = true;
-      stopLoopback();
-      scope.close();
-      levelRef.current = 0;
-      setIsRunning(false);
-      setUsingNoiseCancellation(false);
+      unsubscribe();
+      dispose();
     };
   }, [active, deviceId, noiseCancellation, stopLoopback]);
 
@@ -337,11 +346,9 @@ export function useMicTest({
           ? sinkCapable.setSinkId(sinkId).catch(() => {})
           : Promise.resolve();
       setLoopbackPhase("playing");
-      void applySink.then(() =>
-        audio.play().catch(() => {
-          finish();
-        }),
-      );
+      void applySink.then(() => {
+        if (playbackAudioRef.current === audio) void audio.play().catch(finish);
+      });
     },
     [stopPlayback],
   );

@@ -5612,6 +5612,9 @@
     "The board clears for everyone." : {
       "extractionState" : "manual"
     },
+    "The board stays saved for this meeting." : {
+      "extractionState" : "manual"
+    },
     "The camera isn’t available in the background." : {
       "extractionState" : "manual"
     },
@@ -6392,6 +6395,29 @@
                 "stringUnit" : {
                   "state" : "translated",
                   "value" : "%lld not on the wheel"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Wheel Waiting Names %lld" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "The wheel is full. %lld more name is waiting for a place."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "The wheel is full. %lld more names are waiting for a place."
                 }
               }
             }

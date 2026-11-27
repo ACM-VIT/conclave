@@ -11,7 +11,7 @@ type CloudflareRateLimitBinding = {
 type LocalRateLimitBucket = { windowStartedAt: number; count: number };
 const localBuckets = new Map<string, LocalRateLimitBucket>();
 
-const clientKey = (request: Request): string => {
+export const rateLimitClientKey = (request: Request): string => {
   const forwardedFor = request.headers
     .get("x-forwarded-for")
     ?.split(",")
@@ -51,7 +51,7 @@ export type UnfurlRateLimitOutcome =
 export async function takeUnfurlRateLimit(
   request: Request,
 ): Promise<UnfurlRateLimitOutcome> {
-  const key = `unfurl:${clientKey(request)}`;
+  const key = `unfurl:${rateLimitClientKey(request)}`;
 
   let limiter: CloudflareRateLimitBinding | null = null;
   try {

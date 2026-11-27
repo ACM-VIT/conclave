@@ -47,6 +47,7 @@ import { forceCloseRoom, getRoomChannelId, isCurrentRoom, markRoomEnded } from "
 import { resolveCorsOrigins } from "../cors.js";
 import { secretsMatch } from "../secret.js";
 import { readBoolean, requestBody } from "../../utilities/untrusted.js";
+import { persistenceFenceHoldRequest, persistenceFenceReleaseRequest } from "../persistenceFence.js";
 import { registerScheduledWebinarRoutes } from "./scheduledWebinarRoutes.js";
 import { registerScheduledMeetingRoutes } from "./scheduledMeetingRoutes.js";
 import { registerSchedulingRoutes } from "./schedulingRoutes.js";
@@ -336,14 +337,14 @@ export const createSfuApp = ({
 
   const forceCloseRoomWithSockets = (
     io: SocketIOServer,
-    roomChannelId: string,
+    room: Room,
     pendingSockets: Array<{ disconnect: (close?: boolean) => void }> = [],
   ): boolean => {
-    io.in(roomChannelId).disconnectSockets(true);
+    io.in(room.channelId).disconnectSockets(true);
     for (const pendingSocket of pendingSockets) {
       pendingSocket.disconnect(true);
     }
-    return forceCloseRoom(state, roomChannelId);
+    return forceCloseRoom(state, room);
   };
 
   const handleUserMediaControl = (
@@ -933,9 +934,12 @@ export const createSfuApp = ({
 
     try {
       // Draining instances keep routing established owners/placements but must
-      // not become the first assignment for a new room.
+      // not become the first assignment for a new room. The deploy canary asks
+      // with allowDraining: it calls a fresh build that stays out of rotation
+      // until that call passes.
       const existing = await state.roomRegistry.getAssignment(channelId);
-      if (state.isDraining && !existing) {
+      const allowDraining = readBoolean(requestBody(req), "allowDraining") === true;
+      if (state.isDraining && !existing && !allowDraining) {
         res.status(409).json({
           error: "Meeting server is draining",
           draining: true,
@@ -998,6 +1002,49 @@ export const createSfuApp = ({
     }
 
     await handleDrain(req, res);
+  });
+
+  // The nightly backup holds this so SQLite and Redis are copied at one point
+  // in time: durable writes wait until it is released or its hard timeout.
+  // A backup holds this for the moment it copies SQLite and Redis. POST takes
+  // or renews the hold for its owner; with renew it only renews, so a backup
+  // can prove it held the fence the whole time (a restarted SFU has no hold).
+  // A hold another owner has is refused, and DELETE releases only its own.
+  app.post("/admin/persistence-fence", async (req, res) => {
+    if (!requireSecret(req, res)) {
+      return;
+    }
+    const request = persistenceFenceHoldRequest.safeParse(requestBody(req));
+    if (!request.success) {
+      res.status(400).json({ error: "expected { owner, holdMs } with holdMs from 1000 through 30000" });
+      return;
+    }
+    const { owner, holdMs, renew } = request.data;
+    const fence = state.persistenceFence;
+    const held = renew ? fence.renew(owner, holdMs) : await fence.hold(owner, holdMs);
+    if (!held) {
+      res.status(409).json({ held: false, error: renew ? "this owner does not hold the fence" : "another backup holds the fence", instanceId: config.instanceId });
+      return;
+    }
+    res.json({ held: true, until: held.until, owner, instanceId: config.instanceId });
+  });
+
+  app.delete("/admin/persistence-fence", (req, res) => {
+    if (!requireSecret(req, res)) {
+      return;
+    }
+    const request = persistenceFenceReleaseRequest.safeParse(requestBody(req));
+    if (!request.success) {
+      res.status(400).json({ error: "expected { owner }" });
+      return;
+    }
+    const fence = state.persistenceFence;
+    const holder = fence.holder();
+    if (holder !== null && holder !== request.data.owner) {
+      res.status(409).json({ released: false, error: "another backup holds the fence", instanceId: config.instanceId });
+      return;
+    }
+    res.json({ released: fence.release(request.data.owner), instanceId: config.instanceId });
   });
 
   // Every successful admin mutation lands in the audit trail with the
@@ -1798,7 +1845,7 @@ export const createSfuApp = ({
     const closeNow = () => {
       // A delayed close must not hit a newer room reopened on this channel.
       if (!isCurrentRoom(state, room)) return;
-      forceCloseRoomWithSockets(io, roomChannelId, pendingSockets);
+      forceCloseRoomWithSockets(io, room, pendingSockets);
     };
 
     if (delayMs > 0) {

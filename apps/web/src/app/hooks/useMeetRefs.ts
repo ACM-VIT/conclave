@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { createDeviceIntentStore } from "../lib/device-intent";
 import type { Socket } from "socket.io-client";
 import type { Device } from "mediasoup-client";
+import type { ReconnectRequest } from "../lib/reconnect-request-policy";
 import type {
   AudioAnalyserEntry,
   Consumer,
@@ -123,9 +124,9 @@ export function useMeetRefs() {
   const handleRedirectRef = useRef<(roomId: string) => Promise<void>>(
     async () => {}
   );
-  const handleReconnectRef = useRef<() => void | Promise<void>>(
-    async () => {},
-  );
+  const handleReconnectRef = useRef<
+    (options?: ReconnectRequest) => void | Promise<void>
+  >(async () => {});
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioAnalyserMapRef = useRef<Map<string, AudioAnalyserEntry>>(
     new Map()
@@ -152,10 +153,6 @@ export function useMeetRefs() {
   const producerTransportDisconnectTimeoutRef = useRef<number | null>(null);
   const consumerTransportDisconnectTimeoutRef = useRef<number | null>(null);
   const pendingProducerRetryTimeoutRef = useRef<number | null>(null);
-  const iceRestartInFlightRef = useRef({
-    producer: false,
-    consumer: false,
-  });
   const producerSyncIntervalRef = useRef<number | null>(null);
 
   return {
@@ -205,7 +202,6 @@ export function useMeetRefs() {
     producerTransportDisconnectTimeoutRef,
     consumerTransportDisconnectTimeoutRef,
     pendingProducerRetryTimeoutRef,
-    iceRestartInFlightRef,
     producerSyncIntervalRef,
   };
 }

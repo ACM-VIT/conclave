@@ -129,6 +129,6 @@ export const getRoomAuthority = (
     if (event === "closed") authority.close();
     else authority.membershipChanged();
   });
-  room.onGuestIdentityMerged((from, into) => authority.guestIdentityMerged(from, into));
+  room.setGuestIdentityMerger((merges) => authority.stageGuestMerges(merges));
   return authority;
 };

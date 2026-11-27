@@ -53,10 +53,11 @@ export default function MeetingReadyCard({
   };
 
   const copyLink = async () => {
-    if (await copyText(link)) flash("linkCopied");
+    if (link && await copyText(link)) flash("linkCopied");
   };
 
   const addOthers = async () => {
+    if (!link) return;
     if (typeof navigator.share === "function") {
       try {
         await navigator.share({ title: "Join my Conclave meeting", url: link });
@@ -94,41 +95,43 @@ export default function MeetingReadyCard({
           <X size={16} strokeWidth={1.8} />
         </button>
       </div>
-      <button
-        type="button"
-        onClick={() => void addOthers()}
-        className="mt-3 inline-flex h-9 items-center gap-2 rounded-lg bg-[#F95F4A] px-3.5 text-[13px] font-medium text-white transition-[filter] hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F95F4A]/40"
-      >
-        <UserPlus size={16} strokeWidth={1.8} />
-        {feedback === "shared"
-          ? "Invite sent"
-          : feedback === "inviteCopied"
-            ? "Invite copied"
-            : "Add others"}
-      </button>
-      <p className="mt-3 text-[12.5px] leading-snug text-[#fafafa]/70">
-        Or share this meeting link with others you want in the meeting.
-      </p>
-      <div className="mt-2 flex items-center gap-1 rounded-lg bg-white/[0.05] py-1 pl-3 pr-1">
-        <span className="min-w-0 flex-1 truncate text-[13px] text-[#fafafa]/90">
-          {link.replace(/^https?:\/\//, "")}
-        </span>
+      {link ? (<>
         <button
           type="button"
-          onClick={() => void copyLink()}
-          aria-label={
-            feedback === "linkCopied" ? "Meeting link copied" : "Copy meeting link"
-          }
-          title="Copy meeting link"
-          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[#fafafa]/75 transition-colors hover:bg-white/[0.08] hover:text-[#fafafa] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#fafafa]/30"
+          onClick={() => void addOthers()}
+          className="mt-3 inline-flex h-9 items-center gap-2 rounded-lg bg-[#F95F4A] px-3.5 text-[13px] font-medium text-white transition-[filter] hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F95F4A]/40"
         >
-          {feedback === "linkCopied" ? (
-            <Check size={16} strokeWidth={2} className="text-[#22c55e]" />
-          ) : (
-            <Copy size={16} strokeWidth={1.8} />
-          )}
+          <UserPlus size={16} strokeWidth={1.8} />
+          {feedback === "shared"
+            ? "Invite sent"
+            : feedback === "inviteCopied"
+              ? "Invite copied"
+              : "Add others"}
         </button>
-      </div>
+        <p className="mt-3 text-[12.5px] leading-snug text-[#fafafa]/70">
+          Or share this meeting link with others you want in the meeting.
+        </p>
+        <div className="mt-2 flex items-center gap-1 rounded-lg bg-white/[0.05] py-1 pl-3 pr-1">
+          <span className="min-w-0 flex-1 truncate text-[13px] text-[#fafafa]/90">
+            {link.replace(/^https?:\/\//, "")}
+          </span>
+          <button
+            type="button"
+            onClick={() => void copyLink()}
+            aria-label={
+              feedback === "linkCopied" ? "Meeting link copied" : "Copy meeting link"
+            }
+            title="Copy meeting link"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[#fafafa]/75 transition-colors hover:bg-white/[0.08] hover:text-[#fafafa] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#fafafa]/30"
+          >
+            {feedback === "linkCopied" ? (
+              <Check size={16} strokeWidth={2} className="text-[#22c55e]" />
+            ) : (
+              <Copy size={16} strokeWidth={1.8} />
+            )}
+          </button>
+        </div>
+      </>) : <p className="mt-3 text-[12.5px] text-[#fafafa]/70">No shareable link for {roomId}</p>}
     </section>
   );
 }

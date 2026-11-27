@@ -68,7 +68,12 @@ export type AuthorityView<C extends AuthorityContract> = {
 export type AuthoritySessionState<C extends AuthorityContract> =
   /** This server does not offer the app to this connection. */
   | { kind: "unsupported" }
-  | { kind: "connecting" }
+  /**
+   * A view is on its way. `replacing` says this subscription already showed
+   * one, and a replacement in parts dropped it: the view before it may hold
+   * rows this viewer can no longer see.
+   */
+  | { kind: "connecting"; replacing?: true }
   /** The server withdrew the view. Everything held was forgotten. */
   | { kind: "revoked"; reason: AuthorityRevokeReason }
   | {
@@ -114,6 +119,19 @@ const LOST = Symbol("lost");
 
 type Listener = () => void;
 
+type ActionEnd = "forbidden" | "not-in-room" | "unsupported" | "unknown-outcome";
+type ActionLifetime = {
+  roomEpoch: string | null;
+  ended: ActionEnd | null;
+  waits: Set<Listener>;
+};
+
+const actionLifetime = (): ActionLifetime => ({
+  roomEpoch: null,
+  ended: null,
+  waits: new Set(),
+});
+
 /** Codes that mean "ask again once the view is back", not "refused". */
 const RESUBSCRIBE_CODES: ReadonlySet<AuthorityFailureCode> = new Set([
   "stale-generation",
@@ -157,6 +175,10 @@ export class AuthorityClient {
 
   get capabilities(): CapabilityState {
     return this.state;
+  }
+
+  get isAway(): boolean {
+    return this.away;
   }
 
   /** The server's clock less this one's, from its last capability answer, if any. */
@@ -272,23 +294,31 @@ export class AuthorityClient {
   }
 
   /** @internal Emits with an ack, resolving `LOST` when none arrives. */
-  request<Reply>(event: string, payload: unknown): Promise<Reply | typeof LOST> {
+  request<Reply>(
+    event: string,
+    payload: unknown,
+    deadline = Number.POSITIVE_INFINITY,
+    lifetime?: ActionLifetime,
+  ): Promise<Reply | typeof LOST> {
     return new Promise((resolve) => {
-      if (!this.socket.connected) {
+      const within = deadline - this.now();
+      if (!this.socket.connected || within <= 0 || lifetime?.ended) {
         resolve(LOST);
         return;
       }
       let settled = false;
-      const timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        resolve(LOST);
-      }, this.ackTimeoutMs);
-      this.socket.emit(event, payload, (reply: unknown) => {
+      const finish = (result: Reply | typeof LOST) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        resolve(reply as Reply);
+        lifetime?.waits.delete(lost);
+        resolve(result);
+      };
+      const lost = () => finish(LOST);
+      const timer = setTimeout(lost, Math.max(0, Math.min(this.ackTimeoutMs, within)));
+      lifetime?.waits.add(lost);
+      this.socket.emit(event, payload, (reply: unknown) => {
+        finish(this.now() < deadline ? (reply as Reply) : LOST);
       });
     });
   }
@@ -301,11 +331,6 @@ export class AuthorityClient {
   /** @internal */
   now(): number {
     return this.localNow();
-  }
-
-  /** @internal */
-  get isDisposed(): boolean {
-    return this.disposed;
   }
 
   /* ---- Socket events ----------------------------------------------------- */
@@ -365,6 +390,7 @@ export class AuthoritySession<C extends AuthorityContract> {
   private state: AuthoritySessionState<C> = { kind: "connecting" };
   private readonly listeners = new Set<Listener>();
   private readonly readyWaiters = new Set<Listener>();
+  private actionLifetime = actionLifetime();
   private readonly streams = new Map<
     string,
     { generation: number; parts: string[]; settle(result: AuthorityResult<Json>): void }
@@ -372,10 +398,17 @@ export class AuthoritySession<C extends AuthorityContract> {
   private refs = 0;
   private closed = false;
   private subscription: string | null = null;
-  private subscribedEpoch: string | null = null;
   private generation = 0;
   private seq = 0;
   private incoming: { generation: number; frames: ReplaceFrame[] } | null = null;
+  /** Whether the current subscription has shown a view yet. */
+  private viewed = false;
+  /**
+   * The subscription whose view a replacement in parts dropped. `replacing`
+   * is said only while that is still the current subscription, so a new
+   * connection or a new subscription never inherits it.
+   */
+  private replacingFor: string | null = null;
   private rows: Rows = new Map();
   private revision = 0;
   /**
@@ -424,46 +457,46 @@ export class AuthoritySession<C extends AuthorityContract> {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.endActions("unknown-outcome");
     this.clearRestart();
     this.unsubscribe();
     this.failStreams();
     this.listeners.clear();
-    for (const waiter of [...this.readyWaiters]) waiter();
   }
 
-  /**
-   * Sends an action and resolves with the server's answer. If the answer is
-   * lost, or the view is being replaced, the same operation id is sent again
-   * until it is answered or the id expires, so one press is one action however
-   * many times it is sent. A resend stays in the room the action was first
-   * sent to: if the socket is in another room by then, or the room was
-   * recreated, the action ends as `unknown-outcome`.
-   */
   async act<K extends ActionName<C>>(
     action: K,
     input: ActionInput<C, K>,
   ): Promise<AuthorityResult<ActionReceipt<C, K>>> {
+    if (this.closed) return failure("unknown-outcome");
+    if (this.client.isAway) return failure("not-in-room");
     // Stamped once the view is in, so with the server's clock as it is told.
     let operation: OperationId | null = null;
     const deadline =
       this.client.now() + AUTHORITY_LIMITS.operationMaxAgeMs - RETRY_PAUSE_MS * 4;
-    let sentToEpoch: string | null = null;
+    let mayHaveRun = false;
+    const lifetime = this.actionLifetime;
+    const timeLeft = () => deadline - this.client.now();
+    const waitWithin = (ms: number) => pause(Math.min(ms, timeLeft()), lifetime);
+    const unanswered = (code: AuthorityFailureCode) =>
+      failure(mayHaveRun ? "unknown-outcome" : code);
+    const stopped = () => {
+      if (lifetime.ended) return unanswered(lifetime.ended);
+      return timeLeft() <= 0 ? failure("unknown-outcome") : null;
+    };
 
     for (;;) {
-      if (this.closed || this.client.isDisposed) return failure("unknown-outcome");
+      const beforeReady = stopped();
+      if (beforeReady) return beforeReady;
       // Only a view that is on its way is worth waiting for.
-      if (this.state.kind === "unsupported") return failure("unsupported");
-      if (this.state.kind === "revoked") return failure("forbidden");
-      const remaining = deadline - this.client.now();
-      if (remaining <= 0) return failure("unknown-outcome");
-      if (!(await this.whenReady(remaining))) continue;
-      const epoch = this.subscribedEpoch;
+      if (this.state.kind === "unsupported") return unanswered("unsupported");
+      if (this.state.kind === "revoked") return unanswered("forbidden");
+      const ready = await this.whenReady(timeLeft(), lifetime);
+      const afterReady = stopped();
+      if (afterReady) return afterReady;
+      if (!ready) continue;
+      const epoch = lifetime.roomEpoch;
       if (this.state.kind !== "ready" || !this.subscription || !epoch) continue;
-      // A new room keeps no record of the operation and would run it afresh.
-      if (sentToEpoch !== null && epoch !== sentToEpoch) {
-        return failure("unknown-outcome");
-      }
-      sentToEpoch = epoch;
       operation ??= { issuedAtMs: Math.round(this.serverNow()), nonce: randomId() };
 
       const request: ActRequest = {
@@ -475,15 +508,38 @@ export class AuthoritySession<C extends AuthorityContract> {
         input,
       };
       const base = this.revisionBase;
+      const hadUnansweredAttempt: boolean = mayHaveRun;
+      mayHaveRun = true;
       const reply = await this.client.request<AuthorityResult<Json>>(
         AUTHORITY_EVENTS.act,
         request,
+        deadline,
+        lifetime,
       );
+      const retryAfterResubscribe =
+        reply !== LOST && !reply.ok && RESUBSCRIBE_CODES.has(reply.code);
+      const rateLimited = reply !== LOST && !reply.ok && reply.code === "rate-limited";
+      if (retryAfterResubscribe || rateLimited) mayHaveRun = hadUnansweredAttempt;
+      if (reply !== LOST && !retryAfterResubscribe && !(rateLimited && mayHaveRun)) {
+        const answer =
+          reply.ok && reply.revision !== undefined
+            ? { ...reply, revision: base + reply.revision }
+            : reply;
+        return answer as AuthorityResult<ActionReceipt<C, K>>;
+      }
+      const afterReply = stopped();
+      if (afterReply) return afterReply;
       if (reply === LOST) {
-        await pause(RETRY_PAUSE_MS);
+        await waitWithin(RETRY_PAUSE_MS);
         continue;
       }
-      if (!reply.ok && RESUBSCRIBE_CODES.has(reply.code)) {
+      if (rateLimited) {
+        const wait = Math.max(RETRY_PAUSE_MS, reply.retryAfterMs ?? 0);
+        if (wait >= timeLeft()) return failure("unknown-outcome");
+        await waitWithin(wait);
+        continue;
+      }
+      if (retryAfterResubscribe) {
         if (reply.code === "stale-epoch" || reply.code === "not-in-room") {
           this.client.refresh();
         }
@@ -491,14 +547,8 @@ export class AuthoritySession<C extends AuthorityContract> {
         // it has, send again at once under the new generation.
         const replaced =
           this.state.kind === "ready" && this.generation !== request.generation;
-        if (!replaced) await pause(RETRY_PAUSE_MS);
-        continue;
+        if (!replaced) await waitWithin(RETRY_PAUSE_MS);
       }
-      const answer =
-        reply.ok && reply.revision !== undefined
-          ? { ...reply, revision: base + reply.revision }
-          : reply;
-      return answer as AuthorityResult<ActionReceipt<C, K>>;
     }
   }
 
@@ -507,7 +557,7 @@ export class AuthoritySession<C extends AuthorityContract> {
     query: K,
     input: QueryInput<C, K>,
   ): Promise<AuthorityResult<QueryOutput<C, K>>> {
-    const epoch = this.subscribedEpoch;
+    const epoch = this.actionLifetime.roomEpoch;
     if (this.state.kind !== "ready" || !this.subscription || !epoch) {
       return failure("not-subscribed");
     }
@@ -550,6 +600,7 @@ export class AuthoritySession<C extends AuthorityContract> {
     if (this.closed) return;
     const capabilities = this.client.capabilities;
     if (capabilities.kind === "unknown") {
+      if (this.client.isAway) this.endActions("not-in-room");
       this.clearRestart();
       this.refusals = 0;
       this.reset({ kind: "connecting" });
@@ -563,7 +614,7 @@ export class AuthoritySession<C extends AuthorityContract> {
       return;
     }
     const epoch = capabilities.capability.roomEpoch;
-    if (this.subscription && this.subscribedEpoch === epoch) return;
+    if (this.subscription && this.actionLifetime.roomEpoch === epoch) return;
     // Refused a moment ago in this same room: the wait already set asks again.
     if (this.restartTimer && this.restartEpoch === epoch) return;
     this.start(entry, epoch);
@@ -605,7 +656,8 @@ export class AuthoritySession<C extends AuthorityContract> {
           this.seq = 0;
           this.rows = new Map();
           this.failStreams();
-          this.setState({ kind: "connecting" });
+          this.replacingFor = this.viewed ? this.subscription : null;
+          this.setState(this.connecting());
         }
       }
       if (frame.part !== this.incoming.frames.length) {
@@ -651,11 +703,15 @@ export class AuthoritySession<C extends AuthorityContract> {
   /* ---- Internals --------------------------------------------------------- */
 
   private start(entry: AuthorityAppEntry, epoch: string): void {
+    const previousEpoch = this.actionLifetime.roomEpoch;
+    if (previousEpoch !== null && previousEpoch !== epoch) this.endActions("not-in-room");
+    this.actionLifetime.roomEpoch = epoch;
     this.clearRestart();
     this.unsubscribe();
     this.failStreams();
     this.subscription = randomId();
-    this.subscribedEpoch = epoch;
+    this.viewed = false;
+    this.replacingFor = null;
     this.generation = 0;
     this.seq = 0;
     this.incoming = null;
@@ -756,6 +812,8 @@ export class AuthoritySession<C extends AuthorityContract> {
     this.generation = frames[0].generation;
     this.seq = 0;
     this.incoming = null;
+    this.viewed = true;
+    this.replacingFor = null;
     this.rows = rows;
     if (frames[0].subscription !== this.revisionOf) {
       this.revisionBase = this.revision;
@@ -822,7 +880,8 @@ export class AuthoritySession<C extends AuthorityContract> {
     options?: { keepSubscription?: boolean },
   ): void {
     if (!options?.keepSubscription) this.unsubscribe();
-    this.subscribedEpoch = null;
+    this.viewed = false;
+    this.replacingFor = null;
     this.generation = 0;
     this.seq = 0;
     this.incoming = null;
@@ -831,26 +890,50 @@ export class AuthoritySession<C extends AuthorityContract> {
     this.setState(state);
   }
 
+  /** Connecting, saying whether it replaces a view this same subscription showed. */
+  private connecting(): AuthoritySessionState<C> {
+    return this.replacingFor !== null && this.replacingFor === this.subscription
+      ? { kind: "connecting", replacing: true }
+      : { kind: "connecting" };
+  }
+
   private setState(next: AuthoritySessionState<C>): void {
+    const replacing = (state: AuthoritySessionState<C>): boolean =>
+      state.kind === "connecting" && state.replacing === true;
     const unchanged =
       this.state.kind === next.kind &&
-      (next.kind === "connecting" || next.kind === "unsupported");
+      (next.kind === "unsupported" ||
+        (next.kind === "connecting" && replacing(this.state) === replacing(next)));
     if (unchanged) return;
     this.state = next;
+    if (next.kind === "unsupported") this.endActions("unsupported");
+    if (next.kind === "revoked") {
+      this.endActions(next.reason === "forbidden" ? "forbidden" : "unknown-outcome");
+    }
     for (const listener of [...this.listeners]) listener();
   }
 
+  private endActions(reason: ActionEnd): void {
+    const lifetime = this.actionLifetime;
+    this.actionLifetime = actionLifetime();
+    lifetime.ended = reason;
+    for (const done of lifetime.waits) done();
+  }
+
   /** Resolves true once the view is ready, false when `timeoutMs` passes. */
-  private whenReady(timeoutMs: number): Promise<boolean> {
+  private whenReady(timeoutMs: number, lifetime: ActionLifetime): Promise<boolean> {
+    if (timeoutMs <= 0 || lifetime.ended) return Promise.resolve(false);
     if (this.state.kind === "ready") return Promise.resolve(true);
     return new Promise((resolve) => {
       const done = (): void => {
         clearTimeout(timer);
+        lifetime.waits.delete(done);
         this.readyWaiters.delete(done);
-        resolve(this.state.kind === "ready" && !this.closed);
+        resolve(this.state.kind === "ready" && !lifetime.ended);
       };
       const timer = setTimeout(done, Math.min(timeoutMs, 1_000));
       this.readyWaiters.add(done);
+      lifetime.waits.add(done);
     });
   }
 
@@ -888,5 +971,15 @@ const isFrame = (value: unknown): value is AuthorityFrame => {
   );
 };
 
-const pause = (ms: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, ms));
+const pause = (ms: number, lifetime: ActionLifetime): Promise<void> => {
+  if (ms <= 0 || lifetime.ended) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      lifetime.waits.delete(done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    lifetime.waits.add(done);
+  });
+};

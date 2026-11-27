@@ -2,9 +2,10 @@ import { resolveViewerUrl } from "../../lib/novnc-viewer";
 import { EMOJI_REACTIONS, type ReactionEmoji } from "./constants";
 import { isMediaCaptureTimeoutError } from "./media-capture-timeout";
 import { linkOriginIsKnown } from "../../lib/meeting-origin";
-import { canonicalizeSfuClientId } from "../../lib/sfu-client-id";
+import { canonicalizeSfuClientId, resolveMeetingClientId } from "../../lib/sfu-client-id";
 import type {
   MeetError,
+  MeetFailureReason,
   MeetMediaDevice,
   MeetMediaDeviceCause,
   ReactionOption,
@@ -149,6 +150,17 @@ export function extractRoomCode(input: string): string {
   return sanitizeRoomCode(trimmed);
 }
 
+/** An error that knows why it happened, so reports need not read its message. */
+export class MeetFailure extends Error {
+  constructor(
+    message: string,
+    readonly reason: MeetFailureReason,
+  ) {
+    super(message);
+    this.name = "MeetFailure";
+  }
+}
+
 export type CodeFieldPaste =
   | { kind: "insert"; text: string }
   | { kind: "replace"; code: string; clientId: string | null };
@@ -163,6 +175,7 @@ export const APP_ROUTE_SEGMENTS = [
   "api",
   "book",
   "delete-account",
+  "ingest",
   "privacy",
   "schedule",
   "sfu-admin",
@@ -225,7 +238,7 @@ export function resolveCodeField(
   const paste = parseCodeFieldPaste(value, conclaveOrigins);
   const link = paste?.kind === "replace" ? paste : null;
   const candidate = link ? link.code : value.trim();
-  const clientId = link?.clientId ?? null;
+  const clientId = link ? resolveMeetingClientId(link.clientId) : null;
   if (!isRoomCodeShaped(candidate)) return { code: "", clientId: null, tooLong: false };
   return candidate.length > ROOM_CODE_MAX_LENGTH
     ? { code: "", clientId, tooLong: true }
@@ -637,6 +650,20 @@ export const isMediaDeviceBlocked = (
   device: MediaDevice,
 ): boolean => error?.causes?.[device]?.kind === "blocked";
 
+export const isCameraAccessBlocked = ({
+  hasLiveCamera,
+  permissionState,
+  mediaError,
+}: {
+  hasLiveCamera: boolean;
+  permissionState: PermissionState | "unknown";
+  mediaError: MeetError | null | undefined;
+}): boolean =>
+  !hasLiveCamera &&
+  (permissionState === "unknown"
+    ? isMediaDeviceBlocked(mediaError, "camera")
+    : permissionState !== "granted");
+
 export function mediaErrorAdvice(error: MeetError): string | null {
   const camera = error.causes?.camera;
   const microphone = error.causes?.microphone;
@@ -653,6 +680,16 @@ export function mediaErrorAdvice(error: MeetError): string | null {
 export function createMeetError(
   error: unknown,
   defaultCode: MeetError["code"] = "UNKNOWN",
+  device?: MeetMediaDevice,
+): MeetError {
+  const reason = error instanceof MeetFailure ? error.reason : undefined;
+  const meetError = describeMeetError(error, defaultCode, device);
+  return reason ? { ...meetError, reason } : meetError;
+}
+
+function describeMeetError(
+  error: unknown,
+  defaultCode: MeetError["code"],
   device?: MeetMediaDevice,
 ): MeetError {
   if (device) {

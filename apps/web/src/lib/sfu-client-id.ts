@@ -47,3 +47,6 @@ export const findScheduledMeetingForLink = async <
   }
   return null;
 };
+export const resolveMeetingClientId = (
+  clientId: string | null | undefined,
+): string => canonicalizeSfuClientId(clientId) ?? resolveBrowserSfuClientId();

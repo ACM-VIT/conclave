@@ -125,6 +125,7 @@ import {
   type WebcamTopologyReplacementTarget,
 } from "../lib/webcam-topology-transition";
 import type { ConnectionQualityStats } from "./useConnectionQuality";
+import { logCallError } from "../lib/call-error-capture";
 
 interface UseMeetMediaOptions {
   isObserverMode?: boolean;
@@ -774,10 +775,12 @@ export function useMeetMedia({
     }
   }, [flushQueuedCameraRecovery, isMediaRecoveryBlocked, queueBlockedProducerRecovery]);
   const mediaOperationsDisposedRef = useRef(false);
+  const stopPendingAudioInputSwitchRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     mediaOperationsDisposedRef.current = false;
     return () => {
       mediaOperationsDisposedRef.current = true;
+      stopPendingAudioInputSwitchRef.current?.();
     };
   }, []);
   const requestCameraProducerRecovery = useCallback(() => {
@@ -2210,8 +2213,9 @@ export function useMeetMedia({
       setShowPermissionHint(true);
     }, 450);
 
+    const videoClaim = claimDevice("video");
     try {
-      const generation = captureGeneration();
+      const generation = videoClaim.generation;
       const wantsAudio = options.audio ?? true;
       const wantsVideo = options.video ?? cameraChosen();
       const audioRequired = options.audioRequired ?? microphoneChosen();
@@ -2286,8 +2290,15 @@ export function useMeetMedia({
         return null;
       }
       const nextAudioTrack = settled.audio;
-      const cameraWanted = cameraChosen();
-      if (!cameraWanted && settled.video && settled.video !== reusableVideoTrack) {
+      const currentVideoIntent = deviceIntents.get().video;
+      const cameraRequestIsCurrent = currentVideoIntent.request === videoClaim.request;
+      const cameraWanted = cameraRequestIsCurrent && currentVideoIntent.chosen;
+      if (
+        !cameraWanted &&
+        settled.video &&
+        settled.video !== reusableVideoTrack &&
+        !localStreamRef.current?.getVideoTracks().includes(settled.video)
+      ) {
         stopLocalTrack(settled.video);
       }
       const nextVideoTrack = cameraWanted ? settled.video : null;
@@ -2298,10 +2309,10 @@ export function useMeetMedia({
         (track): track is MediaStreamTrack => Boolean(track),
       );
 
-      setMediaState({
+      setMediaState((current) => ({
         hasAudioPermission: hasAudio,
-        hasVideoPermission: hasVideo,
-      });
+        hasVideoPermission: cameraRequestIsCurrent ? hasVideo : current.hasVideoPermission,
+      }));
 
       const requiredFailures: MediaDeviceFailures = {};
       if (audioRequired && !hasAudio) {
@@ -2340,9 +2351,9 @@ export function useMeetMedia({
 
       return liveTracks.length > 0 ? new MediaStream(liveTracks) : null;
     } catch (err) {
-      console.error("[Meets] Local media setup failed:", err);
+      logCallError("[Meets] Local media setup failed", err);
       setMeetError((current) => current ?? createMeetError(err, "MEDIA_ERROR"));
-      setIsCameraOff(true);
+      if (claimHolds(videoClaim)) setIsCameraOff(true);
       setIsMuted(true);
       return null;
     } finally {
@@ -2356,6 +2367,9 @@ export function useMeetMedia({
     selectedAudioInputDeviceId,
     microphoneChosen,
     cameraChosen,
+    claimDevice,
+    claimHolds,
+    deviceIntents,
     attachLocalAudioTrackHandlers,
     attachLocalVideoTrackHandlers,
     buildAudioConstraints,
@@ -2375,11 +2389,18 @@ export function useMeetMedia({
     async (deviceId: string) => {
       setSelectedAudioInputDeviceId(deviceId);
 
+      if (connectionState !== "joined") return;
       const generation = captureGeneration();
-      if (connectionState === "joined") await runMicTrackOperation(async () => {
-        let acquiredAudioTracks: MediaStreamTrack[] = [];
-        let preparedAudioTrack: MediaStreamTrack | null = null;
-        let committedNewAudioTrack: MediaStreamTrack | null = null;
+      const switchHolds = () => generation === captureGeneration() && !mediaOperationsDisposedRef.current;
+      await runMicTrackOperation(async () => {
+        if (!switchHolds()) return;
+
+        const stagedTracks = new Set<MediaStreamTrack>();
+        const stopPendingTracks = () => {
+          for (const track of stagedTracks) stopLocalTrack(track);
+          stagedTracks.clear();
+        };
+        stopPendingAudioInputSwitchRef.current = stopPendingTracks;
         try {
           const newStream = await getUserMediaWithTimeout(
             { audio: buildAudioConstraints(deviceId) },
@@ -2390,50 +2411,45 @@ export function useMeetMedia({
             },
           );
 
-          acquiredAudioTracks = newStream.getAudioTracks();
-          const rawAudioTrack = newStream.getAudioTracks()[0];
-          if (rawAudioTrack) {
-            const newAudioTrack = await prepareAudioPublishTrack(rawAudioTrack, generation);
-            preparedAudioTrack = newAudioTrack;
-            if (generation !== captureGeneration()) {
-              stopTracksExcept([...acquiredAudioTracks, newAudioTrack], []);
-              return;
-            }
-            setNoiseCancellationTrackEnabled(newAudioTrack, microphoneChosen());
-            const previousStream = localStreamRef.current;
-            const previousAudioTracks = previousStream?.getAudioTracks() ?? [];
+          const audioTracks = newStream.getAudioTracks();
+          for (const track of audioTracks) stagedTracks.add(track);
+          const rawAudioTrack = audioTracks[0];
+          if (!rawAudioTrack || !switchHolds()) return;
 
-            const currentAudioProducer = audioProducerRef.current;
-            if (currentAudioProducer?.closed) {
-              closeLocalAudioProducerForReplacement(currentAudioProducer);
-            }
-            const audioProducer = audioProducerRef.current;
-            if (audioProducer) {
-              await audioProducer.replaceTrack({
-                track: newAudioTrack,
-              });
-              if (generation !== captureGeneration()) {
-                stopTracksExcept([...acquiredAudioTracks, newAudioTrack], []);
-                return;
-              }
-              setNoiseCancellationTrackEnabled(newAudioTrack, microphoneChosen());
-            } else {
-              requestAudioProducerRecovery();
-            }
+          const newAudioTrack = await prepareAudioPublishTrack(rawAudioTrack, generation);
+          stagedTracks.add(newAudioTrack);
+          if (!switchHolds()) return;
 
-            commitAudioTrackToLocalStream(newAudioTrack, localStreamRef.current ?? previousStream, {
-              stopReplacedTracks: false,
-            });
-            committedNewAudioTrack = newAudioTrack;
-            stopTracksExcept(previousAudioTracks, [newAudioTrack]);
+          setNoiseCancellationTrackEnabled(newAudioTrack, microphoneChosen());
+          const previousStream = localStreamRef.current;
+          const previousAudioTracks = previousStream?.getAudioTracks() ?? [];
+
+          const currentAudioProducer = audioProducerRef.current;
+          if (currentAudioProducer?.closed) {
+            closeLocalAudioProducerForReplacement(currentAudioProducer);
           }
+          const audioProducer = audioProducerRef.current;
+          if (audioProducer) {
+            await audioProducer.replaceTrack({ track: newAudioTrack });
+            if (!switchHolds()) return;
+            setNoiseCancellationTrackEnabled(newAudioTrack, microphoneChosen());
+          } else {
+            requestAudioProducerRecovery();
+          }
+
+          commitAudioTrackToLocalStream(newAudioTrack, localStreamRef.current ?? previousStream, {
+            stopReplacedTracks: false,
+          });
+          stagedTracks.delete(rawAudioTrack);
+          stagedTracks.delete(newAudioTrack);
+          stopTracksExcept(previousAudioTracks, [newAudioTrack]);
         } catch (err) {
-          stopTracksExcept(
-            [...acquiredAudioTracks, ...(preparedAudioTrack ? [preparedAudioTrack] : [])],
-            [committedNewAudioTrack],
-          );
-          if (isCaptureReleased(err)) return;
-          console.error("[Meets] Failed to switch audio input device:", err);
+          if (switchHolds() && !isCaptureReleased(err)) {
+            logCallError("[Meets] Failed to switch audio input device", err);
+          }
+        } finally {
+          stopPendingAudioInputSwitchRef.current = null;
+          stopPendingTracks();
         }
       });
     },
@@ -2448,6 +2464,7 @@ export function useMeetMedia({
       commitAudioTrackToLocalStream,
       buildAudioConstraints,
       closeLocalAudioProducerForReplacement,
+      stopLocalTrack,
       stopTracksExcept,
       requestAudioProducerRecovery,
     ]
@@ -2549,7 +2566,7 @@ export function useMeetMedia({
           stopTracksExcept(acquiredVideoTracks, [committedNewVideoTrack]);
           if (claimHolds(claim)) settleClaim(claim, true);
           if (isCaptureReleased(err)) return;
-          console.error("[Meets] Failed to switch video input device:", err);
+          logCallError("[Meets] Failed to switch video input device", err);
         }
       });
     },
@@ -2586,7 +2603,7 @@ export function useMeetMedia({
             try {
               await applyAudioOutputDevice(element, deviceId, () => element.isConnected);
             } catch (err) {
-              console.error("[Meets] Failed to set audio output device:", err);
+              logCallError("[Meets] Failed to set audio output device", err);
             }
           }),
       );
@@ -3068,7 +3085,7 @@ export function useMeetMedia({
         if (!claimHolds(claim)) {
           return;
         }
-        console.error("[Meets] Failed to update video quality:", err);
+        logCallError("[Meets] Failed to update video quality", err);
         if (rollbackStream && replacementTrack && !swapCommitted) {
           const restoredStream = new MediaStream([
             ...(localStreamRef.current?.getTracks().filter((track) => track.kind !== "video") ?? []),
@@ -3710,7 +3727,7 @@ export function useMeetMedia({
           discardCreatedTrack();
           return;
         }
-        console.error("[Meets] Failed to restart audio:", err);
+        logCallError("[Meets] Failed to restart audio", err);
         const meetErr = createMeetError(err, "MEDIA_ERROR", "microphone");
         const liveAudioTrackAfterFailure = getFirstLiveTrack(
           localStreamRef.current?.getAudioTracks() ?? [],
@@ -4032,7 +4049,7 @@ export function useMeetMedia({
       } catch (err) {
         removeCreatedTrackFromLocalStream();
         if (isCaptureReleased(err)) return;
-        console.error("[Meets] Audio producer recovery failed:", err);
+        logCallError("[Meets] Audio producer recovery failed", err);
         if (recoveryHolds()) {
           if (microphoneUnmuteDisabledRef.current) {
             setIsMuted(true);
@@ -4244,13 +4261,18 @@ export function useMeetMedia({
     const turningOn = !deviceIntents.get().video.chosen;
     if (turningOn && cameraPublishingDisabledRef.current) return;
 
-    const closeCameraProducer = (target: Producer) => {
+    const closeCameraProducer = (target: Producer, stale = false) => {
       socketRef.current?.emit(
         "closeProducer",
         { producerId: target.id },
         (response: { success: boolean } | { error: string }) => {
           if ("error" in response) {
-            console.error("[Meets] Failed to close video producer:", response);
+            logCallError(
+              stale
+                ? "[Meets] Failed to close stale video producer"
+                : "[Meets] Failed to close video producer",
+              response,
+            );
           }
         }
       );
@@ -4329,7 +4351,7 @@ export function useMeetMedia({
             setMediaError((current) => clearMediaDeviceError(current, "camera"));
             return;
           }
-          closeCameraProducer(producer);
+          closeCameraProducer(producer, true);
         }
 
         if (
@@ -4454,7 +4476,7 @@ export function useMeetMedia({
           discardCreatedTrack();
           return;
         }
-        console.error("[Meets] Failed to restart video:", err);
+        logCallError("[Meets] Failed to restart video", err);
         refuse();
         setMediaError((current) =>
           mergeMediaDeviceError(current, createMeetError(err, "MEDIA_ERROR", "camera")),
@@ -5725,7 +5747,7 @@ export function useMeetMedia({
           removeCreatedTrackFromLocalStream();
           return;
         }
-        console.error("[Meets] Camera producer recovery failed:", err);
+        logCallError("[Meets] Camera producer recovery failed", err);
         if (cameraPublishingDisabledRef.current) {
           disableBlockedCameraIntent();
           return;
@@ -6469,7 +6491,7 @@ export function useMeetMedia({
       if ((err as Error).name === "NotAllowedError") {
         console.info("[Meets] Screen share cancelled by user");
       } else {
-        console.error("[Meets] Error starting screen share:", err);
+        logCallError("[Meets] Error starting screen share", err);
         setMeetError(createMeetError(err, "MEDIA_ERROR"));
       }
     } finally {

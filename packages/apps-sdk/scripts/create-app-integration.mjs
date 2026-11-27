@@ -244,8 +244,10 @@ export const ${camel}Contract = defineContract({
       path: path.join(appDir, "server", "index.ts"),
       content: `import { ${camel}Contract } from "@conclave/apps-sdk/${appId}/core";
 import {
+  actionOrderTable,
   defineAuthority,
   key,
+  nextActionOrder,
   reject,
   table,
   type Subject,
@@ -258,13 +260,12 @@ import {
 type Entry = { id: string; subject: Subject; name: string; joinedAt: number; order: number };
 
 const MAX_ENTRIES = 500;
-const ORDER = key("last");
 
 export const ${camel}Authority = defineAuthority({
   contract: ${camel}Contract,
   tables: {
     entries: table<Entry>({ maxRows: MAX_ENTRIES }),
-    order: table<{ last: number }>({ maxRows: 1 }),
+    order: actionOrderTable(),
   },
   timers: {},
   canView: ({ role }) => role === "moderator" || role === "member",
@@ -274,8 +275,7 @@ export const ${camel}Authority = defineAuthority({
       rate: { burst: 5, perSecond: 1 },
       run(ctx, tx) {
         if (tx.count("entries") >= MAX_ENTRIES) reject("full");
-        const order = (tx.get("order", ORDER)?.last ?? 0) + 1;
-        tx.put("order", ORDER, { last: order });
+        const order = nextActionOrder(tx);
         // One entry per person: the key is the person. A second tab, a
         // reconnect or a retry lands on the same key and changes nothing.
         tx.insertIfAbsent("entries", key(ctx.subject), {

@@ -46,7 +46,7 @@ export type WebinarLinkTarget = {
   clientId: string;
 };
 
-const createDefaultWebinarRoomConfig = (): WebinarRoomConfig => ({
+export const createDefaultWebinarRoomConfig = (): WebinarRoomConfig => ({
   enabled: false,
   publicAccess: false,
   maxAttendees: DEFAULT_WEBINAR_MAX_ATTENDEES,

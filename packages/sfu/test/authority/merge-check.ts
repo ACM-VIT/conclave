@@ -1,8 +1,7 @@
 import type { Json } from "@conclave/apps-sdk/authority";
-import type { AuthorityModule, Subject, TimerContext } from "@conclave/apps-sdk/authority/server";
+import { ACTION_ORDER_TABLE, type AuthorityModule, type Subject, type TimerContext } from "@conclave/apps-sdk/authority/server";
 import { AuthorityInstance, type Actor } from "../../server/apps/authority/instance.js";
 import { DEFAULT_AUTHORITY_LIMITS } from "../../server/apps/authority/limits.js";
-import { ACTION_ORDER_TABLE } from "./fixtures/action-order.js";
 
 export type MergeStep =
   | {
@@ -166,20 +165,22 @@ const play = (
         .sort(([a], [b]) => a.localeCompare(b)),
     ]),
   );
-  return { tables: byRank(tables), mergeOps, subjectRows, crowd: crowd.size, rowsBefore };
+  const removedRows = [...rowsBefore].reduce((total, [table, before]) => total + Math.max(0, before - instance.store.rows(table).size), 0);
+  return { tables: byRank(tables), kept: [...receipts.keys()].sort(), mergeOps, subjectRows, crowd: crowd.size, rowsBefore, removedRows };
 };
 
 export const mergeAgainstOnePerson = (
   module: AuthorityModule,
   steps: readonly MergeStep[],
   options: { activityFields?: readonly string[] } = {},
-) => ({
-  merged: play(module, steps, true, options.activityFields ?? []).tables,
-  onePerson: play(module, steps, false, options.activityFields ?? []).tables,
-});
+) => {
+  const merged = play(module, steps, true, options.activityFields ?? []);
+  const onePerson = play(module, steps, false, options.activityFields ?? []);
+  return { merged: merged.tables, onePerson: onePerson.tables, keptMerged: merged.kept, keptOnePerson: onePerson.kept };
+};
 
 export const mergeCost = (module: AuthorityModule, steps: readonly MergeStep[], walked: readonly string[] = []) => {
-  const { mergeOps, subjectRows, crowd, rowsBefore } = play(module, steps, true, []);
+  const { mergeOps, subjectRows, crowd, rowsBefore, removedRows } = play(module, steps, true, []);
   const walkedRows = walked.reduce((total, table) => total + (rowsBefore.get(table) ?? 0), 0);
-  return { ops: mergeOps, subjectRows, crowd, walkedRows };
+  return { ops: mergeOps, subjectRows, crowd, walkedRows, removedRows };
 };

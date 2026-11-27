@@ -31,8 +31,18 @@ export class World {
   deviceListeners = new Set<() => void>();
   socketEvents: Array<{ event: string; payload: unknown }> = [];
   framesSent = new Map<string, number>();
-  sfu = new Map<string, { kind: Kind; type: string; paused: boolean; closed: boolean }>();
+  sfuJoined = false;
+  sfuProducerTransportId: string | null = null;
+  sfu = new Map<string, { transportId: string; kind: Kind; type: string; paused: boolean; closed: boolean }>();
   private count = 0;
+
+  closeSfuProducerTransport() {
+    const transportId = this.sfuProducerTransportId;
+    this.sfuProducerTransportId = null;
+    this.sfu.forEach((producer) => {
+      if (producer.transportId === transportId) producer.closed = true;
+    });
+  }
 
   refuse(name: string) {
     const left = this.refusals.get(name) ?? 0;
@@ -499,40 +509,46 @@ export const makeDeviceClass = (world: World) =>
       return true;
     }
 
-    createSendTransport() {
-      return new FakeTransport(world, world.nextId("send"));
+    createSendTransport({ id }: { id: string }) {
+      return new FakeTransport(world, id);
     }
 
-    createRecvTransport() {
-      return new FakeTransport(world, world.nextId("recv"));
+    createRecvTransport({ id }: { id: string }) {
+      return new FakeTransport(world, id);
     }
   };
 
 const SFU_ACKS: Record<string, (payload: Record<string, unknown>, world: World) => unknown> = {
-  joinRoom: () => ({
-    rtpCapabilities: RTP_CAPABILITIES,
-    existingProducers: [],
-    hostUserId: "host#session",
-    hostUserIds: ["host#session"],
-    roomId: "test-room",
-  }),
+  joinRoom: (_payload, world) => {
+    world.sfuJoined = true;
+    return {
+      rtpCapabilities: RTP_CAPABILITIES,
+      existingProducers: [],
+      hostUserId: "host#session",
+      hostUserIds: ["host#session"],
+      roomId: "test-room",
+    };
+  },
   updateMediaCapabilities: () => ({ error: "unsupported in this rig" }),
-  createProducerTransport: (_payload, world) => ({
-    id: world.nextId("sfu-send"),
-    iceParameters: {},
-    iceCandidates: [],
-    dtlsParameters: {},
-  }),
-  createConsumerTransport: (_payload, world) => ({
-    id: world.nextId("sfu-recv"),
-    iceParameters: {},
-    iceCandidates: [],
-    dtlsParameters: {},
-  }),
+  createProducerTransport: (_payload, world) => {
+    if (!world.sfuJoined) return { error: "Not in a room" };
+    world.closeSfuProducerTransport();
+    const id = world.nextId("sfu-send");
+    world.sfuProducerTransportId = id;
+    return { id, iceParameters: {}, iceCandidates: [], dtlsParameters: {} };
+  },
+  createConsumerTransport: (_payload, world) => {
+    if (!world.sfuJoined) return { error: "Not in a room" };
+    return { id: world.nextId("sfu-recv"), iceParameters: {}, iceCandidates: [], dtlsParameters: {} };
+  },
   produce: (payload, world) => {
+    if (world.sfuProducerTransportId === null) return { error: "Not ready to produce" };
+    const transportId = String(payload.transportId);
+    if (transportId !== world.sfuProducerTransportId) return { error: "Stale producer transport" };
     const producerId = world.nextId("producer");
     const appData = (payload.appData ?? {}) as { type?: string; paused?: boolean };
     world.sfu.set(producerId, {
+      transportId,
       kind: payload.kind as Kind,
       type: appData.type ?? "webcam",
       paused: appData.paused === true,
@@ -611,9 +627,8 @@ const createSocket = (world: World) => {
     })),
     disconnect: vi.fn(() => {
       socket.connected = false;
-      world.sfu.forEach((producer) => {
-        producer.closed = true;
-      });
+      world.sfuJoined = false;
+      world.closeSfuProducerTransport();
       dispatch("disconnect", "io client disconnect");
       return socket;
     }),

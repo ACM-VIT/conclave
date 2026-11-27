@@ -8,6 +8,7 @@ import type {
   RtpParameters,
   Transport,
 } from "mediasoup-client/types";
+import type { JoinRoomAnswerFields } from "./join-room-answer";
 
 export type ConnectionState =
   | "disconnected"
@@ -382,32 +383,10 @@ export interface WebcamCodecPolicy {
   epoch: number;
 }
 
-export interface JoinRoomResponse {
-  roomId?: string;
+export interface JoinRoomResponse extends JoinRoomAnswerFields {
   rtpCapabilities: RtpCapabilities;
   existingProducers: ProducerInfo[];
-  activeSpeakerId?: string | null;
   displayNameSnapshot?: DisplayNameSnapshotEntry[];
-  status?: "waiting" | "joined";
-  hostUserId?: string | null;
-  hostUserIds?: string[];
-  isLocked?: boolean;
-  isTtsDisabled?: boolean;
-  isChatLocked?: boolean;
-  isDmEnabled?: boolean;
-  areImageAttachmentsEnabled?: boolean;
-  isReactionsDisabled?: boolean;
-  isParticipantUnmuteAllowed?: boolean;
-  isParticipantVideoAllowed?: boolean;
-  meetingRequiresInviteCode?: boolean;
-  webinarRole?: "attendee" | "participant" | "host";
-  isWebinarEnabled?: boolean;
-  webinarLocked?: boolean;
-  webinarRequiresInviteCode?: boolean;
-  webinarAttendeeCount?: number;
-  webinarMaxAttendees?: number;
-  webinarQaEnabled?: boolean;
-  webinarSpeakerUserId?: string | null;
   webcamCodecPolicy?: WebcamCodecPolicy;
 }
 
@@ -618,6 +597,20 @@ export interface MediaState {
   videoDeviceId?: string;
 }
 
+/** Why a join or reconnect failed, as a category rather than text. */
+export type MeetFailureReason =
+  | "rejected"
+  | "invite_code"
+  | "room_not_found"
+  | "room_unavailable"
+  | "auth"
+  | "timeout"
+  | "permission_denied"
+  | "media_error"
+  | "transport_error"
+  | "connection_failed"
+  | "unknown";
+
 export type MeetMediaDevice = "camera" | "microphone" | "both";
 
 export interface MeetError {
@@ -626,10 +619,14 @@ export interface MeetError {
     | "CONNECTION_FAILED"
     | "MEDIA_ERROR"
     | "TRANSPORT_ERROR"
+    /** Signaling works but this network lets no audio or video through. */
+    | "NETWORK_BLOCKED"
     | "JOIN_REJECTED"
     | "UNKNOWN";
   message: string;
   recoverable: boolean;
+  /** Set where the cause is known, so reports need not read `message`. */
+  reason?: MeetFailureReason;
   device?: MeetMediaDevice;
   causes?: Partial<Record<"camera" | "microphone", MeetMediaDeviceCause>>;
 }

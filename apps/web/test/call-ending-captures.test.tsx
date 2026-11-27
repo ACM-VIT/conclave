@@ -10,9 +10,15 @@ import { useMeetMedia } from "../src/app/hooks/useMeetMedia";
 import { useMeetRefs } from "../src/app/hooks/useMeetRefs";
 import { useMeetSocket } from "../src/app/hooks/useMeetSocket";
 import { useMicTest } from "../src/app/hooks/useMicTest";
-import { publishIntent } from "../src/app/lib/device-intent";
+import { publishIntent, setDeviceOff } from "../src/app/lib/device-intent";
+import { createNoiseCancellationPipeline } from "../src/app/lib/noise-cancellation";
 import { getUserMediaWithTimeout } from "../src/app/lib/media-capture-timeout";
 import { DEFAULT_MEDIA_QUALITY_SETTINGS } from "../src/app/lib/media-quality-settings";
+
+vi.mock(import("../src/app/lib/noise-cancellation"), async (importOriginal) => {
+  const original = await importOriginal();
+  return { ...original, createNoiseCancellationPipeline: vi.fn(original.createNoiseCancellationPipeline) };
+});
 
 type SocketApi = ReturnType<typeof useMeetSocket>;
 type Refs = ReturnType<typeof useMeetRefs>;
@@ -20,6 +26,7 @@ type Rig = {
   api: SocketApi;
   refs: Refs;
   preview: LocalCameraPreviewController;
+  mediaRefs: Refs;
   media: ReturnType<typeof useMeetMedia>;
 };
 
@@ -143,7 +150,7 @@ const fakeDevices = {
 const liveTracks = () =>
   created.filter((track) => track.readyState === "live").map((track) => track.id);
 
-const createRig = async ({ connect = true } = {}) => {
+const createRig = async ({ connect = true, noiseCancellation = false } = {}) => {
   const handlers = new Map<string, (...args: never[]) => void>();
   const states: string[] = [];
   const socket = {
@@ -167,9 +174,10 @@ const createRig = async ({ connect = true } = {}) => {
   const io = vi.fn(() => socket);
   let rig!: Rig;
   let inCall = true;
+  let micTest: ReturnType<typeof useMicTest> | undefined;
 
   function CallSettingsPanel() {
-    useMicTest({ active: true, noiseCancellation: false });
+    micTest = useMicTest({ active: true, noiseCancellation: false });
     return null;
   }
 
@@ -221,6 +229,8 @@ const createRig = async ({ connect = true } = {}) => {
         isMuted: false,
         isCameraOff: false,
         localStream: null,
+        isNoiseCancellationEnabled: noiseCancellation,
+        setIsCameraOff: (off: boolean) => setDeviceOff(mediaRefs.deviceIntents, "video", off),
         mediaQualitySettings: DEFAULT_MEDIA_QUALITY_SETTINGS,
         mediaQualitySettingsRef: { current: DEFAULT_MEDIA_QUALITY_SETTINGS },
       },
@@ -234,7 +244,7 @@ const createRig = async ({ connect = true } = {}) => {
       },
     ) as unknown as Parameters<typeof useMeetMedia>[0];
     const media = useMeetMedia(mediaOptions);
-    rig = { api, refs, preview, media };
+    rig = { api, refs, preview, media, mediaRefs };
     return inCall ? createElement(CallSettingsPanel) : null;
   }
 
@@ -270,7 +280,7 @@ const createRig = async ({ connect = true } = {}) => {
     handlers.get("disconnect")?.(...(["transport close"] as never[]));
     await vi.waitFor(() => expect(states).toContain("error"), { timeout: 15_000 });
   };
-  return { rig: () => rig, dispatch, drop, showEndScreen, unmount };
+  return { rig: () => rig, micTest: () => micTest, dispatch, drop, showEndScreen, unmount };
 };
 
 type Ending = [
@@ -317,6 +327,37 @@ afterEach(() => {
 });
 
 describe("every way a call ends with the client still mounted", () => {
+  it("a permanently refused reconnect stops the microphone test without closing Settings", async () => {
+    const close = vi.spyOn(FakeAudioContext.prototype, "close");
+    const cancelFrame = vi.spyOn(window, "cancelAnimationFrame");
+    try {
+      current = await createRig();
+      await vi.waitFor(() => expect(current?.micTest()?.isRunning).toBe(true));
+
+      joinRefusal = "Guests are not allowed in this meeting.";
+      await act(async () => current!.drop());
+
+      expect({
+        running: current.micTest()?.isRunning,
+        starting: current.micTest()?.isStarting,
+        recordingStream: current.micTest()?.getRecordingStream(),
+        contextCloses: close.mock.calls.length,
+        cancelledFrames: cancelFrame.mock.calls.length,
+        liveTracks: liveTracks(),
+      }).toEqual({
+        running: false,
+        starting: false,
+        recordingStream: null,
+        contextCloses: 1,
+        cancelledFrames: 1,
+        liveTracks: [],
+      });
+    } finally {
+      close.mockRestore();
+      cancelFrame.mockRestore();
+    }
+  });
+
   it.each(ENDINGS)("%s stops every live capture, the settings camera preview included", async (_name, end) => {
     current = await createRig();
     const rig = current.rig();
@@ -431,4 +472,35 @@ describe("a first join refused before entry, then tried again", () => {
     expect(retried).toEqual([["audio"]]);
     expect(publishIntent(current.rig().refs.deviceIntents.get())).toEqual({ isMicOn: false, isCameraOn: false });
   });
+});
+
+it("a reconnect waiting for microphone processing cannot turn a replacement camera off", async () => {
+  current = await createRig({ connect: false, noiseCancellation: true });
+  const { media, mediaRefs } = current.rig();
+  const oldCamera = new FakeTrack("first-camera", "video", "meeting");
+  const newerCamera = new FakeTrack("replacement-camera", "video", "meeting");
+  mediaRefs.deviceIntents.dispatch({ type: "set", audio: true, video: true });
+  mediaRefs.localStreamRef.current = new FakeStream([oldCamera]) as unknown as MediaStream;
+
+  const pipeline = vi.mocked(createNoiseCancellationPipeline);
+  let finishAudio: (() => void) | undefined;
+  pipeline.mockImplementationOnce((track) => new Promise((resolve) => {
+    finishAudio = () => resolve({ outputTrack: track } as Awaited<ReturnType<typeof createNoiseCancellationPipeline>>);
+  }));
+
+  await act(async () => {
+    const refreshing = media.requestMediaPermissions({ audio: true, video: true, videoRequired: true });
+    await vi.waitFor(() => expect(finishAudio).toBeTypeOf("function"));
+    mediaRefs.deviceIntents.dispatch({ type: "choose", device: "video", chosen: false });
+    oldCamera.stop();
+    const newer = mediaRefs.deviceIntents.dispatch({ type: "capture", device: "video" }).video;
+    mediaRefs.localStreamRef.current = new FakeStream([newerCamera]) as unknown as MediaStream;
+    mediaRefs.deviceIntents.dispatch({ type: "settle", device: "video", request: newer.request, chosen: true });
+    finishAudio?.();
+    await refreshing;
+  });
+
+  expect(publishIntent(mediaRefs.deviceIntents.get()).isCameraOn).toBe(true);
+  expect(mediaRefs.localStreamRef.current?.getVideoTracks()).toEqual([newerCamera]);
+  expect(newerCamera.readyState).toBe("live");
 });

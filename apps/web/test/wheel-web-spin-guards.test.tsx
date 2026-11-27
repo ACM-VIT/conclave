@@ -201,6 +201,30 @@ describe("wheel web app while a shared spin runs, even when the dial reports it 
     expect(action("sort")!.disabled).toBe(false);
   });
 
+  it("numbers the landed dial from the names list as it is now, through sort, remove and add, until Done", () => {
+    startSharedSpin();
+    endSharedSpin();
+    act(() => harness.stage!.onSettled(harness.stage!.spin!, false));
+    const dial = () => harness.stage!.entries.map((entry) => entry.label);
+    const list = () => harness.stage!.listEntries.map((entry) => entry.label);
+    expect([dial(), list()]).toEqual([["Cy", "Ada", "Bo"], ["Cy", "Ada", "Bo"]]);
+
+    act(() => panel().onSort());
+    expect([dial(), list()]).toEqual([["Cy", "Ada", "Bo"], ["Ada", "Bo", "Cy"]]);
+
+    click(action("remove-winner"));
+    expect([dial(), list()]).toEqual([["Cy", "Ada", "Bo"], ["Ada", "Bo"]]);
+
+    act(() => {
+      addEntries(harness.doc, ["Dee"]);
+    });
+    expect([dial(), list()]).toEqual([["Cy", "Ada", "Bo"], ["Ada", "Bo", "Dee"]]);
+    expect(Array.from(container.querySelectorAll("ol li"), (row) => row.textContent)).toEqual(["1Ada", "2Bo", "3Dee"]);
+
+    click(action("done"));
+    expect([dial(), list()]).toEqual([["Ada", "Bo", "Dee"], ["Ada", "Bo", "Dee"]]);
+  });
+
   it("keeps a finished spin finished when the device clock steps back, so controls and handlers agree", () => {
     startSharedSpin();
     endSharedSpin();
@@ -231,4 +255,3 @@ describe("wheel web app while a shared spin runs, even when the dial reports it 
     expect(labels()).toEqual(["Ada", "Bo", "Cy"]);
   });
 });
-

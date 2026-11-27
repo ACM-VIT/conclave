@@ -12,11 +12,15 @@ These hold whatever an app's code or a client does.
 | Invalidation | A subscription ends when its seat is replaced, removed or disconnected, or when its socket switches room. It restarts under a new generation when the seat's role changes or the room's mode changes. The room's mode and flags are read again before every frame, each later part of a large view or result included, so a change nobody announced still takes effect before the next send. |
 | Subjects | One identity adapter turns a connection into an opaque room-scoped subject. Apps never see a user key, an email or a socket. A person's name reaches an app at most `DISPLAY_NAME_MAX_LENGTH` (200) long, cut at its end where it is longer, so an app that bounds the names it stores by that constant is never handed one it would refuse. |
 | Personal rows | Reach every live connection of their owner and nobody else. |
-| One person, one subject | When the room learns that two subjects are one person (a guest whose passes it links), it keeps the subject that already holds app state and runs every app's `mergeSubjects` once, in one transaction per app, before any later request from that person. An app with a personal view must define `mergeSubjects`; `defineAuthority` refuses one without it. |
-| Retries | An operation id carries a nonce and an issue time. Its receipt is bound to the subject and the parsed request and is kept for as long as the id is valid. A repeat replays the first answer. The same id with a different request fails. An expired id fails. A resend stays in the room it was first sent to: when the room epoch changes, the client ends the action as `unknown-outcome`. |
+| One person, one subject | When the room learns that two subjects are one person (a guest whose passes it links), it keeps the subject that already holds app state and merges the other into it before any later request from that person. A merge is all or nothing across the room, and it is staged once. When a join plans the link, every app's `mergeSubjects` runs in its own staged transaction, and every row it would write is run through that app's views (owner and projection, for every role); the saved answers must also fit one person's cap. A fault, a refusal, a spent budget or a failed view check in any app refuses the link: each pass keeps its own subject and rows, and the SFU logs which app refused. The commit applies exactly what the plan staged, never a second run, and takes the merged rows into the views from the owner and projection results the plan checked, so it calls none of the apps' code again. It first checks that no app has committed anything since and that the guest's app state is as planned, then commits every app and moves the saved answers, and only then records the link. Nothing in it can stop part way: a view callback that throws while committed rows are taken in withholds that row (logged, and thrown at the next flush under view verification), as a projection that throws always has, and the row is tried again on the next flushes. A join that relied on a link whose commit does not happen is refused and asked to join again. An app with a personal view must define `mergeSubjects`; `defineAuthority` refuses one without it. |
+| Retries | An operation id carries a nonce and an issue time. Its receipt is bound to the subject and the parsed request and is kept for as long as the id is valid. A repeat from a connection that may still view the app replays the first answer before any gate, identity rule, rate or budget is checked again, so a resend after a host closed Q&A, after a role change or after the person's passes were linked gets what happened. Receipts go wherever the subject's rows go when two subjects merge. They expire with their id and are swept on a timer, and an expired one never counts against the per-person cap. A client whose answer was lost does not give up when the resend meets the socket's act limit: only the transport limit sits before the receipt lookup, and a resend is safe to repeat, so it pauses and sends again. No wait outlives the id, the wait for an answer included: when one would, or the id's time runs out, the action ends as `unknown-outcome`, which says it may or may not have applied. The same id with a different request fails. An expired id fails. An action stays in the room epoch where it starts, even if it has not sent anything yet. |
 | Delivery | Written rows are projected once per audience role, as each transaction commits, so the views are always the committed rows and reading them never changes them. A recipient is sent a row only when its projection differs from what that audience holds, so a write nobody in an audience can see sends that audience nothing. Each projected row needs its own key: a row that claims a key another row holds is withheld, and takes the key when it is given up, so a key handed from one row to another over two writes ends with the second. One still withheld at a flush is logged as a bug in the app. |
 | Transactions | A handler runs to completion alone. A rejection or a throw keeps none of its writes. A handler must be done when it returns: one that returns a promise is a fault and keeps nothing. A gate, `canView` or identity rule admits only on its exact answer, so one that returns a promise admits nobody. |
-| Outputs | A projection or query result with a field its schema does not name is withheld. |
+| Outputs | A projection or query result with a field its schema does not name is withheld. A projection or a personal view's owner that throws, with any value, `undefined` included, withholds its row; the row is tried again on each of the next three flushes, and after that when it is next written. |
+
+Leaving the room, replacing its epoch, or withdrawing the app ends an action's waits. Reconnecting or resubscribing within the same epoch does not. An action started while capabilities are pending belongs to the first epoch offered in that join. Leaving before the offer still ends the action.
+
+A definitive reply received before teardown and before the deadline wins, even if the waiting caller resumes after either. A retryable refusal does not settle an earlier unanswered attempt. If an attempt may have run and no definitive reply arrived, the SDK returns `unknown-outcome`. If no attempt could have run, leaving or replacing the room returns `not-in-room`, losing the app returns `unsupported`, and a forbidden revoke returns `forbidden`.
 
 The uniqueness guarantee is one per verified subject. Two guest passes issued separately cannot be shown to be different people.
 
@@ -55,6 +59,7 @@ The room epoch changes when the room is recreated. A request under an old epoch 
 | Accepted mutations per app per room | 120 a second, burst 240. Moderators have this to themselves and everyone else has it between them, so a crowd cannot use up a host's |
 | Work in one transaction | 50,000 operations. A read or write is one. A `scan` costs one for each row it returns. Rows that are only walked, as `count` and `clear` do under a prefix, cost about one per 64. An action that goes over fails and keeps nothing, even if its handler catches the error |
 | Rows of a `clear` one viewer is told of per flush | 1,000, counting only rows that viewer held |
+| Actions and queries one contract may name | 256 of each, and at most 16 KiB of names as grants, with every one granted. Grants go in the first part of every view, so its whole frame always fits in a part with room for rows |
 | Subscriptions per socket | 16 |
 | Socket behind (resnapshot later) | more than 256 queued packets or 1 MiB. The queue is counted in bytes on every transport, long polling included, and asked before every frame, the catch-up after a snapshot in parts among them |
 | Query on a socket that is behind | refused with `busy` |
@@ -65,7 +70,7 @@ Each table declares its own row cap. Per-action rates are declared by the module
 
 ## Turning it on
 
-Set `SFU_APPS_AUTHORITY_ENABLED=1` on the SFU. With it off no authority event has a listener, so the SFU behaves like one that predates the runtime: a client's capability request goes unanswered and it hides every authority app.
+Set `SFU_APPS_AUTHORITY_ENABLED=1` on the SFU. With it off the SFU answers only the capability request, at once and as `unsupported`, and has no listener for any other authority event, so a client opens no authority app and does not wait for the answer to time out. An SFU that predates the runtime does not answer at all; the client gives up after the ack timeout, 5 s. The web client then lists Polls and meeting Q&A in the Apps panel switched off, each with "Needs a server update", so their absence is explained. It does the same on any server that answers and does not offer them, such as one that runs the runtime without these two apps.
 
 The switch is read once, when the SFU process starts. Changing it needs a restart of the SFU, and there is no live toggle. A process that is already running keeps the mode it started with for every room it holds, so during a rolling deploy the rooms on the old process stay as they were until they move or end.
 
@@ -84,14 +89,50 @@ The first prints the runtime's own CPU and frame counts in process. The second s
 
 State lives in the SFU process for the lifetime of the room. It is lost if the process dies, as game state is. A recreated room has a new epoch and starts empty.
 
+## Apps that run on it
+
+| App | Folder | What the server holds |
+| --- | --- | --- |
+| Polls | `src/apps/polls` | polls, one ballot per person per poll, results private to hosts until shared. A host's export is read in pages of at most 512 KiB and joined in the browser |
+| Q&A | `src/apps/qa` | questions, one upvote per person per question, a question a host hides is seen by hosts only, and is gone for everyone else, its asker included, until a host brings it back. A question keeps the mode it was asked in: one asked in a webinar is seen only by hosts and its asker until a host answers it, even after webinar mode goes off, and one asked in a meeting waits unseen by the room while the room is a webinar. The book holds at most 300 questions and 400 KiB, so every viewer's view fits in one snapshot |
+
+Both are panel apps. They open from the Apps panel, beside whatever is on the stage, and never take the stage or the whiteboard. Each has its hook in `web` (`usePolls`, `useQa`) and the web client draws the panel.
+
+A signed-in person votes, asks and upvotes once per account across tabs and rejoins. A guest in a meeting can read both apps and is told to sign in to take part, until the verified guest pass gives guests an identity that survives a rejoin. In a webinar an attendee may ask and upvote as before.
+
+### The old Q&A events
+
+Released web and native clients send `webinar:qa:submit`, `webinar:qa:upvote` and `webinar:qa:moderate`, and are sent `webinar:qaSnapshot` and `webinar:qaChanged`. In a room that runs the Q&A app those events are an adapter over the app's book (`server/apps/authority/legacyWebinarQa.ts` in the SFU), so an old client and a new one see the same questions:
+
+- A joining connection is followed as the app would follow it and is sent the old snapshot and change events. The adapter holds no questions, no copy of anyone's view and no visibility rule of its own. A frame only tells it which questions changed for a connection. What it says is read from that connection's view as committed at the moment of saying, after the seat has been checked against the room again, so a question hidden a moment before is said to be gone and never as it was.
+- A connection is fed the old events for as long as it does not read Q&A itself. Once it holds its own subscription to the app the feed rests, and it starts again with a whole list when that subscription ends. Asking for capabilities changes nothing: the answer may reach a client after it has given up waiting and fallen back to the old events.
+- A changed question is one `webinar:qaChanged` for each connection, as the old wire has it. The event is built and encoded once for everyone it reads the same for, which is everyone of a role who neither asked nor upvoted the question, and sockets are written 2,000 events a turn. A connection is sent a question again only when it reads differently from what it was last sent.
+- A whole list is shared the same way. It holds the questions as anyone of a role reads them, is built and encoded once for all of them, and is written to 100 sockets a turn. A connection's own questions, which name it as the asker, follow as changes.
+- Before anything is said to a connection its socket's queue is checked, as the runtime checks it before a frame. A socket that is behind is sent nothing more, whatever asked for it, and once it has caught up it is sent one whole list with the state as it is then.
+- A change of room policy sends a list only to a connection whose view was withdrawn or given back, as an attendee's is when webinar mode goes off and on. Turning Q&A off or on changes who may ask and sends nothing on these events.
+- The old upvote is a toggle. It runs the app's `toggleUpvote` action, and the reply carries the count that one transaction made.
+- The native app up to build 63 saves the questions it upvoted and shows that over what a change event says. Whenever a person's upvote changes, on any of their connections, each of their old clients has what it saved checked against the book a flush interval later. One that still lists a question whose upvote is gone is sent a whole `webinar:qaSnapshot`, the one form that build applies to what it saved. This holds when two taps land in one flush and leave no change to send.
+- A question that is gone, dropped from a full book or hidden by a host, is said to be gone once to each connection that lists it. The upvotes that go with a dropped question bring no list and no second word.
+- The old events carry webinar Q&A only. Nothing is sent on them in a regular meeting.
+- A seat id for the asker is given to hosts and to the asker. Everyone else gets an empty `userId`.
+
+With the flag off the old events are served by the SFU's own webinar Q&A code, unchanged.
+
 ## What native needs
 
 The native app does not speak this transport yet. To host an authority app it needs:
 
 1. The seven events above in `SfuEvents.swift`, generated from one source with the web names.
-2. A Swift/Skip session per app: the capabilities exchange, subscribe, frame application (`replace` in parts, `patch` with the sequence check and its optional `grants`, `revoke`), and `act` with a retained operation id and retry inside one room epoch. `client.ts` is the reference, about 500 lines with no framework in it.
+2. A Swift/Skip session per app: the capabilities exchange, subscribe, frame application (`replace` in parts, `patch` with the sequence check and its optional `grants`, `revoke`), and `act` with a retained operation id and retry inside one room epoch, which keeps resending after a lost answer even when a resend is answered `rate-limited`, and never waits past the id's deadline. `client.ts` is the reference, about 500 lines with no framework in it.
 3. Fixtures shared with TypeScript: recorded frame sequences that both decoders must turn into the same view.
 4. Clearing held rows on leave, reconnect and revoke, and on any reuse of a web view. On web, `AuthorityProvider` does this when `joined` goes false, through the client's `left()`, and asks nothing before the room is joined.
 5. A local panel selection in the Activities sheet, separate from the stage.
 
 Until then native keeps its existing activities and ignores the new events. Legacy `webinar:qa:*` keeps working against a new SFU.
+
+For polls and Q&A in particular:
+
+1. Two panels in the Activities sheet, built on the session above: a poll list with create, vote, end, share and CSV export for hosts, and a question list with ask, upvote and the host's answer, dismiss and reopen.
+2. The same gating as web: show an app only when the SFU lists it in capabilities, and show the sign-in prompt when `needsIdentity` names the action.
+3. Webinar Q&A on native keeps working through the old events with no change. Moving it to the app's session is what brings Q&A to native meetings.
+4. A poll started while the panel is closed should raise the same "Vote" prompt the web toast does.

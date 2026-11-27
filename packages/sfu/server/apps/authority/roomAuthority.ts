@@ -26,15 +26,22 @@ import {
   type Role,
   type RoomPolicy,
   type Subject,
+  type SubjectMerge,
 } from "@conclave/apps-sdk/authority/server";
 import type { Client } from "../../../config/classes/Client.js";
-import type { Room } from "../../../config/classes/Room.js";
+import type {
+  GuestIdentityMerge,
+  Room,
+  StagedGuestMerge,
+} from "../../../config/classes/Room.js";
 import type { ConnectionContext } from "../../socket/context.js";
+import { Logger } from "../../../utilities/loggers.js";
 import type { IdentityAdapter } from "./identity.js";
-import { AuthorityInstance, type Actor } from "./instance.js";
+import { AuthorityInstance, type Actor, type StagedMerge } from "./instance.js";
 import type { AuthorityLimits } from "./limits.js";
 import {
   ARRAY_BYTES,
+  type CommittedView,
   type HeldRows,
   type LiveAudiences,
   type OwedCursor,
@@ -110,6 +117,54 @@ type Subscription = {
   /** Where its view has got to in the rows clears took, told a batch a flush. */
   owed: OwedCursor;
   dropped: boolean;
+  /**
+   * Where frames go when not to the socket: an in-process observer, such as
+   * the adapter that feeds a legacy event from an app's view.
+   */
+  sink: ((frame: AuthorityFrame) => void) | null;
+  /** Told once when an observer ends for good, so its owner can let go of it. */
+  ended: (() => void) | null;
+};
+
+/** What `observe` hands back to the in-process code that follows a view. */
+export type Observer = {
+  close: () => void;
+  /**
+   * Whether a frame could go to the connection at this moment, checked
+   * against the room as it is now. Code that says later what a frame told
+   * it must ask first, as the runtime does before every frame of its own. A
+   * seat that changed role is sent its new view from inside this call, and
+   * the answer is then no: what was waiting is out of date.
+   */
+  isLive: () => boolean;
+  /**
+   * Whether the connection's socket can take more right now. Ask before
+   * anything is sent to it later than the frame that caused it. A socket
+   * that is behind gets nothing more queued: it is marked so, and once it
+   * has caught up the observer is told that its view was replaced, which is
+   * the time to say everything again, once. One whose queue is full is
+   * disconnected.
+   */
+  hasRoom: () => boolean;
+  /**
+   * The connection's view as committed at this moment, to read rows from
+   * before saying them. Ask `isLive` first. The reader is good only for the
+   * turn it was taken in.
+   */
+  view: () => CommittedView;
+  /** Who the connection is to the app right now. */
+  subject: () => Subject;
+};
+
+/** A successful action, for in-process code that keeps its own index. */
+export type ActionNotice = {
+  app: string;
+  action: string;
+  /** The seat that acted, as the room names it. */
+  seatId: string;
+  /** The person who acted, as the app knows them across tabs. */
+  subject: Subject;
+  value: Json;
 };
 
 type Watcher = { context: ConnectionContext; signature: string };
@@ -264,6 +319,7 @@ export class RoomAuthority {
   private wakeTimer: NodeJS.Timeout | null = null;
   private lagTimer: NodeJS.Timeout | null = null;
   private pruneTimer: NodeJS.Timeout | null = null;
+  private receiptSweepTimer: NodeJS.Timeout | null = null;
   /** Apps a viewer has left since their unheld views were last forgotten. */
   private readonly left = new Set<AuthorityInstance>();
   /** Apps whose viewers are due a word on what they may now do. */
@@ -273,14 +329,30 @@ export class RoomAuthority {
   /** Streamed results waiting for their socket to catch up. */
   private readonly stalled = new Set<NodeJS.Timeout>();
   private wakeAt: number | null = null;
+  private observers = 0;
+  /**
+   * Observers that are sent nothing right now. Either the seat may not view
+   * the app, or the connection reads the app through a subscription of its
+   * own and has no use for being told twice.
+   */
+  private readonly dormant = new Set<Subscription>();
+  private readonly actionListeners = new Set<(notice: ActionNotice) => void>();
+  private readonly mergeListeners = new Set<(merge: SubjectMerge) => void>();
+  private readonly policyListeners = new Set<
+    (policy: RoomPolicy, previous: RoomPolicy) => void
+  >();
+  private observedPolicy: RoomPolicy;
+  private readonly policyTransitions: [RoomPolicy, RoomPolicy][] = [];
   private lastFlushAt = 0;
   private lastNow = 0;
   private closed = false;
+  private closing = false;
 
   constructor(private readonly options: RoomAuthorityOptions) {
     this.room = options.room;
     this.limits = options.limits;
     const policy = options.policy();
+    this.observedPolicy = policy;
     for (const module of options.modules) {
       const instance = new AuthorityInstance(
         `${module.contract.id}.${randomBytes(9).toString("base64url")}`,
@@ -342,7 +414,8 @@ export class RoomAuthority {
       this.bySocket.set(context.socket.id, subscriptions);
     }
     if (subscriptions.has(request.subscription)) return failure("invalid-input");
-    if (subscriptions.size >= this.limits.subscriptionsPerSocket) {
+    const held = [...subscriptions.values()].filter((held) => !held.sink);
+    if (held.length >= this.limits.subscriptionsPerSocket) {
       return failure("capacity");
     }
 
@@ -364,11 +437,127 @@ export class RoomAuthority {
       target: 0,
       owed: { shared: 0, own: 0 },
       dropped: false,
+      sink: null,
+      ended: null,
     };
     subscriptions.set(subscription.id, subscription);
     this.byInstance.get(instance)!.add(subscription);
     this.sendReplace(subscription);
+    if (!subscription.dropped) this.rest(context.socket.id, instance);
     return { ok: true, value: null };
+  }
+
+  /* ---- In-process access ------------------------------------------------- */
+
+  /** Whether this room runs the app. */
+  runs(app: string): boolean {
+    return this.instanceOf(app) !== null;
+  }
+
+  /**
+   * Follows an app's view for a connection from inside the SFU. The view is
+   * exactly the one that connection would be sent: the same binding, role
+   * and identity checks run before every frame. Used to feed a legacy event
+   * from an app, so no second copy of its visibility rules exists.
+   *
+   * An observer is told which rows changed, and when its whole view was
+   * replaced. A replacement names no rows: the observer reads them, and
+   * anything else it is about to say, from `view()` at that moment.
+   *
+   * An observer stands in for a subscription the connection does not have.
+   * While the connection holds its own subscription to the app the observer
+   * rests, and it starts again with a whole view when that subscription
+   * ends. Nothing but a live subscription rests it: a client that only asked
+   * what the server offers, or whose subscribe was refused, is still told.
+   */
+  observe(
+    context: ConnectionContext,
+    app: string,
+    sink: (frame: AuthorityFrame) => void,
+    ended: () => void = () => {},
+  ): Observer | null {
+    const bound = this.bind(context);
+    const instance = this.instanceOf(app);
+    if (!bound || !instance) return null;
+    this.syncPolicy();
+    let subscriptions = this.bySocket.get(context.socket.id);
+    if (!subscriptions) {
+      subscriptions = new Map();
+      this.bySocket.set(context.socket.id, subscriptions);
+    }
+    this.observers += 1;
+    const subscription: Subscription = {
+      id: `observer.${this.observers}`,
+      context,
+      socket: context.socket,
+      instance,
+      client: bound.client,
+      actor: bound.actor,
+      generation: 1,
+      seq: 0,
+      transfer: null,
+      lagging: false,
+      viewVersion: 0,
+      grantsSent: "",
+      grantsDue: false,
+      viewRevision: 0,
+      target: 0,
+      owed: { shared: 0, own: 0 },
+      dropped: false,
+      sink,
+      ended,
+    };
+    subscriptions.set(subscription.id, subscription);
+    this.dormant.add(subscription);
+    this.resume(subscription);
+    return {
+      close: () => this.drop(subscription),
+      isLive: () => this.refresh(subscription) === "live",
+      hasRoom: () =>
+        !subscription.dropped &&
+        !this.dormant.has(subscription) &&
+        this.hasRoom(subscription),
+      view: () => subscription.instance.committedView(subscription.actor),
+      subject: () => subscription.actor.subject,
+    };
+  }
+
+  /**
+   * Runs an action for a connection from inside the SFU, for an adapter that
+   * turns a legacy event into an app action. Every gate, identity rule and
+   * rate still applies. There is no operation id, because the legacy wire
+   * has no retry channel: each received request runs once.
+   */
+  actAs(
+    context: ConnectionContext,
+    app: string,
+    action: string,
+    input: unknown,
+  ): AuthorityResult<Json> {
+    const bound = this.bind(context);
+    const instance = this.instanceOf(app);
+    if (!bound || !instance) return failure("not-in-room");
+    this.syncPolicy();
+    const result = instance.act(bound.actor, action, input, null, this.now());
+    this.afterAction(instance, action, bound.client.id, bound.actor.subject, result);
+    if (result.ok && bound.actor.verified) {
+      this.options.identity.hold(this.room, bound.client);
+    }
+    return result;
+  }
+
+  /** Called after every action that succeeded, whoever sent it. */
+  onAction(listener: (notice: ActionNotice) => void): void {
+    this.actionListeners.add(listener);
+  }
+
+  onSubjectsMerged(listener: (merge: SubjectMerge) => void): void {
+    this.mergeListeners.add(listener);
+  }
+
+  /** Called when the room's policy has changed, with the new and the old. */
+  onPolicy(listener: (policy: RoomPolicy, previous: RoomPolicy) => void): void {
+    this.policyListeners.add(listener);
   }
 
   unsubscribe(context: ConnectionContext, subscriptionId: string): void {
@@ -390,11 +579,22 @@ export class RoomAuthority {
       request.operation,
       this.now(),
     );
-    this.afterWrite(instance);
-    if (!result.ok) return result;
-    if (actor.verified && context.currentClient) {
+    this.afterAction(
+      instance,
+      request.action,
+      subscription.client.id,
+      actor.subject,
+      result,
+    );
+    this.armReceiptSweep();
+    if (
+      actor.verified &&
+      context.currentClient &&
+      (result.ok || instance.keepsAnswer(actor, request.operation))
+    ) {
       this.options.identity.hold(this.room, context.currentClient);
     }
+    if (!result.ok) return result;
     return { ...result, revision: this.answerRevision(subscription) };
   }
 
@@ -470,26 +670,57 @@ export class RoomAuthority {
    * subscription is checked against the room as it is now. A missed call
    * only delays this: nothing is ever sent without the same check.
    */
-  guestIdentityMerged(from: string, into: string): void {
-    if (this.closed) return;
-    const merge = {
-      from: this.options.identity.guestSubject(from),
-      into: this.options.identity.guestSubject(into),
-    };
-    const now = this.now();
-    for (const instance of this.instances.values()) {
-      if (instance.mergeSubjects(merge, now)) this.afterWrite(instance);
-    }
-    this.scheduleSweep();
-  }
-
   membershipChanged(): void {
     this.scheduleSweep();
   }
 
+  stageGuestMerges(merges: readonly GuestIdentityMerge[]): StagedGuestMerge | null {
+    if (this.closed) return null;
+    const policy = this.options.policy();
+    this.syncPolicy(policy);
+    const subjects = merges.map(({ from, into }) => ({
+      from: this.options.identity.guestSubject(from),
+      into: this.options.identity.guestSubject(into),
+    }));
+    const now = this.now();
+    const staged: Array<[AuthorityInstance, StagedMerge]> = [];
+    for (const instance of this.instances.values()) {
+      const merge = instance.stageMerge(subjects, now);
+      if (!merge) return null;
+      staged.push([instance, merge]);
+    }
+    return {
+      commit: () => {
+        if (
+          this.closed ||
+          !samePolicy(policy, this.options.policy()) ||
+          !staged.every(([, merge]) => merge.fresh())
+        ) return false;
+        for (const [instance, merge] of staged) {
+          if (merge.commit()) this.afterWrite(instance);
+        }
+        this.scheduleSweep();
+        return true;
+      },
+      afterCommit: () => {
+        for (const subject of subjects) {
+          for (const listener of this.mergeListeners) listener(subject);
+        }
+      },
+    };
+  }
+
   /** The room's mode or a flag changed. */
   policyChanged(): void {
+    this.observePolicy();
     this.scheduleSweep();
+  }
+
+  private observePolicy(policy = this.options.policy()): void {
+    if (!samePolicy(this.observedPolicy, policy)) {
+      this.policyTransitions.push([this.observedPolicy, policy]);
+      this.observedPolicy = policy;
+    }
   }
 
   dropSocket(socketId: string): void {
@@ -501,6 +732,7 @@ export class RoomAuthority {
 
   close(): void {
     if (this.closed) return;
+    this.closing = true;
     // Closing a room does not close its sockets. Tell each one that still
     // holds a view to forget it, or it would keep showing the room's last
     // state for as long as the tab stays open.
@@ -516,16 +748,21 @@ export class RoomAuthority {
       this.wakeTimer,
       this.lagTimer,
       this.pruneTimer,
+      this.receiptSweepTimer,
     ]) {
       if (timer) clearTimeout(timer);
     }
     this.flushTimer = this.sweepTimer = this.wakeTimer = this.lagTimer = null;
-    this.pruneTimer = null;
+    this.pruneTimer = this.receiptSweepTimer = null;
     this.left.clear();
     for (const timer of this.stalled) clearTimeout(timer);
     this.stalled.clear();
     this.bySocket.clear();
     this.byInstance.clear();
+    this.dormant.clear();
+    this.actionListeners.clear();
+    this.mergeListeners.clear();
+    this.policyListeners.clear();
     this.watchers.clear();
     this.instances.clear();
   }
@@ -543,6 +780,24 @@ export class RoomAuthority {
       held.subjects += subjects;
     }
     return held;
+  }
+
+  get receiptsHeld(): number {
+    let held = 0;
+    for (const instance of this.instances.values()) held += instance.receiptCount;
+    return held;
+  }
+
+  private armReceiptSweep(): void {
+    if (this.receiptSweepTimer || this.closed) return;
+    this.receiptSweepTimer = setTimeout(() => {
+      this.receiptSweepTimer = null;
+      const now = this.now();
+      let held = false;
+      for (const instance of this.instances.values()) held = instance.sweepReceipts(now) || held;
+      if (held) this.armReceiptSweep();
+    }, this.limits.operationMaxAgeMs);
+    this.receiptSweepTimer.unref?.();
   }
 
   /** Flushes pending view changes now. For tests and orderly shutdown. */
@@ -600,7 +855,7 @@ export class RoomAuthority {
     if (subscription.dropped) return "gone";
     const generation = subscription.generation;
     this.syncPolicy();
-    if (subscription.dropped) return "gone";
+    if (subscription.dropped || this.dormant.has(subscription)) return "gone";
     if (subscription.generation !== generation) return "replaced";
     const bound = this.bind(subscription.context);
     if (!bound || bound.client !== subscription.client) {
@@ -608,7 +863,7 @@ export class RoomAuthority {
       return "gone";
     }
     if (!subscription.instance.canView(bound.actor)) {
-      this.revoke(subscription, "forbidden");
+      this.withdraw(subscription);
       return "gone";
     }
     if (!sameActor(subscription.actor, bound.actor)) {
@@ -640,26 +895,33 @@ export class RoomAuthority {
 
   /* ---- Policy and capabilities ------------------------------------------ */
 
+  /** Brings a changed room policy in, for views and for resting observers. */
+  private syncPolicy(policy = this.options.policy()): void {
+    // A new policy may let a resting observer's seat view the app again.
+    if (this.applyPolicy(policy)) this.wakeDormant();
+  }
+
   /**
-   * Applies a changed room policy. Each app projects its rows again, and a
-   * viewer who may still see the app is sent only what came out different
-   * for them, with what they may now do. A switch that changes nobody's
-   * view, such as one that only decides who may take part, sends no rows:
-   * in a room of 5,000 it is 5,000 small frames and not 5,000 whole views.
+   * Applies a changed room policy, and says whether it had changed. Each app
+   * projects its rows again, and a viewer who may still see the app is sent
+   * only what came out different for them, with what they may now do. A
+   * switch that changes nobody's view, such as one that only decides who may
+   * take part, sends no rows: in a room of 5,000 it is 5,000 small frames
+   * and not 5,000 whole views.
    */
-  private syncPolicy(): void {
-    const policy = this.options.policy();
+  private applyPolicy(policy: RoomPolicy): boolean {
+    this.observePolicy(policy);
+    let changed = false;
     for (const instance of this.instances.values()) {
       if (samePolicy(instance.policy, policy)) continue;
+      changed = true;
       instance.setPolicy(policy);
       for (const subscription of [...this.byInstance.get(instance)!]) {
         const bound = this.bind(subscription.context);
-        if (
-          !bound ||
-          bound.client !== subscription.client ||
-          !instance.canView(bound.actor)
-        ) {
+        if (!bound || bound.client !== subscription.client) {
           this.revoke(subscription, "forbidden");
+        } else if (!instance.canView(bound.actor)) {
+          this.withdraw(subscription);
         } else if (
           // A snapshot still on its way was built under the old policy, and
           // may hold rows this viewer may no longer see: it starts over.
@@ -667,13 +929,88 @@ export class RoomAuthority {
           !sameActor(subscription.actor, bound.actor)
         ) {
           this.regenerate(subscription, bound.actor);
-        } else {
+        } else if (!subscription.sink) {
           subscription.grantsDue = true;
         }
       }
       this.grantsDue.add(instance);
       this.scheduleFlush(true);
     }
+    for (const [previous, next] of this.policyTransitions.splice(0)) {
+      for (const listener of this.policyListeners) listener(next, previous);
+    }
+    return changed;
+  }
+
+  /**
+   * Takes a view away from a seat that may no longer see the app. A socket's
+   * subscription ends. An in-process observer waits instead: its seat cannot
+   * ask again, so it is resumed when the seat may view the app once more.
+   */
+  private withdraw(subscription: Subscription): void {
+    if (!subscription.sink) {
+      this.revoke(subscription, "forbidden");
+      return;
+    }
+    this.byInstance.get(subscription.instance)?.delete(subscription);
+    this.dormant.add(subscription);
+    this.viewerLeft(subscription.instance);
+    subscription.transfer = null;
+    this.send(subscription, {
+      kind: "revoke",
+      subscription: subscription.id,
+      generation: subscription.generation,
+      serverNowMs: this.now(),
+      reason: "forbidden",
+    });
+  }
+
+  private wakeDormant(): void {
+    for (const observer of [...this.dormant]) this.resume(observer);
+  }
+
+  /**
+   * Starts a resting observer again if it has a use: its seat is still here
+   * and may view the app, and the connection is not reading the app through
+   * a subscription of its own. It starts with a whole view.
+   */
+  private resume(observer: Subscription): void {
+    const bound = this.bind(observer.context);
+    if (!bound || bound.client !== observer.client) {
+      this.drop(observer);
+      return;
+    }
+    if (!observer.instance.canView(bound.actor)) return;
+    if (this.observersOf(observer.socket.id, observer.instance, false).length > 0) {
+      return;
+    }
+    this.dormant.delete(observer);
+    this.byInstance.get(observer.instance)?.add(observer);
+    this.regenerate(observer, bound.actor);
+  }
+
+  /**
+   * Rests a connection's observers of an app, without a word to them: the
+   * connection has just opened the app itself.
+   */
+  private rest(socketId: string, instance: AuthorityInstance): void {
+    for (const observer of this.observersOf(socketId, instance, true)) {
+      if (this.dormant.has(observer)) continue;
+      this.byInstance.get(instance)?.delete(observer);
+      this.dormant.add(observer);
+      observer.transfer = null;
+    }
+  }
+
+  /** A connection's observers of an app, or its own subscriptions to it. */
+  private observersOf(
+    socketId: string,
+    instance: AuthorityInstance,
+    observers: boolean,
+  ): Subscription[] {
+    return [...(this.bySocket.get(socketId)?.values() ?? [])].filter(
+      (held) => held.instance === instance && Boolean(held.sink) === observers,
+    );
   }
 
   /** What a viewer may now do, if that is not what they were last told. */
@@ -723,9 +1060,10 @@ export class RoomAuthority {
     this.syncPolicy();
     for (const subscriptions of [...this.bySocket.values()]) {
       for (const subscription of [...subscriptions.values()]) {
-        this.refresh(subscription);
+        if (!this.dormant.has(subscription)) this.refresh(subscription);
       }
     }
+    this.wakeDormant();
     for (const [socketId, watcher] of [...this.watchers]) {
       const bound = this.bind(watcher.context);
       if (!bound) {
@@ -748,6 +1086,27 @@ export class RoomAuthority {
   private afterWrite(instance: AuthorityInstance): void {
     if (instance.hasPendingChanges) this.scheduleFlush(false);
     this.armWake();
+  }
+
+  private afterAction(
+    instance: AuthorityInstance,
+    action: string,
+    seatId: string,
+    subject: Subject,
+    result: AuthorityResult<Json>,
+  ): void {
+    this.afterWrite(instance);
+    if (!result.ok) return;
+    for (const listener of this.actionListeners) {
+      listener({ app: instance.appId, action, seatId, subject, value: result.value });
+    }
+  }
+
+  private instanceOf(app: string): AuthorityInstance | null {
+    for (const instance of this.instances.values()) {
+      if (instance.appId === app) return instance;
+    }
+    return null;
   }
 
   /**
@@ -936,7 +1295,26 @@ export class RoomAuthority {
     subscription.lagging = false;
     if (!this.hasRoom(subscription)) return;
 
+    if (subscription.sink) {
+      // An observer reads rows itself, from `view()`, when it has a use for
+      // them. It is only told that its view was replaced. Building the whole
+      // view for each of a room's observers would be work nobody reads.
+      subscription.viewVersion = subscription.instance.holdView(subscription.actor);
+      this.stats.replaces += 1;
+      this.emit(subscription, {
+        kind: "replace",
+        subscription: subscription.id,
+        generation: subscription.generation,
+        serverNowMs: this.now(),
+        part: 0,
+        last: true,
+        rows: [],
+      });
+      return;
+    }
+
     const { rows, version } = subscription.instance.snapshot(subscription.actor);
+    if (subscription.instance.hasPendingChanges) this.scheduleFlush(false);
     subscription.viewVersion = version;
     // A whole view as committed now holds none of the rows clears took.
     subscription.owed = subscription.instance.owedEnd(subscription.actor);
@@ -1236,32 +1614,57 @@ export class RoomAuthority {
 
   private emit(subscription: Subscription, frame: AuthorityFrame): void {
     if (frame.kind === "patch") this.stats.patches += 1;
-    subscription.socket.emit(AUTHORITY_EVENTS.frame, frame);
+    this.send(subscription, frame);
+  }
+
+  private send(subscription: Subscription, frame: AuthorityFrame): void {
+    if (!subscription.sink) {
+      subscription.socket.emit(AUTHORITY_EVENTS.frame, frame);
+      return;
+    }
+    try {
+      subscription.sink(frame);
+    } catch (error) {
+      Logger.error("[Authority] An observer failed to take a frame", error);
+    }
   }
 
   private revoke(subscription: Subscription, reason: AuthorityRevokeReason): void {
     if (subscription.dropped) return;
     this.drop(subscription);
-    if (!subscription.socket.connected) return;
+    if (!subscription.sink && !subscription.socket.connected) return;
     this.stats.revokes += 1;
     // Carries no data, so it is safe for any socket that held the view.
-    subscription.socket.emit(AUTHORITY_EVENTS.frame, {
+    this.send(subscription, {
       kind: "revoke",
       subscription: subscription.id,
       generation: subscription.generation,
       serverNowMs: this.now(),
       reason,
-    } satisfies AuthorityFrame);
+    });
   }
 
   private drop(subscription: Subscription): void {
+    if (!subscription.dropped) subscription.ended?.();
     subscription.dropped = true;
     subscription.transfer = null;
+    this.dormant.delete(subscription);
     this.byInstance.get(subscription.instance)?.delete(subscription);
     const subscriptions = this.bySocket.get(subscription.socket.id);
     subscriptions?.delete(subscription.id);
     if (subscriptions?.size === 0) this.bySocket.delete(subscription.socket.id);
     this.viewerLeft(subscription.instance);
+    // The connection's own view of the app ended. An observer that rested
+    // for it is all the connection has now.
+    if (!subscription.sink && !this.closing) {
+      for (const observer of this.observersOf(
+        subscription.socket.id,
+        subscription.instance,
+        true,
+      )) {
+        if (this.dormant.has(observer)) this.resume(observer);
+      }
+    }
   }
 
   /* ---- Timers ------------------------------------------------------------ */

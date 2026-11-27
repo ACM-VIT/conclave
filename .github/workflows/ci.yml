@@ -20,13 +20,13 @@ jobs:
   ci:
     name: ${{ matrix.job }}
     runs-on: &ci-runner ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
-    timeout-minutes: 10
+    timeout-minutes: ${{ startsWith(matrix.job, 'fuzz-') && 20 || 10 }}
     env:
       CI_JOB: ${{ matrix.job }}
     strategy:
       fail-fast: false
       matrix:
-        job: [lint, typecheck, build, checks, deploy]
+        job: [lint, typecheck, build, checks, deploy, fuzz-a, fuzz-b, fuzz-c]
     steps: &ci-steps
       - run: echo "CI_JOB_STARTED_AT=$(date +%s%3N)" >> "$GITHUB_ENV"
 
@@ -47,6 +47,13 @@ jobs:
           if [ "$EVENT" != "push" ]; then
             echo "::warning title=node_modules cache miss::This $EVENT run installed node_modules without a cache. A miss on every run means staging or main has not saved a cache for this lockfile and toolchain."
           fi
+
+      # The backup and restore tests run the real scripts, which need these.
+      # The tests fail on CI when one is missing rather than skip.
+      - if: env.CI_JOB == 'test-backup'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends age psmisc redis-server
 
       - id: next-cache
         if: env.CI_JOB == 'build'
@@ -94,9 +101,16 @@ jobs:
       CI_JOB: test-sfu
     steps: *ci-steps
 
+  test-backup:
+    runs-on: *ci-runner
+    timeout-minutes: 10
+    env:
+      CI_JOB: test-backup
+    steps: *ci-steps
+
   test-result:
     name: test
-    needs: [test-unit, test-sfu]
+    needs: [test-unit, test-sfu, test-backup]
     if: ${{ always() }}
     runs-on: *ci-runner
     timeout-minutes: 1
@@ -104,4 +118,5 @@ jobs:
       - env:
           TEST_UNIT_RESULT: ${{ needs.test-unit.result }}
           TEST_SFU_RESULT: ${{ needs.test-sfu.result }}
-        run: test "$TEST_UNIT_RESULT" = success && test "$TEST_SFU_RESULT" = success
+          TEST_BACKUP_RESULT: ${{ needs.test-backup.result }}
+        run: test "$TEST_UNIT_RESULT" = success && test "$TEST_SFU_RESULT" = success && test "$TEST_BACKUP_RESULT" = success

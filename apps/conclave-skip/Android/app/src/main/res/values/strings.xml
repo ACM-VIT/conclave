@@ -1115,6 +1115,7 @@
     <string name="act_apps">Apps</string>
     <string name="act_below_range">%1$s needs %2$s players. %3$d people are here.</string>
     <string name="act_below_range_generic">Not enough people are here yet.</string>
+    <string name="act_board_saved_message">The board stays saved for this meeting.</string>
     <string name="act_browser">Shared browser</string>
     <string name="act_cancel_vote">Cancel vote</string>
     <string name="act_char_count">%1$d of %2$d characters</string>
@@ -1294,6 +1295,10 @@
     <plurals name="app_wheel_missing">
         <item quantity="one">%1$d not on the wheel</item>
         <item quantity="other">%1$d not on the wheel</item>
+    </plurals>
+    <plurals name="app_wheel_waiting">
+        <item quantity="one">The wheel is full. %1$d more name is waiting for a place.</item>
+        <item quantity="other">The wheel is full. %1$d more names are waiting for a place.</item>
     </plurals>
     <string name="br_detail">Show a website to everyone</string>
     <string name="br_err_empty">Enter a URL to continue.</string>

@@ -6,6 +6,7 @@ import {
   type RuntimeDefinition,
   type RuntimeRead,
   type RuntimeTransaction,
+  type ScanPage,
   type TableKey,
 } from "@conclave/apps-sdk/authority/server";
 import type { AuthorityLimits } from "./limits.js";
@@ -33,11 +34,21 @@ export type TransactionOutcome<R> =
   | { ok: false; kind: "capacity"; message: string }
   | { ok: false; kind: "fault"; error: unknown };
 
+export type StagedTransaction<R> =
+  | {
+      ok: true;
+      value: R;
+      written(): Array<readonly [string, TableKey, Row | undefined]>;
+      fresh(): boolean;
+      commit(): boolean;
+    }
+  | Exclude<TransactionOutcome<R>, { ok: true }>;
+
 /**
  * How many rows the store handles in bulk for the cost of one row a handler
  * touches itself. A bulk row is cheap, but not free.
  */
-const BULK_ROWS_PER_OP = 64;
+export const BULK_ROWS_PER_OP = 64;
 
 const DELETED = Symbol("deleted");
 type Staged = Row | typeof DELETED;
@@ -139,6 +150,7 @@ export class AuthorityStore {
    * from them again, and its viewers are told later.
    */
   private readonly cleared = new Map<string, TableKey[]>();
+  private commits = 0;
 
   constructor(
     private readonly definition: RuntimeDefinition,
@@ -221,18 +233,17 @@ export class AuthorityStore {
   }
 
   transact<R>(run: (tx: RuntimeTransaction) => R): TransactionOutcome<R> {
-    return this.execute(run, true);
+    const staged = this.stage(run);
+    return staged.ok ? { ok: true, value: staged.value, changed: staged.commit() } : staged;
   }
 
   /** Runs a read against the committed rows. Nothing it stages is kept. */
   read<R>(run: (db: RuntimeRead) => R): TransactionOutcome<R> {
-    return this.execute(run, false);
+    const staged = this.stage(run);
+    return staged.ok ? { ok: true, value: staged.value, changed: false } : staged;
   }
 
-  private execute<R>(
-    run: (tx: RuntimeTransaction) => R,
-    commit: boolean,
-  ): TransactionOutcome<R> {
+  stage<R>(run: (tx: RuntimeTransaction) => R): StagedTransaction<R> {
     const draft = new Draft(this, this.definition, this.limits);
     let value: R;
     try {
@@ -251,10 +262,26 @@ export class AuthorityStore {
     // A handler that caught the budget error and returned all the same did
     // not get the work it asked for. Nothing it staged is kept.
     if (draft.overBudget) return { ok: false, kind: "fault", error: draft.overBudget };
-    return { ok: true, value, changed: commit ? this.commit(draft) : false };
+    const stagedAt = this.commits;
+    return {
+      ok: true,
+      value,
+      written: () =>
+        [...draft.writes].flatMap(([table, writes]) =>
+          [...writes].map(([key, staged]) => [table, key, staged === DELETED ? undefined : staged] as const),
+        ),
+      fresh: () => this.commits === stagedAt,
+      commit: () => {
+        if (this.commits !== stagedAt) {
+          throw new Error("A staged transaction must commit before any other transaction does");
+        }
+        return this.commit(draft);
+      },
+    };
   }
 
   private commit(draft: Draft): boolean {
+    this.commits += 1;
     let changed = false;
     // Clears first: what a handler wrote under a prefix after clearing it stays.
     for (const [tableName, prefixes] of draft.clears) {
@@ -413,7 +440,16 @@ class Draft implements RuntimeTransaction {
     return total;
   }
 
-  scan(table: string, prefix?: TableKey): readonly (readonly [TableKey, Row])[] {
+  scan(
+    table: string,
+    prefix?: TableKey,
+    page?: ScanPage,
+  ): readonly (readonly [TableKey, Row])[] {
+    const offset = page?.offset ?? 0;
+    const limit = page?.limit ?? Number.POSITIVE_INFINITY;
+    if (!Number.isInteger(offset) || offset < 0 || !(limit >= 1)) {
+      throw new Error("A scan page needs an offset of 0 or more and a limit of 1 or more");
+    }
     const committed = this.store.table(table);
     const writes = this.writes.get(table);
     const cleared = this.clears.get(table);
@@ -422,24 +458,35 @@ class Draft implements RuntimeTransaction {
     this.spend(1);
     this.spendOnWalk(writes?.size ?? 0);
     const result: (readonly [TableKey, Row])[] = [];
+    let passed = 0;
     let passedOver = 0;
-    for (const key of committed.keysUnder(prefix)) {
-      // A cleared row written again is a new row, and comes last.
-      if (cleared && this.isCleared(table, key)) {
-        passedOver += 1;
-        continue;
+    /** Takes the next row in order. False once the page is full. */
+    const take = (key: TableKey, row: Row): boolean => {
+      passed += 1;
+      if (passed > offset) result.push([key, row]);
+      return result.length < limit;
+    };
+    read: {
+      for (const key of committed.keysUnder(prefix)) {
+        // A cleared row written again is a new row, and comes last.
+        if (cleared && this.isCleared(table, key)) {
+          passedOver += 1;
+          continue;
+        }
+        const staged = writes?.get(key);
+        if (staged === DELETED) continue;
+        const row = staged ?? committed.rows.get(key);
+        if (row && !take(key, row)) break read;
       }
-      const staged = writes?.get(key);
-      if (staged === DELETED) continue;
-      const row = staged ?? committed.rows.get(key);
-      if (row) result.push([key, row]);
+      for (const [key, staged] of writes ?? []) {
+        if (staged === DELETED) continue;
+        if (committed.rows.has(key) && !this.isCleared(table, key)) continue;
+        if (prefix !== undefined && !keyHasPrefix(key, prefix)) continue;
+        if (!take(key, staged)) break read;
+      }
     }
-    for (const [key, staged] of writes ?? []) {
-      if (staged === DELETED) continue;
-      if (committed.rows.has(key) && !this.isCleared(table, key)) continue;
-      if (prefix !== undefined && !keyHasPrefix(key, prefix)) continue;
-      result.push([key, staged]);
-    }
+    // The rows before a page's offset are walked to reach it.
+    passedOver += passed - result.length;
     this.spend(result.length);
     this.spendOnWalk(passedOver);
     return result;

@@ -53,17 +53,16 @@ Inputs are parsed at the socket before any rule runs. Unknown input fields are d
 
 ```ts
 import {
-  defineAuthority, key, reject, table, type Subject,
+  actionOrderTable, defineAuthority, key, nextActionOrder, reject, table, type Subject,
 } from "@conclave/apps-sdk/authority/server";
 
 type Entry = { id: string; subject: Subject; name: string; joinedAt: number; order: number };
-const ORDER = key("last");
 
 export const signUpAuthority = defineAuthority({
   contract: signUpContract,
   tables: {
     entries: table<Entry>({ maxRows: 500 }),
-    order: table<{ last: number }>({ maxRows: 1 }),
+    order: actionOrderTable(),
   },
   timers: {},
   canView: ({ role }) => role === "moderator" || role === "member",
@@ -72,8 +71,7 @@ export const signUpAuthority = defineAuthority({
       roles: ["moderator", "member"],
       rate: { burst: 5, perSecond: 1 },
       run(ctx, tx) {
-        const order = (tx.get("order", ORDER)?.last ?? 0) + 1;
-        tx.put("order", ORDER, { last: order });
+        const order = nextActionOrder(tx);
         tx.insertIfAbsent("entries", key(ctx.subject), {
           id: ctx.nextId("e"),
           subject: ctx.subject,
@@ -117,7 +115,7 @@ export const signUpAuthority = defineAuthority({
 });
 ```
 
-An app with a personal view keeps rows by person, so it must define `mergeSubjects`. The room can learn late that two subjects are one person, for example a guest whose two tabs got different passes. It then runs `mergeSubjects` once in every app, in one transaction, and moves everything kept under `from` to `into`. After the merge the person has one subject everywhere.
+An app with a personal view keeps rows by person, so it must define `mergeSubjects`. The room can learn late that two subjects are one person, for example a guest whose two tabs got different passes. It then runs `mergeSubjects` once in every app and moves everything kept under `from` to `into`. After the merge the person has one subject everywhere. The merge is all or nothing across the room: if one app's merge is refused, faults, runs out of its transaction budget, or writes a row its own views cannot own or project, no app keeps its merge and the room does not link the passes, so the person stays two subjects with their rows where they were. The merge runs once, when the link is planned, and the result is what commits, so a rule that reads `ctx.now` is judged at that moment. Owner and projection functions must be pure functions of the row: the commit reuses what they returned when the merge was staged. Keep a merge inside the 50,000-operation budget for the most rows one person can hold in your app, or a guest who holds that much can never have their passes linked.
 
 The rule a merge follows: it leaves what one person would have if they had done the surviving actions themselves, in the order they happened.
 
@@ -125,7 +123,7 @@ The rule a merge follows: it leaves what one person would have if they had done 
 - A rule an action checks is applied the way the action checked it: in the order the actions happened, against the state at that moment. A cap on open questions is checked against the questions open when each one was asked, so a question answered before the next was asked frees its place, and one reopened later does not take it back. Keep where in that order a row changed state if a rule depends on it.
 - Of two writes of the same row, the later one survives, because it would have overwritten the first.
 - Counts, totals and scores are worked out again from what survives, and stored results (a tally, a leaderboard) are rebuilt.
-- A merge sees the rows, not the history, so store each action's place in a strict order whenever that order decides which row survives or how a rule applied. A time is not enough, because two actions can share a millisecond. Keep a counter row the app bumps once per action, as the `order` table above does, and compare by it.
+- A merge sees the rows, not the history, so store each action's place in a strict order whenever that order decides which row survives or how a rule applied. A time is not enough, because two actions can share a millisecond. Keep a counter row the app bumps once per action, as the `order` table above does with `actionOrderTable` and `nextActionOrder`, and compare by it.
 - A field that only records when a row last changed, such as `updatedAt`, may keep the later time.
 - An action of one subject that undid or cleared the other subject's rows saw none of them, so a merge cannot reproduce it; both effects stay.
 
@@ -135,7 +133,7 @@ Check a merge with `mergeAgainstOnePerson` in `packages/sfu/test/authority/merge
 
 The four things a module has:
 
-- **Tables.** Keyed rows with a row cap. Writes happen only inside a handler's transaction: `get`, `insertIfAbsent`, `put`, `delete`, `clear`, `count` and `scan` by key prefix. Committed rows are frozen.
+- **Tables.** Keyed rows with a row cap. Writes happen only inside a handler's transaction: `get`, `insertIfAbsent`, `put`, `delete`, `clear`, `count` and `scan` by key prefix. A table too large to read in one transaction is scanned a page at a time, with `scan(table, prefix, { offset, limit })`. Committed rows are frozen.
 - **Actions.** A role list, an optional `when` condition, a rate, and a synchronous handler. The host checks the gate and parses the input before your code runs. Return the receipt, or call `reject("reason")` to refuse and keep nothing.
 - **Views.** A shared view is projected once per audience role and cannot see who is looking. A personal view names an `owner` and reaches every connection of that subject and nobody else. Someone who opens the app is handed the rows as committed, so hiding a row takes effect for new viewers at once. People already watching are told within a flush interval.
 - **Timers.** `tx.schedule(kind, key, atMs, payload)` inside a transaction, handled in `onTimer`. Recheck the phase in the handler: a timer for a round that has moved on should do nothing. Handlers are synchronous. An `async` timer handler does not compile, and any handler that returns a promise is a fault that keeps none of its writes.
@@ -185,7 +183,7 @@ export function SignUpPanel() {
 }
 ```
 
-`state.kind` is `ready` once the server has sent the view. `unsupported` means this server does not offer the app to this connection, which includes every SFU that predates the runtime. Hide the app's entry points in that case with `useAuthorityAvailable(contract)`.
+`state.kind` is `ready` once the server has sent the view. `unsupported` means this server does not offer the app to this connection, which includes every SFU that predates the runtime. Hide the app's entry points in that case with `useAuthorityAvailable(contract)`. `useAuthorityRuntime()` says why: `unsupported` when the server runs no such apps at all, which is the case to explain to people, as the Apps panel does with "Needs a server update".
 
 `act` resolves with the server's answer. If the answer is lost it resends under the same operation id, so one press is one action.
 

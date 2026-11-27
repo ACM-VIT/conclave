@@ -5,8 +5,9 @@
 enum ScreenCaptureManager {
     static var onProjectionRevoked: (() -> Void)?
 
-    static func requestCapture() async -> Bool { fatalError() }
-    static func isCaptureActive() -> Bool { fatalError() }
+    static func requestConsent() async -> Int? { fatalError() }
+    static func isConsentActive(_ grant: Int) -> Bool { fatalError() }
+    static func releaseConsent(_ grant: Int) { fatalError() }
     static func stopCapture() { fatalError() }
 
     static func lastStartFailure() -> ScreenShareFailure { fatalError() }

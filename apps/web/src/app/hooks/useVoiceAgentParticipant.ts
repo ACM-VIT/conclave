@@ -28,6 +28,7 @@ import {
   type AudioProducerNetworkProfile,
 } from "../lib/constants";
 import { getBrowserNetworkSnapshot } from "../lib/network-information";
+import { ServerError } from "../lib/server-error";
 import { resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
 import { captureGeneration, createHeldDestination } from "../lib/media-captures";
 
@@ -482,7 +483,7 @@ const joinRoomAsAgent = async (
         settled = true;
         window.clearTimeout(timeoutId);
         if ("error" in response) {
-          reject(getJoinRoomRedirectError(response) ?? new Error(response.error));
+          reject(getJoinRoomRedirectError(response) ?? new ServerError(response.error));
           return;
         }
         if (response.status === "waiting") {
@@ -514,7 +515,7 @@ const createProducerTransport = async (
         settled = true;
         window.clearTimeout(timeoutId);
         if ("error" in response) {
-          reject(new Error(response.error));
+          reject(new ServerError(response.error));
           return;
         }
         resolve(response);
@@ -550,7 +551,7 @@ const createProducerTransport = async (
           settled = true;
           window.clearTimeout(timeoutId);
           if ("error" in response) {
-            errback(new Error(response.error));
+            errback(new ServerError(response.error));
             return;
           }
           callback();
@@ -588,7 +589,7 @@ const createProducerTransport = async (
           settled = true;
           window.clearTimeout(timeoutId);
           if ("error" in response) {
-            errback(new Error(response.error));
+            errback(new ServerError(response.error));
             return;
           }
           callback({ id: response.producerId });
@@ -1276,7 +1277,7 @@ export function useVoiceAgentParticipant({
       const token = joinInfo?.token?.trim();
       const sfuUrl = joinInfo?.sfuUrl?.trim();
       if (!joinInfoResponse.ok || !token || !sfuUrl) {
-        throw new Error(joinInfo?.error ?? "Failed to create SFU token for voice agent.");
+        throw new ServerError(joinInfo?.error ?? "Failed to create SFU token for voice agent.");
       }
       if (runtimeRef.current !== runtime) return;
 

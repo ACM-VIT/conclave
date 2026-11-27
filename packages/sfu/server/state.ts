@@ -18,6 +18,7 @@ import {
   type SchedulingStore,
 } from "./scheduling.js";
 import { createRoomRegistry, type RoomRegistry } from "./roomRegistry.js";
+import { createPersistenceFence, type PersistenceFence } from "./persistenceFence.js";
 import {
   createTranscriptRelayRegistry,
   type TranscriptRelayRegistry,
@@ -50,6 +51,7 @@ export type SfuState = {
   scheduledMeetingPersistence: ScheduledMeetingPersistence | null;
   scheduling: SchedulingStore;
   schedulingPersistence: SchedulingPersistence | null;
+  persistenceFence: PersistenceFence;
   roomRegistry: RoomRegistry;
   transcriptRelays: TranscriptRelayRegistry;
   /** Null when this SFU does not run authority apps. */
@@ -77,6 +79,7 @@ export const createSfuState = (options?: {
     scheduledMeetingPersistence: null,
     scheduling: createSchedulingStore(),
     schedulingPersistence: null,
+    persistenceFence: createPersistenceFence(),
     roomRegistry: options?.roomRegistry ?? createRoomRegistry(config),
     transcriptRelays: createTranscriptRelayRegistry(config.transcriptRelay),
     appsAuthority:

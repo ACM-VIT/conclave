@@ -17,7 +17,10 @@ class ScreenCaptureService : Service() {
         const val NOTIFICATION_ID = 2
         const val ACTION_START = "conclave.app.action.START_SCREEN_CAPTURE"
         const val ACTION_STOP = "conclave.app.action.STOP_SCREEN_CAPTURE"
+        internal const val EXTRA_GRANT = "conclave.app.extra.SCREEN_CAPTURE_GRANT"
     }
+
+    private var foregroundedGrant: Int? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -27,6 +30,10 @@ class ScreenCaptureService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                if (intent.hasExtra(EXTRA_GRANT) &&
+                    !ScreenCaptureManager.captureServiceCanStop(intent.getIntExtra(EXTRA_GRANT, 0))) {
+                    return START_STICKY
+                }
                 stopForegroundCompat()
                 stopSelf()
                 return START_NOT_STICKY
@@ -53,7 +60,8 @@ class ScreenCaptureService : Service() {
                     return START_NOT_STICKY
                 }
 
-                if (!ScreenCaptureManager.onServiceForegrounded()) {
+                foregroundedGrant = ScreenCaptureManager.onServiceForegrounded()
+                if (foregroundedGrant == null) {
                     stopForegroundCompat()
                     stopSelf()
                     return START_NOT_STICKY
@@ -71,7 +79,7 @@ class ScreenCaptureService : Service() {
     override fun onDestroy() {
         super.onDestroy()
 
-        ScreenCaptureManager.onHostStopped(ScreenShareServiceHost.captureService)
+        foregroundedGrant?.let { ScreenCaptureManager.onHostStopped(ScreenShareServiceHost.captureService, it) }
     }
 
     private fun stopForegroundCompat() {

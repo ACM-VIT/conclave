@@ -28,8 +28,9 @@ export default function MeetingInfoTag({
   const time = useClock();
   const [copied, setCopied] = useState(false);
   const copiedTimer = useRef<number | null>(null);
+  const meetingLink = roomId ? meetingLinkFor(roomId, clientId) : null;
   const hint = useOneTimeHint("copy-room-code", {
-    enabled: Boolean(roomId),
+    enabled: Boolean(meetingLink),
     delay: 1800,
   });
 
@@ -51,15 +52,15 @@ export default function MeetingInfoTag({
     window.matchMedia?.("(hover: hover)").matches === true;
 
   const handleCopy = useCallback(() => {
-    if (!roomId) return;
-    void copyText(meetingLinkFor(roomId, clientId)).then((ok) => {
+    if (!meetingLink) return;
+    void copyText(meetingLink).then((ok) => {
       if (!ok) return;
       hint.dismiss();
       setCopied(true);
       if (copiedTimer.current) window.clearTimeout(copiedTimer.current);
       copiedTimer.current = window.setTimeout(() => setCopied(false), 1500);
     });
-  }, [roomId, clientId, hint]);
+  }, [meetingLink, hint]);
 
   const content = (
     <div className="flex min-w-0 items-center gap-1.5 text-[12px] font-medium leading-none">
@@ -101,7 +102,7 @@ export default function MeetingInfoTag({
 
   return (
     <div className="relative inline-flex min-w-0">
-      {roomId ? (
+      {meetingLink ? (
         <button
           type="button"
           onClick={handleCopy}
@@ -116,7 +117,7 @@ export default function MeetingInfoTag({
       ) : (
         content
       )}
-      {hint.visible && !copied ? (
+      {meetingLink && hint.visible && !copied ? (
         <span
           className="pointer-events-none absolute bottom-full left-0 mb-2 inline-flex items-center gap-1 whitespace-nowrap text-[11px] font-medium animate-[meet-popover-in_150ms_cubic-bezier(0.22,1,0.36,1)]"
           style={{ color: color.textFaint }}
