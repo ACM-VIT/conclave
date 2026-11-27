@@ -5,6 +5,7 @@ import { linkOriginIsKnown } from "../../lib/meeting-origin";
 import { canonicalizeSfuClientId, resolveMeetingClientId } from "../../lib/sfu-client-id";
 import type {
   MeetError,
+  MeetFailureReason,
   MeetMediaDevice,
   MeetMediaDeviceCause,
   ReactionOption,
@@ -103,6 +104,17 @@ export function extractRoomCode(input: string): string {
   return sanitizeRoomCode(trimmed);
 }
 
+/** An error that knows why it happened, so reports need not read its message. */
+export class MeetFailure extends Error {
+  constructor(
+    message: string,
+    readonly reason: MeetFailureReason,
+  ) {
+    super(message);
+    this.name = "MeetFailure";
+  }
+}
+
 export type CodeFieldPaste =
   | { kind: "insert"; text: string }
   | { kind: "replace"; code: string; clientId: string | null };
@@ -117,6 +129,7 @@ export const APP_ROUTE_SEGMENTS = [
   "api",
   "book",
   "delete-account",
+  "ingest",
   "privacy",
   "schedule",
   "sfu-admin",
@@ -622,6 +635,16 @@ export function mediaErrorAdvice(error: MeetError): string | null {
 export function createMeetError(
   error: unknown,
   defaultCode: MeetError["code"] = "UNKNOWN",
+  device?: MeetMediaDevice,
+): MeetError {
+  const reason = error instanceof MeetFailure ? error.reason : undefined;
+  const meetError = describeMeetError(error, defaultCode, device);
+  return reason ? { ...meetError, reason } : meetError;
+}
+
+function describeMeetError(
+  error: unknown,
+  defaultCode: MeetError["code"],
   device?: MeetMediaDevice,
 ): MeetError {
   if (error instanceof Error && error.message === ROOM_NOT_FOUND_MESSAGE) {

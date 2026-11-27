@@ -82,30 +82,64 @@ export const isRedisTransientError = (error: unknown): boolean => {
   return false;
 };
 
-export const installRedisCrashGuards = (): void => {
-  process.on("unhandledRejection", (reason) => {
+export type CrashGuardReporting = {
+  /** A transient Redis error the guard swallowed. */
+  onSuppressed?: (error: unknown, event: CrashEvent) => void;
+  /** A fatal error; the process exits once the returned promise settles. */
+  onFatal?: (error: unknown, event: CrashEvent) => Promise<void>;
+};
+
+type CrashEvent = "unhandledRejection" | "uncaughtException";
+
+/** The process the guards listen on and exit: this one, or a test's stand-in. */
+export type GuardedProcess = {
+  on: (event: CrashEvent, listener: (error: unknown) => void) => unknown;
+  exit: (code: number) => void;
+};
+
+export const installRedisCrashGuards = (
+  reporting: CrashGuardReporting = {},
+  target: GuardedProcess = process,
+): void => {
+  let exiting = false;
+  const exitAfterReport = (error: unknown, event: CrashEvent): void => {
+    if (exiting || !reporting.onFatal) {
+      target.exit(1);
+      return;
+    }
+    exiting = true;
+    const { onFatal } = reporting;
+    void Promise.resolve()
+      .then(() => onFatal(error, event))
+      .catch(() => {})
+      .finally(() => target.exit(1));
+  };
+
+  target.on("unhandledRejection", (reason) => {
     if (isRedisTransientError(reason)) {
       Logger.warn(
         "[Redis] Suppressed unhandled transient Redis rejection; SFU remains online.",
         reason,
       );
+      reporting.onSuppressed?.(reason, "unhandledRejection");
       return;
     }
 
     Logger.error("[Process] Unhandled promise rejection", reason);
-    process.exit(1);
+    exitAfterReport(reason, "unhandledRejection");
   });
 
-  process.on("uncaughtException", (error) => {
+  target.on("uncaughtException", (error) => {
     if (isRedisTransientError(error)) {
       Logger.warn(
         "[Redis] Suppressed uncaught transient Redis exception; SFU remains online.",
         error,
       );
+      reporting.onSuppressed?.(error, "uncaughtException");
       return;
     }
 
     Logger.error("[Process] Uncaught exception", error);
-    process.exit(1);
+    exitAfterReport(error, "uncaughtException");
   });
 };

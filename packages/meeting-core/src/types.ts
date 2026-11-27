@@ -599,6 +599,20 @@ export interface MediaState {
   videoDeviceId?: string;
 }
 
+/** Why a join or reconnect failed, as a category rather than text. */
+export type MeetFailureReason =
+  | "rejected"
+  | "invite_code"
+  | "room_not_found"
+  | "room_unavailable"
+  | "auth"
+  | "timeout"
+  | "permission_denied"
+  | "media_error"
+  | "transport_error"
+  | "connection_failed"
+  | "unknown";
+
 export type MeetMediaDevice = "camera" | "microphone" | "both";
 
 export interface MeetError {
@@ -614,6 +628,8 @@ export interface MeetError {
     | "UNKNOWN";
   message: string;
   recoverable: boolean;
+  /** Set where the cause is known, so reports need not read `message`. */
+  reason?: MeetFailureReason;
   device?: MeetMediaDevice;
   causes?: Partial<Record<"camera" | "microphone", MeetMediaDeviceCause>>;
 }

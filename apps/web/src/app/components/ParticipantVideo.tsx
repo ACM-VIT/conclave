@@ -29,6 +29,7 @@ import {
   readVideoAspect,
   resolveTileVideoFraming,
 } from "../lib/tile-video-framing";
+import { logCallError } from "../lib/call-error-capture";
 
 interface ParticipantVideoProps {
   participant: Participant;
@@ -179,7 +180,7 @@ function ParticipantVideo({
             video.play().catch(() => {});
             return;
           }
-          console.error("[Meets] Video play error:", err);
+          logCallError("[Meets] Video play error", err);
         }
       });
     };
