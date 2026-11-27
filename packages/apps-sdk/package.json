@@ -46,6 +46,7 @@
     "#authority/client": "./src/sdk/authority/client.ts",
     "#sdk/text": "./src/sdk/text.ts",
     "#sdk/graphemes": "./src/sdk/graphemes.ts",
+    "#sdk/app-doc": "./src/sdk/doc/createAppDoc.ts",
     "#native-embed/protocol": "./src/native-embed/protocol.ts"
   },
   "dependencies": {
