@@ -64,7 +64,7 @@ const runModel = (seed: number, steps: number) => {
     callsChecked: 0,
     mustCommitVerified: 0,
     heldAcrossClose: 0,
-    heldAcrossLeave: 0,
+    heldDroppedOnLeave: 0,
     neverCommitVerified: 0,
     lockedRejections: 0,
     blankRestarts: 0,
@@ -170,6 +170,18 @@ const runModel = (seed: number, steps: number) => {
   const react = () => {
     for (const peer of rooms.peers.values()) if (peer !== racer) peer.react();
   };
+  const leave = (peer: Peer) => {
+    const committed = new Set(calls
+      .filter((call) => call.socketId === peer.socketId && call.result === null)
+      .flatMap((call) => call.writeIds));
+    for (const { socketId, writeId } of rooms.sent) {
+      if (socketId !== peer.socketId || mustCommit.get(writeId) !== reference.epoch || committed.has(writeId)) continue;
+      mustCommit.delete(writeId);
+      neverCommit.add(writeId);
+      heldAcrossLeave.add(writeId);
+    }
+    peer.leave();
+  };
 
   const honestWrite = () => {
     const peer = pick(honest.filter((candidate) => candidate.connected));
@@ -232,8 +244,7 @@ const runModel = (seed: number, steps: number) => {
       const told = bursty.received.slice(seen).filter((entry) => entry.event !== "apps:yjs:update");
       expect(told, "pointless commands cost the writer nothing").toEqual([]);
     } else if (then === "leave") {
-      for (const writeId of held) heldAcrossLeave.add(writeId);
-      bursty.leave();
+      leave(bursty);
       advance(40);
       bursty = rooms.connect(`bursty-${(joined += 1)}#1`);
       burstyBucket = new ReferenceBucket();
@@ -375,11 +386,11 @@ const runModel = (seed: number, steps: number) => {
       expect(board.has(writeId), `eligible write ${writeId} committed`).toBe(true);
       observed.mustCommitVerified += 1;
       if (heldAcrossClose.delete(writeId)) observed.heldAcrossClose += 1;
-      if (heldAcrossLeave.delete(writeId)) observed.heldAcrossLeave += 1;
     }
     for (const writeId of neverCommit) {
       expect(board.has(writeId), `unauthorized write ${writeId} kept out`).toBe(false);
       observed.neverCommitVerified += 1;
+      if (heldAcrossLeave.delete(writeId)) observed.heldDroppedOnLeave += 1;
     }
   };
   const checkBudget = () => {
@@ -460,7 +471,7 @@ const runModel = (seed: number, steps: number) => {
 
   const coverers: [keyof typeof observed, () => void][] = [
     ["heldAcrossClose", () => burst("close")],
-    ["heldAcrossLeave", () => burst("leave")],
+    ["heldDroppedOnLeave", () => burst("leave")],
     ["pointlessCommands", () => burst("pointless")],
     [
       "lockedRejections",
@@ -557,7 +568,7 @@ const runModel = (seed: number, steps: number) => {
     } else if (roll < 0.77) {
       const leaving = pick(honest.filter((peer) => peer.connected));
       if (leaving && honest.filter((peer) => peer.connected).length > 2) {
-        leaving.leave();
+        leave(leaving);
         joinHonest().react();
       }
     } else if (roll < 0.79) replaceWhileHeld();

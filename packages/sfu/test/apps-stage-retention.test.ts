@@ -212,11 +212,12 @@ describe("clearing an app", () => {
   });
 
   it("stops only the cleared app's writers, and keeps each client id to its own app", () => {
-    const { join } = makeRoom();
+    const { room, join } = makeRoom();
     const host = join("host#1", "host");
     const wheelWriter = join("writer#1", "participant");
-    const boardWriter = join("writer#1", "participant");
-    const reusedId = join("writer#1", "participant");
+    const boardWriter = join("writer#2", "participant");
+    const reusedId = join("writer#3", "participant");
+    for (const id of ["writer#1", "writer#2", "writer#3"]) room.setUserIdentity(id, "writer", "Writer");
     wheelWriter.doc.clientID = 7;
     boardWriter.doc.clientID = 8;
     reusedId.doc.clientID = 7;
@@ -1253,7 +1254,7 @@ describe("room document budget", () => {
     room.close();
 
     expect(host.state()).toMatchObject({ activeAppId: null, savedAppIds: [] });
-    host.present("whiteboard");
-    expect(host.coldSync("whiteboard")).toEqual({ shapes: [] });
+    expect(host.present("whiteboard")).toMatchObject({ success: false });
+    expect(host.coldSync("whiteboard")).toEqual({ error: "App not active" });
   });
 });

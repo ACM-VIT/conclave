@@ -136,7 +136,9 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
     return {
       inbox: joiner.member.inbox,
       settle: () =>
-        joiner.call("apps:yjs:sync", { appId, syncMessage: Y.encodeStateVector(new Y.Doc()), canRetry: true }),
+        joiner.call<AppsSyncResponse | AppsSyncError>("apps:yjs:sync", {
+          appId, syncMessage: Y.encodeStateVector(new Y.Doc()), canRetry: true,
+        }),
       send: (update: Uint8Array, replicaId: string, part?: unknown) =>
         joiner.listeners.get("apps:yjs:update")!({ appId, update, replicaId, ...(part === undefined ? {} : { part }) }),
       updates: () => joiner.member.inbox.filter(({ event }) => event === "apps:yjs:update").map(({ payload }) => (payload as { update: Uint8Array }).update),
@@ -170,6 +172,12 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
     room,
     inbox: self.member.inbox,
     relayed,
+    demote: () => {
+      const client = context.currentClient!;
+      room.setUserIdentity(client.id, client.id, client.id);
+      room.demoteToParticipant(client.id);
+    },
+    lock: () => call<{ success: boolean }>("apps:lock", { locked: true }),
     get refused() {
       return refused();
     },

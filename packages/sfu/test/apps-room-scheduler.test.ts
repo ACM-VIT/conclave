@@ -423,19 +423,22 @@ describe("the update budget", () => {
     expect(boardHas(room, afterSync)).toBe(true);
   });
 
-  it("keeps a leaving participant's held strokes under the participant who wrote them", () => {
+  it("keeps committed strokes but drops held strokes after the writer leaves", () => {
     const { connect, room } = presentedBoard();
     const calls = recordWrites();
     const artist = connect("artist#1");
     artist.sync();
 
     const strokes = artist.write(UPDATE_BURST + 20);
+    const committed = strokes.filter((writeId) => boardHas(room, writeId));
+    expect(committed.length).toBeGreaterThan(0);
+    expect(committed.length).toBeLessThan(strokes.length);
     artist.leave();
     advance(2000);
 
     expect(calls.filter((call) => call.socketId === artist.socketId).length).toBeGreaterThan(0);
     expect(calls.filter((call) => call.result === "foreign-id")).toEqual([]);
-    expect(strokes.filter((writeId) => !boardHas(room, writeId))).toEqual([]);
+    expect(strokes.filter((writeId) => boardHas(room, writeId))).toEqual(committed);
   });
 
   it("keeps a guest's two linked tabs writing as one participant, and their ids theirs", () => {
@@ -449,9 +452,10 @@ describe("the update budget", () => {
     const strokes = [...first.write(3), ...second.write(3)];
     const firstClient = first.doc.clientID;
     strokes.push(...first.write(UPDATE_BURST + 10));
+    const committed = strokes.filter((writeId) => boardHas(room, writeId));
     first.leave();
     advance(2000);
-    strokes.push(...second.write(2));
+    const stillSeated = second.write(2);
     const forger = new Y.Doc();
     Y.applyUpdate(forger, Y.encodeStateAsUpdate(room.apps.liveDoc(BOARD)!));
     forger.clientID = firstClient;
@@ -463,7 +467,8 @@ describe("the update budget", () => {
     const byParticipant = (participant: string) => calls.filter((call) => call.participant === participant);
     expect(byParticipant("guest-gp_pass").length).toBeGreaterThan(0);
     expect(byParticipant("guest-gp_pass").filter((call) => call.result !== null)).toEqual([]);
-    expect(strokes.filter((writeId) => !boardHas(room, writeId))).toEqual([]);
+    expect(strokes.filter((writeId) => boardHas(room, writeId))).toEqual(committed);
+    expect(stillSeated.every((writeId) => boardHas(room, writeId))).toBe(true);
     expect(byParticipant("guest-gp_other").map((call) => call.result)).toEqual(["foreign-id"]);
     expect(room.apps.liveDoc(BOARD)!.getMap("m").has("forged")).toBe(false);
   });
