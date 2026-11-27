@@ -25,20 +25,6 @@ export const resolveServerSfuClientId = (): string =>
   canonicalizeSfuClientId(process.env.SFU_CLIENT_ID) ||
   resolveBrowserSfuClientId();
 
-export const resolveSfuClientIdCandidates = (
-  preferred?: string | null,
-): string[] => {
-  const seen = new Set<string>();
-  const candidates = [
-    canonicalizeSfuClientId(preferred),
-    resolveServerSfuClientId(),
-    CONCLAVE_SFU_CLIENT_ID,
-    "default",
-    "public",
-  ];
-  return candidates.filter((candidate): candidate is string => {
-    if (!candidate || seen.has(candidate)) return false;
-    seen.add(candidate);
-    return true;
-  });
-};
+export const resolveMeetingClientId = (
+  clientId: string | null | undefined,
+): string => canonicalizeSfuClientId(clientId) ?? resolveBrowserSfuClientId();

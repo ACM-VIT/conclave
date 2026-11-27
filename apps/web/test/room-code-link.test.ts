@@ -331,12 +331,12 @@ describe("pasting into the join code field", () => {
     expect(resolve("https://conclave.acmvit.in/review-room?clientId=public").clientId).toBe("conclave");
     expect(resolve("https://conclave.acmvit.in/review-room?clientId=a%20b")).toEqual({
       code: "review-room",
-      clientId: null,
+      clientId: "conclave",
       tooLong: false,
     });
-    expect(resolve(`https://conclave.acmvit.in/review-room?clientId=${"x".repeat(65)}`).clientId).toBeNull();
+    expect(resolve(`https://conclave.acmvit.in/review-room?clientId=${"x".repeat(65)}`).clientId).toBe("conclave");
     expect(resolve("https://conclave.acmvit.in/review-room?clientId=first&clientId=second").clientId).toBe("first");
-    expect(resolve("https://conclave.acmvit.in/review-room#clientId=review-alt").clientId).toBeNull();
+    expect(resolve("https://conclave.acmvit.in/review-room#clientId=review-alt").clientId).toBe("conclave");
     expect(resolve("review-room?clientId=review-alt")).toEqual({ code: "", clientId: null, tooLong: false });
     expect(parseCodeFieldPaste("http://localhost:3615/review-room?clientId=review-alt", KNOWN_ORIGINS)).toEqual({
       kind: "replace",
@@ -564,16 +564,16 @@ describe("typing into the join code field", () => {
     const production = "https://conclave.acmvit.in/";
     const long = typeIntoField(`${production}${CODE_40}`);
     expect(long.value).toBe(`${production}${CODE_40}`);
-    expect(resolveCodeField(long.value, KNOWN_ORIGINS)).toEqual({ code: CODE_40, clientId: null, tooLong: false });
+    expect(resolveCodeField(long.value, KNOWN_ORIGINS)).toEqual({ code: CODE_40, clientId: "conclave", tooLong: false });
     const boundaryCode = "b".repeat(64 - production.length);
     const boundary = typeIntoField(`${production}${boundaryCode}`);
     expect(boundary.value).toHaveLength(64);
-    expect(resolveCodeField(boundary.value, KNOWN_ORIGINS)).toEqual({ code: boundaryCode, clientId: null, tooLong: false });
+    expect(resolveCodeField(boundary.value, KNOWN_ORIGINS)).toEqual({ code: boundaryCode, clientId: "conclave", tooLong: false });
     const past = typeIntoField(`${production}${boundaryCode}x`);
-    expect(resolveCodeField(past.value, KNOWN_ORIGINS)).toEqual({ code: `${boundaryCode}x`, clientId: null, tooLong: false });
+    expect(resolveCodeField(past.value, KNOWN_ORIGINS)).toEqual({ code: `${boundaryCode}x`, clientId: "conclave", tooLong: false });
     const longest = "c".repeat(64);
-    expect(resolveCodeField(`${production}${longest}`, KNOWN_ORIGINS)).toEqual({ code: longest, clientId: null, tooLong: false });
-    expect(resolveCodeField(`${production}${longest}d`, KNOWN_ORIGINS)).toEqual({ code: "", clientId: null, tooLong: true });
+    expect(resolveCodeField(`${production}${longest}`, KNOWN_ORIGINS)).toEqual({ code: longest, clientId: "conclave", tooLong: false });
+    expect(resolveCodeField(`${production}${longest}d`, KNOWN_ORIGINS)).toEqual({ code: "", clientId: "conclave", tooLong: true });
     expect(resolveCodeField(`${longest}d`, KNOWN_ORIGINS)).toEqual({ code: "", clientId: null, tooLong: true });
     expect(parseCodeFieldPaste(`${production}${longest}d`, KNOWN_ORIGINS)).toEqual({
       kind: "replace",

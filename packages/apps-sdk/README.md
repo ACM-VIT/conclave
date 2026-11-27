@@ -85,7 +85,7 @@ const pollApp = defineApp({
 
 1. Define app with `defineApp(...)`.
 2. Add the definition to the host's `AppsProvider` list.
-3. Admin opens app via `useApps().openApp(appId)`.
+3. Admin presents app via `useApps().presentApp(appId)`.
 4. All clients receive `apps:state` with new `activeAppId`.
 5. Provider syncs Yjs doc + awareness for active app.
 6. App UI reads/writes doc with `useAppDoc(appId)`.

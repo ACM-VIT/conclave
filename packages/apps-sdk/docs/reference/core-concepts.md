@@ -68,8 +68,8 @@ available apps explicit and avoids mutable process-global registration state.
 
 - owns one Yjs doc per app id
 - owns one awareness instance per app id
-- keeps shared room state in context (`activeAppId`, `locked`)
-- exposes control operations (`openApp`, `closeApp`, `setLocked`, `refreshState`)
+- keeps shared room state in context (`activeAppId`, `locked`, `revision`, `savedAppIds`)
+- exposes control operations (`presentApp`, `closeApp`, `clearApp`, `setLocked`, `refreshState`)
 
 ### 4. Shared Data Model (Yjs)
 
@@ -126,7 +126,7 @@ Implication for app code:
 ## Typical Lifecycle Flow
 
 1. Host registers apps.
-2. Admin opens an app (`openApp(appId)`).
+2. Admin presents an app (`presentApp(appId)`).
 3. Server broadcasts `apps:state` with `activeAppId`.
 4. Provider syncs active app doc via `apps:yjs:sync`.
 5. App UI reads doc with `useAppDoc(appId)`.

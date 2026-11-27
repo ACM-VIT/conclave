@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, useCallback, useState } from "react";
+import { act, useEffect, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODE_FIELD_SETTLE_MS, useCodeField } from "../src/app/hooks/useCodeField";
@@ -13,29 +13,17 @@ let container: HTMLDivElement;
 let field: ReturnType<typeof useCodeField>;
 let setParentRoomId: (id: string) => void;
 let parentRoomId = "";
-let published: string[] = [];
+let lookups: string[] = [];
 
 function Parent({ initial, pageClientId }: { initial: string; pageClientId: string }) {
   const [roomId, setRoomId] = useState(initial);
   setParentRoomId = setRoomId;
   parentRoomId = roomId;
-  const onRoomIdChange = useCallback((id: string) => {
-    published.push(id);
-    setRoomId(id);
-  }, []);
-  return <Field roomId={roomId} onRoomIdChange={onRoomIdChange} pageClientId={pageClientId} />;
-}
-
-function Field({
-  roomId,
-  onRoomIdChange,
-  pageClientId,
-}: {
-  roomId: string;
-  onRoomIdChange: (id: string) => void;
-  pageClientId: string;
-}) {
-  field = useCodeField(roomId, onRoomIdChange, ORIGINS, pageClientId);
+  field = useCodeField(roomId, ORIGINS, pageClientId, true);
+  const { settledLookup } = field;
+  useEffect(() => {
+    if (settledLookup) lookups.push(settledLookup);
+  }, [settledLookup]);
   return null;
 }
 
@@ -57,14 +45,12 @@ const clear = async () => {
   await wait(1);
 };
 
-const lookups = () => published.filter((id) => id.length > 0);
-
 beforeEach(() => {
   vi.useFakeTimers();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
-  published = [];
+  lookups = [];
 });
 
 afterEach(async () => {
@@ -73,8 +59,8 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-describe("the join code field's room id", () => {
-  it("hands the meeting only a settled, resolved room code, whatever is typed", async () => {
+describe("the join code field's room lookup", () => {
+  it("looks up only a settled, resolved room code without changing the meeting room", async () => {
     await mount();
     const cases: [string, string][] = [
       ["https://internal.corp/doc?token=secret123", ""],
@@ -86,13 +72,13 @@ describe("the join code field's room id", () => {
     ];
     for (const [text, room] of cases) {
       await clear();
-      published = [];
+      lookups = [];
       await typeText(text);
-      expect({ text, typing: lookups() }).toEqual({ text, typing: [] });
+      expect({ text, typing: lookups }).toEqual({ text, typing: [] });
       await wait(CODE_FIELD_SETTLE_MS);
-      expect({ text, room: parentRoomId }).toEqual({ text, room });
-      expect({ text, lookups: lookups() }).toEqual({ text, lookups: room ? [room] : [] });
-      for (const lookup of lookups()) {
+      expect(parentRoomId).toBe("");
+      expect({ text, lookups }).toEqual({ text, lookups: room ? [room] : [] });
+      for (const lookup of lookups) {
         expect(ROOM_CODE.test(lookup) && lookup.length <= 64).toBe(true);
       }
     }
@@ -103,32 +89,35 @@ describe("the join code field's room id", () => {
     await typeText("https://conclave.acmvit.in/review-room?clientId=review-alt");
     await wait(CODE_FIELD_SETTLE_MS * 2);
     expect(field.resolution.code).toBe("review-room");
-    expect(field.tenant).toEqual({ clientId: "review-alt", onThisPage: false });
+    expect(field.destination).toEqual({ roomCode: "review-room", clientId: "review-alt" });
     expect(parentRoomId).toBe("");
-    expect(lookups()).toEqual([]);
+    expect(lookups).toEqual([]);
     await clear();
     await typeText("https://conclave.acmvit.in/review-room?clientId=default");
     await wait(CODE_FIELD_SETTLE_MS);
-    expect(field.tenant).toEqual({ clientId: "conclave", onThisPage: true });
-    expect(parentRoomId).toBe("review-room");
+    expect(field.destination).toEqual({ roomCode: "review-room", clientId: "conclave" });
+    expect(lookups).toEqual(["review-room"]);
+    expect(parentRoomId).toBe("");
   });
 
-  it("publishes at once on settle, as on paste, blur or Enter", async () => {
+  it("looks up a code at once on settle, as on paste or blur", async () => {
     await mount();
     await act(async () => {
       field.change("olive-eren-sokka");
       field.settle();
     });
     await wait(1);
-    expect(parentRoomId).toBe("olive-eren-sokka");
+    expect(lookups).toEqual(["olive-eren-sokka"]);
+    expect(parentRoomId).toBe("");
   });
 
-  it("never erases typing when a published prefix comes back from the meeting", async () => {
+  it("keeps slow typing even as it looks up settled prefixes", async () => {
     await mount();
     for (const word of ["nullable-room", "undefined-x", "true", "0", "null-0", "able-room"]) {
       await clear();
       await typeText(word, CODE_FIELD_SETTLE_MS + 50);
-      expect({ word, shown: field.text, room: parentRoomId }).toEqual({ word, shown: word, room: word });
+      expect({ word, shown: field.text, lookup: field.settledLookup }).toEqual({ word, shown: word, lookup: word });
+      expect(parentRoomId).toBe("");
     }
   });
 
@@ -136,7 +125,8 @@ describe("the join code field's room id", () => {
     await mount();
     await typeText("http://localhost:3715/olive-eren-sokka");
     await wait(CODE_FIELD_SETTLE_MS);
-    expect(parentRoomId).toBe("olive-eren-sokka");
+    expect(lookups).toEqual(["olive-eren-sokka"]);
+    expect(parentRoomId).toBe("");
     expect(field.text).toBe("http://localhost:3715/olive-eren-sokka");
     await act(async () => setParentRoomId("next-room"));
     expect(field.text).toBe("next-room");
