@@ -19,7 +19,6 @@ import {
   advanceScreenShareWatch,
   screenPacketsGoMissing,
   screenVideoAwaitingSenderCheck,
-  senderSentMore,
   readSenderPacketCounts,
   senderPacketCountsRequestFor,
   type ConsumedStream,
@@ -755,6 +754,7 @@ describe("verifying an ICE restart on a silent path", () => {
     ["one unchanged count and one omitted count", false, reply({ screen: 0, slides: 2 }, ["screen", "slides"]), reply({ screen: 0 }, ["screen", "slides"]), "unknown"],
     ["one growing count and one omitted count", false, reply({ screen: 0, slides: 2 }, ["screen", "slides"]), reply({ screen: 1 }, ["screen", "slides"]), "expected"],
     ["a newly watched consumer", false, counted(9), reply({ slides: 9 }, ["slides"]), "unknown"],
+    ["growth on a consumer no longer watched", false, reply({ screen: 5, slides: 1 }, ["screen", "slides"]), reply({ screen: 5, slides: 2 }), "not-expected"],
   ])("reads %s", (_name, expectsMedia, senderBefore, senderAfter, expectation) => {
     expect(expectationAfterIceRestart({ expectsMedia, senderBefore, senderAfter })).toBe(expectation);
   });
@@ -1031,21 +1031,14 @@ describe("telling a still screen share apart from one whose packets never arrive
     expect(readSenderPacketCounts(undefined)).toBeNull();
   });
 
-  it("counts only the sharer's growth on consumers both answers name", () => {
-    expect(senderSentMore(null, { s: 5 })).toBe(false);
-    expect(senderSentMore({ s: 5 }, null)).toBe(false);
-    expect(senderSentMore({ s: 5 }, { s: 5 })).toBe(false);
-    expect(senderSentMore({ s: 5 }, { s: 6 })).toBe(true);
-    expect(senderSentMore({ s: 5 }, { t: 900 })).toBe(false);
-    expect(senderSentMore({ s: 5, t: 2 }, { s: 5, t: 3 })).toBe(true);
-  });
-
-  type Step = { sent: Record<string, number> | null; received: boolean };
+  type Step = { sent: Record<string, number> | null; received: boolean; ids?: string[] };
   const run = (steps: Step[]): { watch: ScreenShareWatch; missing: boolean[] } => {
     let watch = INITIAL_SCREEN_SHARE_WATCH;
+    let ids = ["s"];
     const missing: boolean[] = [];
     for (const step of steps) {
-      watch = advanceScreenShareWatch(watch, step);
+      ids = step.ids ?? ids;
+      watch = advanceScreenShareWatch(watch, { ...step, asked: true, ids });
       missing.push(screenPacketsGoMissing(watch));
     }
     return { watch, missing };
@@ -1132,7 +1125,7 @@ describe("telling a still screen share apart from one whose packets never arrive
     [
       "a partial answer preserves each omitted consumer's last readable count",
       [
-        { sent: { s: 0, t: 7 }, received: false },
+        { sent: { s: 0, t: 7 }, received: false, ids: ["s", "t"] },
         { sent: { t: 7 }, received: false },
         { sent: { s: 1 }, received: false },
         { sent: {}, received: false },
@@ -1144,7 +1137,7 @@ describe("telling a still screen share apart from one whose packets never arrive
       "a replaced consumer starts from its own first count",
       [
         { sent: { s: 25 }, received: false },
-        { sent: { t: 900 }, received: false },
+        { sent: { t: 900 }, received: false, ids: ["t"] },
         { sent: { t: 900 }, received: false },
         { sent: { t: 950 }, received: false },
       ],

@@ -310,7 +310,6 @@ class Call {
     if (("sent" in evidence) !== (direction === "producer")) {
       this.problems.push(`${at}: ${direction} was given the other direction's kind of evidence`);
     }
-    const failingBefore = new Set(this.knownFailing);
     const judged = Object.entries(sentStreams(evidence)) as Array<[(typeof STREAMS)[number], StreamDelivery]>;
     const carries = pathCarriesWhatIsSent(evidence, this.recovery[direction].failingStreams);
     const sawSomethingArrive =
@@ -318,15 +317,8 @@ class Call {
         ? evidence.received
         : judged.some(([, delivery]) => delivery === "delivered");
     const everythingSentAccountedFor = judged.every(
-      ([name, delivery]) =>
-        delivery === "delivered" || (delivery === "quiet" && !failingBefore.has(name)),
+      ([, delivery]) => delivery === "delivered" || delivery === "quiet",
     );
-    if (carries !== (sawSomethingArrive && everythingSentAccountedFor)) {
-      this.problems.push(
-        `${at}: ${direction} was taken as ${carries ? "carrying" : "not carrying"} what is sent on ${JSON.stringify(evidence)} with [${[...failingBefore].join(",")}] known failing`,
-      );
-    }
-    if (carries) this.takeAsCarried(direction, at);
     for (const [name, delivery] of judged) {
       const stream = this.streams[name];
       if (!exact) {
@@ -355,6 +347,12 @@ class Call {
       sawSomethingArrive &&
       everythingSentAccountedFor &&
       (direction === "consumer" || this.knownFailing.size === 0);
+    if (carries !== proven) {
+      this.problems.push(
+        `${at}: ${direction} was taken as ${carries ? "carrying" : "not carrying"} media on ${JSON.stringify(evidence)} with [${[...this.knownFailing].join(",")}] still failing`,
+      );
+    }
+    if (carries) this.takeAsCarried(direction, at);
     if (proven) this.forget(direction);
     this.commit(
       advanceMediaPathRecovery(this.recovery, { type: "path-sampled", direction, evidence }),
@@ -412,7 +410,10 @@ class Call {
     const shouldCarry =
       this.works[direction] &&
       answered &&
-      (direction === "consumer" || (this.sentInWindow > 0 && !this.dropsSentPackets)) &&
+      (direction === "consumer" ||
+        (this.sentInWindow > 0 &&
+          !this.dropsSentPackets &&
+          [...this.knownFailing].every((name) => worlds.some(({ stream }) => stream === name)))) &&
       worlds.every(({ stream, world }) =>
         world.sending ? world.arrives : !this.knownFailing.has(stream),
       );
@@ -452,6 +453,7 @@ class Call {
       direction === "consumer"
         ? this.arrivedOnTransport.consumer > 0
         : worlds.some(({ world }) => world.arrived > 0) &&
+          [...this.knownFailing].every((name) => worlds.some(({ stream }) => stream === name)) &&
           worlds.every(
             ({ stream, world }) =>
               world.arrived > 0 || (world.sent === 0 && !this.knownFailing.has(stream)),

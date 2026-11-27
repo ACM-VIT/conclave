@@ -13,8 +13,6 @@ export type ReconnectRequest = {
    * transports get current TURN credentials instead of the ones that failed.
    */
   refreshIceServers?: boolean;
-  /** The media directions whose transports failed, for a media-path rebuild. */
-  failedDirections?: MediaDirection[];
   /**
    * Build the new transports through TURN alone if the credentials fetched
    * for the rebuild have a relay, and the failure that asked for it.
@@ -27,6 +25,7 @@ export type FailedMediaPath = {
   direction: MediaDirection;
   transportId: string;
   generation: number;
+  ownsEscalation?: true;
 };
 
 /**
@@ -36,10 +35,7 @@ export type FailedMediaPath = {
 export const planMediaRebuildScope = (
   request: ReconnectRequest | undefined,
   { socketConnected }: { socketConnected: boolean },
-): MediaDirection | null => {
-  const failed = new Set(request?.failedDirections ?? []);
-  return socketConnected && failed.size === 1 ? [...failed][0] : null;
-};
+): FailedMediaPath | null => socketConnected ? (request?.failedPath ?? null) : null;
 
 export type InFlightReconnectDecision = {
   markUserRetry: boolean;
@@ -110,8 +106,8 @@ export const planScopedRebuild = ({
   probe: PathProbe;
   failedPathChanged: boolean;
 }): ScopedRebuildPlan => {
-  if (probe === "cancelled") return "rejoin-after-cancelled-check";
   if (failedPathChanged) return "keep-replaced-path";
+  if (probe === "cancelled") return "rejoin-after-cancelled-check";
   if (probe === "carrying") return "keep-proven-path";
   return probe === "sending-nothing" ? "keep-quiet-path" : "rebuild";
 };

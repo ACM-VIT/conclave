@@ -231,27 +231,19 @@ describe("the socket a failed reconnect attempt leaves open", () => {
 });
 
 describe("how much a media failure rebuilds", () => {
-  it("rebuilds only the failed direction while signaling is up", () => {
+  it.each(["consumer", "producer"] as const)("rebuilds only the failed %s path while signaling is up", (direction) => {
+    const failedPath = { direction, transportId: "failed", generation: 2 };
     expect(
-      planMediaRebuildScope({ failedDirections: ["consumer"] }, { socketConnected: true }),
-    ).toBe("consumer");
-    expect(
-      planMediaRebuildScope({ failedDirections: ["producer"] }, { socketConnected: true }),
-    ).toBe("producer");
-  });
-
-  it("rejoins when both directions failed", () => {
-    expect(
-      planMediaRebuildScope(
-        { failedDirections: ["producer", "consumer"] },
-        { socketConnected: true },
-      ),
-    ).toBeNull();
+      planMediaRebuildScope({ failedPath }, { socketConnected: true }),
+    ).toEqual(failedPath);
   });
 
   it("rejoins when signaling is down or the request is not about one direction", () => {
     expect(
-      planMediaRebuildScope({ failedDirections: ["consumer"] }, { socketConnected: false }),
+      planMediaRebuildScope(
+        { failedPath: { direction: "consumer", transportId: "failed", generation: 2 } },
+        { socketConnected: false },
+      ),
     ).toBeNull();
     expect(planMediaRebuildScope({ refreshIceServers: true }, { socketConnected: true })).toBeNull();
     expect(planMediaRebuildScope(undefined, { socketConnected: true })).toBeNull();
@@ -353,7 +345,6 @@ describe("the recovery a Retry starts fresh", () => {
     expect(rebuiltOnce.step).toBe("reconnect-relay-only");
     const scoped = freshReconnectAttemptState({
       refreshIceServers: true,
-      failedDirections: ["consumer"],
       relayOnly: { reason: "Consumer transport carried no media" },
     });
     const waitingForRoom: ReconnectAttemptState = {
@@ -382,7 +373,7 @@ describe("the recovery a Retry starts fresh", () => {
 describe("what a reconnect run does once its check of the failed path ends", () => {
   it.each<[PathProbe, boolean, string]>([
     ["cancelled", false, "rejoin-after-cancelled-check"],
-    ["cancelled", true, "rejoin-after-cancelled-check"],
+    ["cancelled", true, "keep-replaced-path"],
     ["carrying", false, "keep-proven-path"],
     ["carrying", true, "keep-replaced-path"],
     ["sending-nothing", false, "keep-quiet-path"],

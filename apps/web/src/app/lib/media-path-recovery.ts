@@ -269,11 +269,11 @@ export const pathCarriesWhatIsSent = (
   evidence: PathEvidence,
   knownFailing: readonly SentStream[],
 ): boolean =>
-  sawDelivery(evidence) &&
-  judgedStreams(sentStreams(evidence)).every(
-    ({ stream, delivery }) =>
-      delivery === "delivered" || (delivery === "quiet" && !knownFailing.includes(stream)),
-  );
+  "sent" in evidence
+    ? sawDelivery(evidence) &&
+      failingStreamsAfter(knownFailing, evidence.sent).length === 0 &&
+      judgedStreams(evidence.sent).every(({ delivery }) => delivery !== "unconfirmed")
+    : evidence.received;
 
 export type PathCheck = "carries" | "sends-nothing" | "fails";
 
@@ -463,7 +463,7 @@ export const advanceMediaPathWatch = (
 
 export type SenderPacketsReading =
   | { asked: false }
-  | { asked: true; sent: SenderPacketCounts | null };
+  | { asked: true; ids: readonly string[]; sent: SenderPacketCounts | null };
 
 export type MediaExpectation = "expected" | "not-expected" | "unknown";
 
@@ -478,10 +478,9 @@ export const expectationAfterIceRestart = ({
 }): MediaExpectation => {
   if (expectsMedia) return "expected";
   if (!senderAfter.asked) return "not-expected";
-  if (!senderBefore.asked || senderBefore.sent === null || senderAfter.sent === null) {
-    return "unknown";
-  }
-  return senderSentMore(senderBefore.sent, senderAfter.sent) ? "expected" : "not-expected";
+  if (!senderBefore.asked) return "unknown";
+  const change = compareSenderPackets(senderAfter.ids, senderBefore.sent, senderAfter.sent);
+  return change === "grew" ? "expected" : change === "unread" ? "unknown" : "not-expected";
 };
 
 export type IceRestartVerdict =
@@ -699,11 +698,12 @@ export const advanceMediaPathRecovery = (
         recovery,
       );
     case "path-sampled": {
-      const known = recovery[event.direction].failingStreams;
-      const failingStreams = failingStreamsAfter(known, sentStreams(event.evidence));
-      return failingStreams.length === 0 && pathCarriesWhatIsSent(event.evidence, known)
+      const knownFailing = recovery[event.direction].failingStreams;
+      return pathCarriesWhatIsSent(event.evidence, knownFailing)
         ? restartDirection(recovery, event.direction)
-        : patchDirection(recovery, event.direction, { failingStreams });
+        : patchDirection(recovery, event.direction, {
+            failingStreams: failingStreamsAfter(knownFailing, sentStreams(event.evidence)),
+          });
     }
     case "trouble":
       return patchDirection(recovery, event.direction, {
@@ -913,41 +913,47 @@ export const readSenderPacketCounts = (answer: unknown): SenderPacketCounts | nu
   return parsed.success ? parsed.data.counts : null;
 };
 
-export const senderSentMore = (
+const readPacketCount = (counts: SenderPacketCounts | null, id: string): number | undefined =>
+  counts !== null && Object.hasOwn(counts, id) ? counts[id] : undefined;
+
+const compareSenderPackets = (
+  ids: readonly string[],
   previous: SenderPacketCounts | null,
   current: SenderPacketCounts | null,
-): boolean =>
-  previous !== null &&
-  current !== null &&
-  Object.entries(current).some(
-    ([consumerId, sent]) =>
-      consumerId in previous && sent > previous[consumerId],
-  );
+): "grew" | "unread" | "unchanged" => {
+  let unread = false;
+  for (const id of ids) {
+    const before = readPacketCount(previous, id);
+    const after = readPacketCount(current, id);
+    if (before === undefined || after === undefined) unread = true;
+    else if (after > before) return "grew";
+  }
+  return unread ? "unread" : "unchanged";
+};
 
 export const SCREEN_PACKETS_LOST_SAMPLES = 2;
 
 export type ScreenShareWatch = {
-  sent: SenderPacketCounts | null;
+  sent: SenderPacketCounts;
   samplesSentWithoutArrival: number;
 };
 
 export const INITIAL_SCREEN_SHARE_WATCH: ScreenShareWatch = {
-  sent: null,
+  sent: {},
   samplesSentWithoutArrival: 0,
 };
 
 export const advanceScreenShareWatch = (
   watch: ScreenShareWatch,
-  { sent, received }: { sent: SenderPacketCounts | null; received: boolean },
+  { ids, sent, received }: Extract<SenderPacketsReading, { asked: true }> & { received: boolean },
 ): ScreenShareWatch => {
-  if (sent === null) {
-    return received ? { ...watch, samplesSentWithoutArrival: 0 } : watch;
-  }
-  if (received) return { sent, samplesSentWithoutArrival: 0 };
+  const grew = compareSenderPackets(ids, watch.sent, sent) === "grew";
   return {
-    sent,
-    samplesSentWithoutArrival:
-      watch.samplesSentWithoutArrival + (senderSentMore(watch.sent, sent) ? 1 : 0),
+    sent: Object.fromEntries(ids.flatMap((id) => {
+      const count = readPacketCount(sent, id) ?? readPacketCount(watch.sent, id);
+      return count === undefined ? [] : [[id, count]];
+    })),
+    samplesSentWithoutArrival: received ? 0 : watch.samplesSentWithoutArrival + Number(grew),
   };
 };
 

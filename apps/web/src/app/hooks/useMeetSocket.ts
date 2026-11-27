@@ -1649,11 +1649,11 @@ export function useMeetSocket({
       console.warn(`[Meets] ${reason}. Rebuilding the ${transportKind} transport.`);
       void handleReconnectRef.current({
         refreshIceServers: true,
-        failedDirections: [transportKind],
         failedPath: {
           direction: transportKind,
           transportId: transport.id,
           generation: reconnectGenerationRef.current,
+          ownsEscalation: true,
         },
         ...(step === "reconnect-relay-only" ? { relayOnly: { reason } } : {}),
       });
@@ -1747,6 +1747,7 @@ export function useMeetSocket({
           return;
         }
         decision.running = true;
+        const generation = reconnectGenerationRef.current;
         try {
           const sampled = new Map<"producer" | "consumer", Transport>();
           for (const direction of directions) {
@@ -1755,19 +1756,22 @@ export function useMeetSocket({
             const reading = await readCarriedMediaRef.current(direction, transport);
             if (reading !== "unread") sampled.set(direction, transport);
           }
-          const moves = reconcileRelayPaths(readState(), "keep").moveOntoRelay.filter(
+          if (generation !== reconnectGenerationRef.current) return;
+          const moves = reconcileRelayPaths(readState(), "keep").moveOntoRelay.flatMap(
             (direction) => {
               const transport = sampled.get(direction);
-              return transport !== undefined && transport === transportOf(direction);
+              return transport !== undefined && transport === transportOf(direction)
+                ? [{ direction, transportId: transport.id, generation }]
+                : [];
             },
           );
           if (moves.length === 0) return;
           console.warn(
-            `[Meets] TURN credentials are back; moving the ${moves.join(" and ")} transport onto the relay.`,
+            `[Meets] TURN credentials are back; moving the ${moves.map(({ direction }) => direction).join(" and ")} transport onto the relay.`,
           );
           void handleReconnectRef.current?.({
             refreshIceServers: false,
-            failedDirections: moves,
+            failedPath: moves.length === 1 ? moves[0] : undefined,
             relayOnly: { reason: "relay credentials are back" },
           });
         } finally {
@@ -6562,14 +6566,15 @@ export function useMeetSocket({
         return NOT_ASKED;
       }
       return new Promise<SenderPacketsReading>((resolve) => {
+        const reply = (sent: SenderPacketCounts | null) =>
+          resolve({ asked: true, ids: request.consumerIds, sent });
         emitWithAckTimeout(
           socket,
           SENDER_PACKET_COUNT_TIMEOUT_MS,
-          () => resolve({ asked: true, sent: null }),
+          () => reply(null),
           "getSenderPacketCounts",
           request,
-          (answer: unknown) =>
-            resolve({ asked: true, sent: readSenderPacketCounts(answer) }),
+          (answer: unknown) => reply(readSenderPacketCounts(answer)),
         );
       });
     };
@@ -6596,14 +6601,15 @@ export function useMeetSocket({
         return NOT_ASKED;
       }
       return new Promise<SenderPacketsReading>((resolve) => {
+        const reply = (sent: SenderPacketCounts | null) =>
+          resolve({ asked: true, ids: request.producerIds, sent });
         emitWithAckTimeout(
           socket,
           SENDER_PACKET_COUNT_TIMEOUT_MS,
-          () => resolve({ asked: true, sent: null }),
+          () => reply(null),
           "getOwnPacketCounts",
           request,
-          (answer: unknown) =>
-            resolve({ asked: true, sent: readSenderPacketCounts(answer) }),
+          (answer: unknown) => reply(readSenderPacketCounts(answer)),
         );
       });
     };
@@ -6775,7 +6781,7 @@ export function useMeetSocket({
       entry.screen =
         transport.connectionState === "connected" && sender.asked
           ? advanceScreenShareWatch(entry.screen, {
-              sent: sender.sent,
+              ...sender,
               received: rtpBytesMoved(entry.watch.lastReading, reading) > 0,
             })
           : INITIAL_SCREEN_SHARE_WATCH;
@@ -7500,28 +7506,24 @@ export function useMeetSocket({
           kind === "producer"
             ? producerTransportRef.current
             : consumerTransportRef.current;
-        const restartedTransports = disconnectedTransportKinds.map(currentTransport);
+        const generation = reconnectGenerationRef.current;
+        const restartedTransports = disconnectedTransportKinds.flatMap((direction) => {
+          const transport = currentTransport(direction);
+          return transport ? [{ direction, transport }] : [];
+        });
         void Promise.all(
-          disconnectedTransportKinds.map((kind, index) => {
-            const transport = restartedTransports[index];
-            return transport ? attemptIceRestart(kind, transport) : Promise.resolve(false);
-          }),
+          restartedTransports.map(({ direction, transport }) => attemptIceRestart(direction, transport)),
         ).then((results) => {
-          if (intentionalDisconnectRef.current) return;
+          if (intentionalDisconnectRef.current || generation !== reconnectGenerationRef.current) return;
           // A transport replaced on purpose while its restart was checked
           // says nothing about the path in use now.
-          const failedKindsStillInUse = disconnectedTransportKinds.filter(
-            (kind, index) => {
-              const transport = restartedTransports[index];
-              return (
-                !results[index] &&
-                Boolean(transport) &&
-                transport === currentTransport(kind) &&
-                !transport?.closed
-              );
-            },
+          const failedPaths = restartedTransports.flatMap(
+            ({ direction, transport }, index) =>
+              !results[index] && transport === currentTransport(direction) && !transport.closed
+                ? [{ direction, transportId: transport.id, generation }]
+                : [],
           );
-          if (failedKindsStillInUse.length === 0) {
+          if (failedPaths.length === 0) {
             void syncProducers()
               .then(() => flushPendingProducers())
               .catch((error) => {
@@ -7534,7 +7536,7 @@ export function useMeetSocket({
           }
           void handleReconnectRef.current?.({
             refreshIceServers: true,
-            failedDirections: failedKindsStillInUse,
+            failedPath: failedPaths.length === 1 ? failedPaths[0] : undefined,
           });
         });
         return;
@@ -10101,8 +10103,9 @@ export function useMeetSocket({
 
   const handleReconnect = useCallback(async (options?: ReconnectRequest) => {
     const failedPath = options?.failedPath;
+    if (failedPath && failedPath.generation !== reconnectGenerationRef.current) return;
     const noteEscalation = (type: "rebuild-started" | "escalation-settled") => {
-      if (!failedPath) return;
+      if (!failedPath?.ownsEscalation) return;
       updateMediaPathRecovery({
         type,
         direction: failedPath.direction,
@@ -10182,11 +10185,12 @@ export function useMeetSocket({
       // One direction failed while signaling is up: get current credentials
       // with the working direction still flowing, then rebuild only the
       // failed one. Rejoin only if that does not work.
-      const scopedDirection = planMediaRebuildScope(options, {
+      const scopedPath = planMediaRebuildScope(options, {
         socketConnected: socketRef.current?.connected === true,
       });
       const scopedRoomId = currentRoomIdRef.current;
-      if (scopedDirection && scopedRoomId) {
+      if (scopedPath && scopedRoomId) {
+        const { direction: scopedDirection, transportId } = scopedPath;
         if (attemptState.refreshIceServers) {
           attemptState.refreshIceServers = false;
           await refreshIceServersOnOpenSocket(scopedRoomId);
@@ -10194,7 +10198,6 @@ export function useMeetSocket({
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
         if (intentionalDisconnectRef.current) return;
         const failedPathChanged = (): boolean => {
-          if (!failedPath || failedPath.direction !== scopedDirection) return false;
           const transport =
             scopedDirection === "producer"
               ? producerTransportRef.current
@@ -10202,8 +10205,7 @@ export function useMeetSocket({
           return (
             !transport ||
             transport.closed ||
-            transport.id !== failedPath.transportId ||
-            failedPath.generation !== reconnectGenerationRef.current
+            transport.id !== transportId
           );
         };
         let outcome: ScopedRebuildOutcome;
@@ -10213,7 +10215,8 @@ export function useMeetSocket({
           : await carriesMediaNowRef.current(scopedDirection);
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
         if (intentionalDisconnectRef.current) return;
-        if (evidence) {
+        const pathChanged = failedPathChanged();
+        if (evidence && !pathChanged) {
           updateMediaPathRecovery({
             type: "path-sampled",
             direction: scopedDirection,
@@ -10222,7 +10225,7 @@ export function useMeetSocket({
         }
         const plan = planScopedRebuild({
           probe,
-          failedPathChanged: failedPathChanged(),
+          failedPathChanged: pathChanged,
         });
         if (plan === "rejoin-after-cancelled-check") {
           outcome = "failed";
