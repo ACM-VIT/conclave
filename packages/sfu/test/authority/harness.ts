@@ -355,7 +355,8 @@ export class Harness {
           });
     this.room.setUserIdentity(seatId, who.userKey, who.name);
     if (who.role === "host" && !this.room.hostUserKey) {
-      this.room.hostUserKey = who.userKey;
+      this.room.grantHost(who.userKey, "fallback");
+      this.room.makePrimaryHost(who.userKey);
     }
     this.room.addClient(seat);
 

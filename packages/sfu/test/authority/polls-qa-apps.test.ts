@@ -14,6 +14,7 @@ import { pollsAuthority } from "@conclave/apps-sdk/polls/server";
 import { QA_MAX_BOOK_BYTES, qaContract } from "@conclave/apps-sdk/qa/core";
 import { qaAuthority } from "@conclave/apps-sdk/qa/server";
 import { DISPLAY_NAME_MAX_LENGTH, type Subject } from "@conclave/apps-sdk/authority/server";
+import { applyHostGrant } from "../../server/admin/controlPlane.js";
 import { AuthorityInstance, type Actor } from "../../server/apps/authority/instance.js";
 import { DEFAULT_AUTHORITY_LIMITS } from "../../server/apps/authority/limits.js";
 import { answer } from "./answer.js";
@@ -1012,7 +1013,7 @@ describe("the five findings from PR #260's review", () => {
     const room = new Harness([pollsAuthority, qaAuthority]);
     const hostTab = await room.open(host, pollsContract);
     const cohostPolls = await room.open(ravi, pollsContract, { session: "polls" });
-    room.room.promoteClientToAdmin(cohostPolls.seat.id);
+    expect(applyHostGrant(room.room, { userKey: ravi.userKey, basis: "promoted" })).toHaveLength(1);
     const priyaTab = await room.open(priya, pollsContract);
     const pollId = await createPoll(room, hostTab);
     const framesAtRemoval = cohostPolls.frames.length;
@@ -1073,7 +1074,7 @@ describe("the five findings from PR #260's review", () => {
     expect(raviTab.row("results", pollId)).toBeNull();
 
     // Nothing else happens in the room after the promotion.
-    room.room.promoteClientToAdmin(raviTab.seat.id);
+    expect(applyHostGrant(room.room, { userKey: ravi.userKey, basis: "promoted" })).toHaveLength(1);
     await room.deliver();
 
     const state = raviTab.state;

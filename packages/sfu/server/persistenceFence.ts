@@ -11,8 +11,7 @@ import type { SchedulingPersistence } from "./scheduling.js";
 // were made, and the hold answers once every call already under way has
 // finished, so the backup copies SQLite and Redis at one point in time. The
 // release starts the queued calls in that order. Each caller gets its own
-// call's result or error. Only persistence waits on the gate: media and
-// signalling never await it, and the services serve from memory.
+// call's result or error. Live media does not wait on this gate.
 // A hold belongs to the owner token that took it. Only that token renews or
 // releases it, it lifts itself at its deadline if the backup never comes
 // back, and no renewal keeps it past MAX_PERSISTENCE_FENCE_MS from when it
@@ -153,6 +152,16 @@ export const fenceScheduledMeetingPersistence = (
       }),
     // A load can write too: Redis migrates the fallback's meetings into itself.
     load: () => fence.run(() => persistence.load()),
+    loadOne: persistence.loadOne && ((id) => fence.run(() => persistence.loadOne!(id))),
+    setInviteeReadmission:
+      persistence.setInviteeReadmission &&
+      ((...args) => fence.run(() => persistence.setInviteeReadmission!(...args))),
+    endRemovals:
+      persistence.endRemovals &&
+      ((...args) => fence.run(() => persistence.endRemovals!(...args))),
+    fenceMeeting:
+      persistence.fenceMeeting &&
+      ((...args) => fence.run(() => persistence.fenceMeeting!(...args))),
     flush: persistence.flush && (() => fence.run(() => persistence.flush!())),
     close:
       persistence.close &&

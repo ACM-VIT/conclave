@@ -1,0 +1,1 @@
+export const JOIN_ROOM_ACK_TIMEOUT_MS = 15_000;

@@ -99,6 +99,7 @@ const FAILURE_CODES: Record<MeetError["code"], JoinFailureReason> = {
   NETWORK_BLOCKED: "transport_error",
   CONNECTION_FAILED: "connection_failed",
   JOIN_REJECTED: "rejected",
+  ROOM_NOT_FOUND: "room_not_found",
   UNKNOWN: "unknown",
 };
 

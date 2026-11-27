@@ -164,7 +164,10 @@ const seat = (key: string, name: string, kind: "host" | "attendee") => {
       ? new Admin({ id, socket })
       : new Client({ id, socket, mode: "webinar_attendee" });
   room.setUserIdentity(id, key, name);
-  if (kind === "host") room.hostUserKey = key;
+  if (kind === "host") {
+    room.grantHost(key, "fallback");
+    room.makePrimaryHost(key);
+  }
   room.addClient(client);
   const context = createConnectionContext(io, socket, state);
   context.currentRoom = room;

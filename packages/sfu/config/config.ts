@@ -131,6 +131,8 @@ type ClientPolicy = {
   allowHostJoin: boolean;
   useWaitingRoom: boolean;
   allowDisplayNameUpdate: boolean;
+  // New rooms start locked, so anyone the host has not let in knocks.
+  knockByDefault: boolean;
 };
 
 const defaultClientPolicies: Record<string, ClientPolicy> = {
@@ -141,28 +143,32 @@ const defaultClientPolicies: Record<string, ClientPolicy> = {
     allowHostJoin: false,
     useWaitingRoom: false,
     allowDisplayNameUpdate: true,
+    knockByDefault: true,
   },
   public: {
     allowNonHostRoomCreation: false,
     allowHostJoin: false,
     useWaitingRoom: false,
     allowDisplayNameUpdate: true,
+    knockByDefault: true,
   },
   conclave: {
     allowNonHostRoomCreation: false,
     allowHostJoin: false,
     useWaitingRoom: false,
     allowDisplayNameUpdate: true,
+    knockByDefault: true,
   },
   internal: {
     allowNonHostRoomCreation: false,
     allowHostJoin: true,
     useWaitingRoom: true,
     allowDisplayNameUpdate: false,
+    knockByDefault: false,
   },
 };
 
-const normalizeClientPolicies = (
+export const normalizeClientPolicies = (
   value: string | undefined,
 ): Record<string, ClientPolicy> => {
   if (!value) return defaultClientPolicies;
@@ -194,6 +200,10 @@ const normalizeClientPolicies = (
           typeof policyInput.allowDisplayNameUpdate === "boolean"
             ? policyInput.allowDisplayNameUpdate
             : base.allowDisplayNameUpdate,
+        knockByDefault:
+          typeof policyInput.knockByDefault === "boolean"
+            ? policyInput.knockByDefault
+            : base.knockByDefault,
       };
     }
     return next;

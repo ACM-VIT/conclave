@@ -1,3 +1,4 @@
+import { runDetached } from "../runDetached.js";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { guardSocketListeners } from "../socket/guardListeners.js";
 import type { Server as SocketIOServer } from "socket.io";
@@ -587,7 +588,7 @@ export const registerAdminGateway = (
   };
 
   const interval = setInterval(() => {
-    void tick();
+    runDetached("The admin gateway refresh", () => tick());
   }, TICK_MS);
   interval.unref?.();
 

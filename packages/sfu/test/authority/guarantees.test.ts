@@ -33,6 +33,7 @@ import { probeAuthority, probeContract } from "./fixtures/probe.js";
 import { qaContract } from "@conclave/apps-sdk/qa/core";
 import { qaAuthority } from "@conclave/apps-sdk/qa/server";
 import { ledgerAuthority, ledgerContract } from "./fixtures/ledger.js";
+import { applyHostGrant } from "../../server/admin/controlPlane.js";
 
 const host = person("asha@example.com", "Asha", "host");
 const priya = person("priya@example.com", "Priya");
@@ -347,7 +348,7 @@ describe("membership", () => {
     const room = new Harness([pollsAuthority]);
     const hostTab = await room.open(host, pollsContract);
     const raviTab = await room.open(ravi, pollsContract);
-    room.room.promoteClientToAdmin(raviTab.seat.id);
+    applyHostGrant(room.room, { userKey: room.room.userKeysById.get(raviTab.seat.id)!, basis: "promoted" });
     const pollId = await createPoll(room, hostTab);
     const before = raviTab.frames.length;
 
@@ -451,7 +452,7 @@ describe("membership", () => {
     const hostTab = await room.open(host, pollsContract);
     const priyaTab = await room.open(priya, pollsContract);
     const raviTab = await room.open(ravi, pollsContract);
-    room.room.promoteClientToAdmin(raviTab.seat.id);
+    applyHostGrant(room.room, { userKey: room.room.userKeysById.get(raviTab.seat.id)!, basis: "promoted" });
     const pollId = await createPoll(room, hostTab);
     await priyaTab.act("vote", { pollId, optionIds: ["o1"] });
     await room.deliver();
@@ -471,7 +472,7 @@ describe("membership", () => {
     const hostTab = await room.open(host, pollsContract);
     const priyaTab = await room.open(priya, pollsContract);
     const raviTab = await room.open(ravi, pollsContract);
-    room.room.promoteClientToAdmin(raviTab.seat.id);
+    applyHostGrant(room.room, { userKey: room.room.userKeysById.get(raviTab.seat.id)!, basis: "promoted" });
     const pollId = await createPoll(room, hostTab);
     const before = raviTab.frames.length;
 
@@ -2095,7 +2096,7 @@ describe("large views and slow sockets", () => {
     const room = new Harness([probeAuthority], { runtime: { limits: small } });
     const hostTab = await room.open(host, probeContract);
     const raviTab = await room.open(ravi, probeContract);
-    room.room.promoteClientToAdmin(raviTab.seat.id);
+    applyHostGrant(room.room, { userKey: room.room.userKeysById.get(raviTab.seat.id)!, basis: "promoted" });
     for (let index = 0; index < 5; index += 1) {
       await hostTab.act("put", { id: `n${index}`, text: `${index}`.repeat(300) });
     }

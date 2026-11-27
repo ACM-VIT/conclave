@@ -127,8 +127,7 @@ const listInTurns = (state: SfuState, room: Room): void => {
 };
 
 /**
- * Sends a client the webinar Q&A list when they are granted it: on joining
- * a webinar, and on becoming a host, who reads more of it.
+ * Sends a client the list after joining a webinar or changing host privileges.
  */
 export const grantWebinarQaList = (state: SfuState, room: Room, client: Client): void => {
   if (!oldEventsAreTheBook(state)) return;

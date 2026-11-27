@@ -1,8 +1,9 @@
 import { config } from "../../../config/config.js";
 import { Logger } from "../../../utilities/loggers.js";
 import { cleanupRoom } from "../../rooms.js";
+import { disconnectNextMeetingLobby } from "../../nextMeetingLobby.js";
 import {
-  handOffRoom,
+  ensureHost,
   teardownClient,
   withdrawWaitingRequest,
 } from "../../admin/controlPlane.js";
@@ -15,8 +16,19 @@ export const registerDisconnectHandlers = (
   const { socket, state, io } = context;
 
   socket.on("disconnect", (reason) => {
+    context.joinAttempts += 1;
     Logger.info(`Client disconnected: ${socket.id} (${reason})`);
     interruptActiveConclaveAnswers(io, context.activeConclaveAnswers);
+
+    const graceMs = config.socket.disconnectGraceMs;
+    const immediateReasons = new Set([
+      "client namespace disconnect",
+      "server namespace disconnect",
+      "server shutting down",
+      "forced close",
+      "forced server close",
+    ]);
+    const shouldDelay = graceMs > 0 && !immediateReasons.has(reason);
 
     if (context.currentRoom && context.currentClient) {
       const room = context.currentRoom;
@@ -32,7 +44,7 @@ export const registerDisconnectHandlers = (
 
       const finalizeDisconnect = () => {
         const activeRoom = state.rooms.get(roomChannelId);
-        if (!activeRoom) {
+        if (activeRoom !== room) {
           return;
         }
         const activeClient = activeRoom.getClient(userId);
@@ -50,28 +62,16 @@ export const registerDisconnectHandlers = (
           return;
         }
 
-        const { wasAdmin } = teardownClient({
+        teardownClient({
           io,
           state,
           room: activeRoom,
           userId,
         });
-        if (wasAdmin) {
-          handOffRoom(io, state, activeRoom);
-        }
         cleanupRoom(state, activeRoom);
+        ensureHost(io, state, activeRoom);
         Logger.info(`User ${userId} left room ${roomId}`);
       };
-
-      const graceMs = config.socket.disconnectGraceMs;
-      const immediateReasons = new Set([
-        "client namespace disconnect",
-        "server namespace disconnect",
-        "server shutting down",
-        "forced close",
-        "forced server close",
-      ]);
-      const shouldDelay = graceMs > 0 && !immediateReasons.has(reason);
 
       if (shouldDelay) {
         room.scheduleDisconnect(
@@ -95,10 +95,14 @@ export const registerDisconnectHandlers = (
       }
     }
 
-    // A socket can wait for one room while still seated in another (an
-    // in-place room switch), so drop its waiting-room entry either way;
-    // otherwise the dead entry keeps that room from ever counting as empty.
     if (context.pendingRoomChannelId && context.pendingUserKey) {
+      disconnectNextMeetingLobby(
+        state,
+        context.pendingRoomChannelId,
+        context.pendingUserKey,
+        socket.id,
+        shouldDelay ? graceMs : 0,
+      );
       const pendingRoom = state.rooms.get(context.pendingRoomChannelId);
       if (pendingRoom) {
         const pending = pendingRoom.pendingClients.get(context.pendingUserKey);

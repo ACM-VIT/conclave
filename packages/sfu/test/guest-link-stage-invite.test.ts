@@ -238,7 +238,7 @@ describe("a join whose guest link cannot commit", () => {
         invitedViewer.guestProof,
       );
       room.startCleanupTimer(vi.fn());
-      const timer = room.cleanupTimer;
+      const timer = room.cleanupDeadline;
       const hostKey = room.hostUserKey;
       const pending = [...room.pendingClients.entries()];
       const clients = [...room.clients.keys()];
@@ -256,7 +256,7 @@ describe("a join whose guest link cannot commit", () => {
         });
         expect(room.hostUserKey).toBe(hostKey);
         expect(room.isAdminUserKey(joining.userId)).toBe(false);
-        expect(room.cleanupTimer).toBe(timer);
+        expect(room.cleanupDeadline).toBe(timer);
         expect([...room.pendingClients.entries()]).toEqual(pending);
         expect([...room.clients.keys()]).toEqual(clients);
         expect(room.decisionRecordCount).toBe(decisions);

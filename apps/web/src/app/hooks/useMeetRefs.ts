@@ -127,6 +127,9 @@ export function useMeetRefs() {
   const handleReconnectRef = useRef<
     (options?: ReconnectRequest) => void | Promise<void>
   >(async () => {});
+  const connectSocketRef = useRef<
+    ((roomId: string, options?: { sfuUrlOverride?: string }) => Promise<unknown>) | null
+  >(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioAnalyserMapRef = useRef<Map<string, AudioAnalyserEntry>>(
     new Map()
@@ -187,6 +190,7 @@ export function useMeetRefs() {
     currentRoomIdRef,
     handleRedirectRef,
     handleReconnectRef,
+    connectSocketRef,
     audioContextRef,
     audioAnalyserMapRef,
     lastActiveSpeakerRef,

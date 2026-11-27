@@ -60,6 +60,7 @@ import WebinarViewerChrome, {
 import { QaPanel } from "./qa/QaPanel";
 import { PollsPanel } from "./polls/PollsPanel";
 import ToastQueue, { type ToastItem } from "./ToastQueue";
+import KnockPrompt from "./KnockPrompt";
 import MeetingAnnouncer from "./MeetingAnnouncer";
 import MeetingReadyCard, { useMeetingReadyCard } from "./MeetingReadyCard";
 import RoomAiPanel from "./RoomAiPanel";
@@ -183,7 +184,6 @@ interface MeetsMainContentProps {
   isAdmin: boolean;
   showPermissionHint: boolean;
   availableRooms: RoomInfo[];
-  roomsStatus: "idle" | "loading" | "error";
   refreshRooms: (roomId?: string) => void;
   displayNameInput: string;
   setDisplayNameInput: Dispatch<SetStateAction<string>>;
@@ -479,7 +479,6 @@ export default function MeetsMainContent({
   isAdmin,
   showPermissionHint,
   availableRooms,
-  roomsStatus,
   refreshRooms,
   displayNameInput,
   setDisplayNameInput,
@@ -2582,7 +2581,6 @@ export default function MeetsMainContent({
             clientId={clientId}
             showPermissionHint={showPermissionHint}
             rooms={availableRooms}
-            roomsStatus={roomsStatus}
             onRefreshRooms={refreshRooms}
             onJoinRoom={joinRoomById}
             displayNameInput={displayNameInput}
@@ -2859,6 +2857,15 @@ export default function MeetsMainContent({
 
       {isJoined && (
         <ToastQueue toasts={toasts} />
+      )}
+
+      {isJoined && !isWebinarAttendee && isAdmin && !isParticipantsOpen && (
+        <KnockPrompt
+          socket={socket}
+          pendingUsers={pendingUsers}
+          onViewAll={handleOpenParticipants}
+          onPendingUserStale={handlePendingUserStale}
+        />
       )}
 
       {isJoined &&

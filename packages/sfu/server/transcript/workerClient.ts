@@ -1,3 +1,4 @@
+import { runDetached } from "../runDetached.js";
 import type { TranscriptSpeaker } from "../../types.js";
 
 const WORKER_CONNECT_TIMEOUT_MS = 8000;
@@ -336,7 +337,7 @@ export class TranscriptWorkerRelayClient {
     this.reconnectAttempt += 1;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      void this.reconnect();
+      runDetached("Reconnecting to the transcript worker", () => this.reconnect());
     }, delay);
   }
 

@@ -2,11 +2,14 @@
 
 import { useEffect, useState } from "react";
 
-export type CameraPermissionState = PermissionState | "unknown";
+export type MediaPermissionName = "camera" | "microphone";
+export type MediaPermissionState = PermissionState | "unknown";
 
-export function useCameraPermissionState(): CameraPermissionState {
+export function useMediaPermissionState(
+  name: MediaPermissionName,
+): MediaPermissionState {
   const [permissionState, setPermissionState] =
-    useState<CameraPermissionState>("unknown");
+    useState<MediaPermissionState>("unknown");
 
   useEffect(() => {
     let cancelled = false;
@@ -23,7 +26,7 @@ export function useCameraPermissionState(): CameraPermissionState {
     };
 
     navigator.permissions
-      .query({ name: "camera" })
+      .query({ name })
       .then((status) => {
         if (cancelled) return;
         permissionStatus = status;
@@ -38,7 +41,7 @@ export function useCameraPermissionState(): CameraPermissionState {
       cancelled = true;
       permissionStatus?.removeEventListener("change", handlePermissionChange);
     };
-  }, []);
+  }, [name]);
 
   return permissionState;
 }

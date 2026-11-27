@@ -1,6 +1,7 @@
 import type { Worker } from "mediasoup/types";
 import { config as defaultConfig } from "../config/config.js";
 import { Room } from "../config/classes/Room.js";
+import type { NextMeetingLobby } from "./nextMeetingLobby.js";
 import type { WebinarLinkTarget, WebinarRoomConfig } from "./webinar.js";
 import {
   createScheduledWebinarStore,
@@ -17,8 +18,15 @@ import {
   type SchedulingPersistence,
   type SchedulingStore,
 } from "./scheduling.js";
+import type { LeasedRoom } from "./roomLease.js";
 import { createRoomRegistry, type RoomRegistry } from "./roomRegistry.js";
 import { createPersistenceFence, type PersistenceFence } from "./persistenceFence.js";
+import {
+  createMemoryRoomRecoveryStore,
+  createRoomRecoveryLedger,
+  type RoomRecoveryLedger,
+  type RoomRecoveryStore,
+} from "./roomRecoveryLedger.js";
 import {
   createTranscriptRelayRegistry,
   type TranscriptRelayRegistry,
@@ -43,10 +51,19 @@ export type EndedRoom = {
   endedBy: string;
 };
 
+export type DeferredRoomWrites = {
+  room: LeasedRoom;
+  writes: Array<{ label: string; commit: () => Promise<boolean>; settle: (landed: boolean) => void }>;
+  releaseAfter: boolean;
+};
+
 export type SfuState = {
   workers: Worker[];
   rooms: Map<string, Room>;
   roomCreations: Map<string, Promise<Room>>;
+  // By channel: who was still knocking when the meeting there ended. The
+  // next meeting at the code shows them to its hosts.
+  nextMeetingLobbies: Map<string, NextMeetingLobby>;
   workerRoomReservations: Map<number, number>;
   endedRooms: Map<string, EndedRoom>;
   webinarConfigs: Map<string, WebinarRoomConfig>;
@@ -60,6 +77,9 @@ export type SfuState = {
   schedulingPersistence: SchedulingPersistence | null;
   persistenceFence: PersistenceFence;
   roomRegistry: RoomRegistry;
+  deferredRoomWrites: Map<string, DeferredRoomWrites>;
+  roomCommitsInFlight: Map<string, Set<Promise<boolean>>>;
+  roomRecovery: RoomRecoveryLedger;
   transcriptRelays: TranscriptRelayRegistry;
   workerPlan: WorkerPlan;
   appDocuments: AppDocumentPool;
@@ -74,6 +94,7 @@ export const createSfuState = (options?: {
   roomRegistry?: RoomRegistry;
   appDocuments?: AppDocumentPool;
   appChangeStaging?: StagingBudget;
+  roomRecoveryStore?: RoomRecoveryStore;
   appsAuthority?: AppsAuthorityRuntime | null;
   config?: typeof defaultConfig;
 }): SfuState => {
@@ -83,6 +104,7 @@ export const createSfuState = (options?: {
     workers: [],
     rooms: new Map(),
     roomCreations: new Map(),
+    nextMeetingLobbies: new Map(),
     workerRoomReservations: new Map(),
     endedRooms: new Map(),
     webinarConfigs: new Map(),
@@ -96,6 +118,11 @@ export const createSfuState = (options?: {
     schedulingPersistence: null,
     persistenceFence: createPersistenceFence(),
     roomRegistry: options?.roomRegistry ?? createRoomRegistry(config),
+    deferredRoomWrites: new Map(),
+    roomCommitsInFlight: new Map(),
+    roomRecovery: createRoomRecoveryLedger(
+      options?.roomRecoveryStore ?? createMemoryRoomRecoveryStore(),
+    ),
     transcriptRelays: createTranscriptRelayRegistry(config.transcriptRelay),
     workerPlan,
     appDocuments:

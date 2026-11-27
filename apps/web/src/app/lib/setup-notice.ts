@@ -1,10 +1,14 @@
 import type { MeetError } from "./types";
 
-export type SetupNotice = { kind: "ended" | "rejected"; message: string };
+export type SetupNotice = { kind: "ended" | "rejected" | "removed"; message: string };
 
 export const JOIN_REJECTED_MESSAGE = "The host has denied your request to join.";
 
 export const endedNotice = (message: string): SetupNotice => ({ kind: "ended", message });
+
+export const REMOVED_MESSAGE = "You were removed from this meeting.";
+
+export const removedNotice = (): SetupNotice => ({ kind: "removed", message: REMOVED_MESSAGE });
 
 export function joinRejectedUpdate() {
   const meetError: MeetError = {
@@ -41,6 +45,9 @@ export function hiddenSetupView({
 }): HiddenSetupView {
   if (notice?.kind === "rejected") {
     return { headline: "You weren't let in", body: notice.message, action: "retry", busy: false };
+  }
+  if (notice?.kind === "removed") {
+    return { headline: "You were removed", body: notice.message, action: "home", busy: false };
   }
   if (notice?.kind === "ended") {
     return { headline: "Webinar ended", body: notice.message, action: "home", busy: false };

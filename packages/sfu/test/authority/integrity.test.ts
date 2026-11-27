@@ -24,6 +24,7 @@ import { Harness, person } from "./harness.js";
 import { pollsContract } from "@conclave/apps-sdk/polls/core";
 import { pollsAuthority } from "@conclave/apps-sdk/polls/server";
 import { probeAuthority, probeContract } from "./fixtures/probe.js";
+import { applyHostGrant } from "../../server/admin/controlPlane.js";
 
 const host = person("asha@example.com", "Asha", "host");
 const priya = person("priya@example.com", "Priya");
@@ -358,7 +359,7 @@ describe("a replacement that arrives in parts", () => {
     });
     const hostTab = await room.open(host, probeContract);
     const raviTab = await room.open(ravi, probeContract);
-    room.room.promoteClientToAdmin(raviTab.seat.id);
+    applyHostGrant(room.room, { userKey: room.room.userKeysById.get(raviTab.seat.id)!, basis: "promoted" });
     for (let index = 0; index < 5; index += 1) {
       await hostTab.act("put", { id: `n${index}`, text: `${index}`.repeat(200) });
     }

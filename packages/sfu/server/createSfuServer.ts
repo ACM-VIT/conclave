@@ -1,3 +1,4 @@
+import { runDetached } from "./runDetached.js";
 import { createServer as createHttpServer } from "http";
 import type { Server as HttpServer } from "http";
 import type { Express } from "express";
@@ -27,6 +28,8 @@ import {
   type SocketAdapterLifecycle,
 } from "./socket/createSocketServer.js";
 import { createRoomRegistry } from "./roomRegistry.js";
+import { createFileRoomRecoveryStore } from "./roomRecoveryLedger.js";
+import { startRoomRecoveryPassRefresh } from "./roomRecoveryPass.js";
 import {
   AUDIO_CONSUMER_HEAL_INTERVAL_MS,
   healAllRooms,
@@ -36,6 +39,7 @@ import {
   releaseAllRoomOwnerships,
   renewRoomOwnerships,
 } from "./rooms.js";
+import { handOffRooms } from "./serverShutdown.js";
 import { shutdownAnalytics } from "./analytics/posthog.js";
 import { createSfuState } from "./state.js";
 import type { SfuState } from "./state.js";
@@ -66,6 +70,7 @@ export const createSfuServer = (
     isDraining: config.draining,
     roomRegistry,
     config,
+    roomRecoveryStore: createFileRoomRecoveryStore(),
   });
   let io: SocketIOServer | null = null;
   let socketAdapterLifecycle: SocketAdapterLifecycle | null = null;
@@ -90,6 +95,7 @@ export const createSfuServer = (
   let roomOwnershipRenewTimer: NodeJS.Timeout | null = null;
   let roomLeaseRecoveryTimer: NodeJS.Timeout | null = null;
   let audioConsumerHealTimer: NodeJS.Timeout | null = null;
+  let stopRoomRecoveryPassRefresh: (() => void) | null = null;
   const workerShutdown = new AbortController();
 
   const start = async (): Promise<void> => {
@@ -153,6 +159,10 @@ export const createSfuServer = (
     if (audioConsumerHealTimer.unref) {
       audioConsumerHealTimer.unref();
     }
+    stopRoomRecoveryPassRefresh = startRoomRecoveryPassRefresh(
+      state,
+      config.sfuSecret,
+    );
 
     await new Promise<void>((resolve) => {
       httpServer.listen(config.port, () => {
@@ -163,6 +173,7 @@ export const createSfuServer = (
   };
 
   const stop = async (): Promise<void> => {
+    handOffRooms(state);
     workerShutdown.abort();
     adminGateway.dispose();
     stopScheduledWebinarTimer(state);
@@ -182,6 +193,8 @@ export const createSfuServer = (
       clearInterval(audioConsumerHealTimer);
       audioConsumerHealTimer = null;
     }
+    stopRoomRecoveryPassRefresh?.();
+    stopRoomRecoveryPassRefresh = null;
     await state.scheduledWebinarPersistence?.close?.();
     state.scheduledWebinarPersistence = null;
     await state.scheduledMeetingPersistence?.close?.();
@@ -195,7 +208,7 @@ export const createSfuServer = (
     state.transcriptRelays.closeAll();
     // Fire-and-forget: io.close() also initiates closing the attached HTTP
     // server; the explicit httpServer.close below is what we await on.
-    void io.close();
+    runDetached("Closing the socket server", () => io.close());
 
     await new Promise<void>((resolve, reject) => {
       httpServer.close((error) => {

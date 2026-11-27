@@ -26,15 +26,17 @@ export const fetchPublicScheduledMeeting = async (
   sfuSecret: string,
   clientId: string,
   roomCode: string,
+  signal?: AbortSignal,
 ): Promise<PublicScheduledMeeting | null> => {
   const url = `${scheduledMeetingsBase}/public/v2/by-room/${encodeURIComponent(roomCode)}?clientId=${encodeURIComponent(clientId)}`;
   const response = await fetch(url, {
     method: "GET",
     headers: { "x-sfu-secret": sfuSecret, accept: "application/json" },
     cache: "no-store",
+    signal,
   });
   if (response.status === 404) throw new SfuTooOldForBookingsError();
-  if (!response.ok) return null;
+  if (!response.ok) throw new Error(`Scheduled meeting lookup failed (${response.status})`);
   const data = (await response.json()) as { scheduledMeeting?: PublicScheduledMeeting | null };
-  return data?.scheduledMeeting ?? null;
+  return data?.scheduledMeeting?.clientId === clientId ? data.scheduledMeeting : null;
 };
