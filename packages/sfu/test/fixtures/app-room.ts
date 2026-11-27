@@ -187,7 +187,7 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
       room.addClient(replacement);
       context.currentClient = replacement;
     },
-    lock: () => call<{ success: boolean }>("apps:lock", { locked: true }),
+    lock: (locked = true) => call<{ success: boolean }>("apps:lock", { locked }),
     get refused() {
       return refused();
     },
