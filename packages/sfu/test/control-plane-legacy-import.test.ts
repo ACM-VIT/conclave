@@ -13,6 +13,8 @@ import {
 import { openControlPlane, resolveControlPlaneConfig } from "../server/controlPlane/open.js";
 import {
   bookingTarget,
+  createHostEventType,
+  deleteHostEventType,
   hostCalendar,
   hostDashboard,
   profileForUser,
@@ -368,4 +370,48 @@ describe("loading data saved by the previous release", () => {
       expect((await store.read((view) => view.all("profile"))).map(({ value }) => value.id)).toContain(profile.id);
     },
   );
+});
+
+describe("incremental import of legacy booking links", () => {
+  it.each([0, 50])("moves two slugs in the same source with %i event types between them", async (padding) => {
+    vi.stubEnv("CONTROL_PLANE_PERSISTENCE", "json");
+    const a = { ...eventType, id: "a", slug: "x", updatedAt: 1100 };
+    const b = { ...eventType, id: "b", slug: "y", updatedAt: 1200 };
+    const fillers = Array.from({ length: padding }, (_, i) => ({
+      ...eventType, id: `filler-${i}`, slug: `filler-${i}`, updatedAt: 1500 + i,
+    }));
+    const write = (eventTypes: typeof a[]) => writeFileSync(
+      join(dir, "json", "scheduling.json"),
+      JSON.stringify({ profiles: [profile], eventTypes: [...eventTypes, ...fillers] }),
+    );
+    const target = (store: ControlPlaneStore, slug: string, clientId = "conclave") =>
+      store.read(bookingTarget(clientId, profile.username, slug));
+
+    const blocked = { ...eventType, id: "blocked", slug: "old-blocked" };
+    const deleted = { ...eventType, id: "deleted", slug: "deleted" };
+    write([a, b, blocked, deleted]);
+    let store = await start();
+    expect(await target(store, "x")).toMatchObject({ eventType: { value: { id: "a" } } });
+    expect(await target(store, "y")).toMatchObject({ eventType: { value: { id: "b" } } });
+    const held = await store.commit(createHostEventType(profile.id, { title: "Target owner", slug: "held", isActive: true }));
+    expect(held).toMatchObject({ ok: true });
+    if (!held.ok) throw new Error("Could not create the target-owned link");
+    expect((await store.commit(deleteHostEventType(profile.id, deleted.id))).ok).toBe(true);
+
+    write([
+      { ...b, slug: "z", updatedAt: 1400 },
+      { ...a, slug: "y", updatedAt: 2000 },
+      { ...blocked, slug: "held", updatedAt: 2100 },
+      { ...deleted, slug: "must-not-return", updatedAt: 2200 },
+    ]);
+    for (const when of ["initial import", "repeat import"]) {
+      store = await restart(store);
+      expect(await target(store, "y"), when).toMatchObject({ eventType: { value: { id: "a" } } });
+      expect(await target(store, "z"), when).toMatchObject({ eventType: { value: { id: "b" } } });
+      expect(await target(store, "held"), when).toMatchObject({ eventType: { value: { id: held.value.id } } });
+      expect(await target(store, "x"), when).toMatchObject({ status: 404 });
+      expect(await target(store, "must-not-return"), when).toMatchObject({ status: 404 });
+      expect(await target(store, "y", "other-tenant"), when).toMatchObject({ status: 404 });
+    }
+  });
 });

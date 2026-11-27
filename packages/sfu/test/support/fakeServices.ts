@@ -1,4 +1,4 @@
-export type GateKind = "commit" | "freebusy" | "google-create" | "google-created" | "google-delete" | "google-deleted" | "email" | "redis";
+export type GateKind = "commit" | "freebusy" | "google-token" | "google-create" | "google-created" | "google-delete" | "google-deleted" | "email" | "redis";
 
 export class Gates {
   parking = new Set<GateKind>();
@@ -47,6 +47,7 @@ export class FakeGoogle {
     const json = (status: number, body: unknown) =>
       new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
     if (url.hostname === "oauth2.googleapis.com") {
+      await this.gates.admit("google-token", url.pathname);
       return json(200, { access_token: `access-${this.next++}`, expires_in: 3600 });
     }
     if (url.pathname.endsWith("/freeBusy")) {

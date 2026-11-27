@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { config } from "../config/config.js";
-import { drainCalendarTasks } from "../server/calendarTasks.js";
+import { drainCalendarTasks, runCalendarTask } from "../server/calendarTasks.js";
 import { createMemoryBackend, createMemoryData } from "../server/controlPlane/backends/memory.js";
 import { CALENDAR_CHANGED, CALENDAR_TASK_LEASE_MS, CALENDAR_TASK_RETRY_DELAYS_MS } from "../server/controlPlane/calendarTaskCommands.js";
 import { fail } from "../server/controlPlane/model.js";
@@ -291,6 +291,125 @@ describe("a booking cancelled and then deleted", () => {
     expect((await call("DELETE", `/scheduled-meetings/${id}`)).status).toBe(200);
     expect(await state.controlPlane.read((view) => view.all("calendarTask"))).toEqual([]);
   });
+});
+
+describe("a booking moved before its Google event was linked", () => {
+  const moveBooking = async (call: Sfu["call"], id: string) => {
+    const saved = await savedMeeting(call, id);
+    const startAt = Number(saved.scheduledStartAt) + DAY_MS;
+    const endAt = Number(saved.scheduledEndAt) + DAY_MS;
+    const updated = await call("PATCH", `/scheduled-meetings/${id}`, {
+      scheduledStartAt: startAt, scheduledEndAt: endAt,
+    });
+    expect(updated.status).toBe(200);
+    return { startAt, endAt };
+  };
+
+  it.each(["503", "lost reply"] as const)("uses the new times after a %s from the previous insert", async (failure) => {
+    const { state, clock, call, username } = await sfuWithClock();
+    google.failCreatesWith = failure === "503" ? 503 : null;
+    google.loseCreateReplies = failure === "lost reply";
+    const booked = await bookIntro(call, username);
+    expect(booked.status).toBe(201);
+    expect(booked.body.calendarError).toBeTruthy();
+    const id = (booked.body.booking as { id: string }).id;
+    const obsoleteId = [...google.events.keys()][0];
+
+    const times = await moveBooking(call, id);
+    google.failCreatesWith = null;
+    google.loseCreateReplies = false;
+    clock.now += DAY_MS;
+    await drainCalendarTasks(state);
+
+    expect([...google.events.values()]).toEqual([expect.objectContaining(times)]);
+    const [current] = google.events.values();
+    expect(current.id).not.toBe(obsoleteId);
+    expect(await savedMeeting(call, id)).toMatchObject({
+      googleCalendarEventId: current.id, calendarSyncStatus: "synced", calendarSyncError: null,
+    });
+    expect(google.createAttempts).toBe(2);
+  });
+
+  it("checks the booking again before POST when OAuth was in flight during the move", async () => {
+    const { state, call, username, seams } = await sfuWithClock();
+    seams.afterBookingCommit = async () => {
+      state.googleAccessTokens.clear();
+      gates.parking.add("google-token");
+    };
+    const booking = bookIntro(call, username);
+    try {
+      await vi.waitFor(() => expect(gates.parked.map((entry) => entry.kind)).toEqual(["google-token"]));
+      const [{ id }] = (await call("GET", "/scheduling/bookings")).body.bookings as Array<{ id: string }>;
+      const times = await moveBooking(call, id);
+      gates.drain();
+      expect((await booking).status).toBe(201);
+      expect(google.created).toEqual([expect.objectContaining(times)]);
+      expect(await savedMeeting(call, id)).toMatchObject({ googleCalendarEventId: google.created[0].id, calendarSyncStatus: "synced" });
+    } finally {
+      gates.drain();
+      await booking;
+    }
+  });
+
+  it.each([false, true])("removes a moved event before the original lease ends, lost reply %s", async (lostReply) => {
+    const { call, username } = await sfuWithClock();
+    gates.parking.add("google-created");
+    const booking = bookIntro(call, username);
+    try {
+      await vi.waitFor(() => expect(gates.parked.map((entry) => entry.kind)).toEqual(["google-created"]));
+      const [{ id }] = (await call("GET", "/scheduling/bookings")).body.bookings as Array<{ id: string }>;
+      const times = await moveBooking(call, id);
+      gates.parking.delete("google-created");
+      gates.parking.add("google-delete");
+      google.loseCreateReplies = lostReply;
+      gates.releaseAt(0);
+      await vi.waitFor(() => expect(gates.parked.map((entry) => entry.kind)).toEqual(["google-delete"]));
+      expect(await savedMeeting(call, id)).toMatchObject({ googleCalendarEventId: null });
+      google.loseCreateReplies = false;
+      gates.drain();
+      expect((await booking).status).toBe(201);
+      expect([...google.events.values()]).toEqual([expect.objectContaining(times)]);
+      expect(await savedMeeting(call, id)).toMatchObject({ googleCalendarEventId: google.created[1].id, calendarSyncStatus: "synced" });
+    } finally {
+      gates.drain();
+      await booking;
+    }
+  });
+
+  it.each(["before Google writes", "after Google writes"] as const)(
+    "does not let an out-of-lease insert link an obsolete event %s",
+    async (when) => {
+      const { state, clock, call, username } = await sfuWithClock();
+      const kind = when === "before Google writes" ? "google-create" : "google-created";
+      gates.parking.add(kind);
+      const booking = bookIntro(call, username);
+      try {
+        await vi.waitFor(() => expect(gates.parked.map((entry) => entry.kind)).toEqual([kind]));
+        const [{ id }] = (await call("GET", "/scheduling/bookings")).body.bookings as Array<{ id: string }>;
+        const [oldTask] = await calendarTasks(state);
+        const times = await moveBooking(call, id);
+
+        gates.parking.delete(kind);
+        clock.now += CALENDAR_TASK_LEASE_MS;
+        await runCalendarTask(state, oldTask.id);
+        await drainCalendarTasks(state);
+        expect([...google.events.values()]).toEqual([expect.objectContaining(times)]);
+        const [current] = google.events.values();
+        expect(current.id).not.toBe(oldTask.eventId);
+        expect(await savedMeeting(call, id)).toMatchObject({ googleCalendarEventId: current.id, calendarSyncStatus: "synced" });
+
+        gates.drain();
+        expect((await booking).status).toBe(201);
+        clock.now += DAY_MS;
+        await drainCalendarTasks(state);
+        expect([...google.events.keys()]).toEqual([current.id]);
+        expect(await savedMeeting(call, id)).toMatchObject({ googleCalendarEventId: current.id, calendarSyncStatus: "synced" });
+      } finally {
+        gates.drain();
+        await booking;
+      }
+    },
+  );
 });
 
 describe("an ambiguous Google insert", () => {
