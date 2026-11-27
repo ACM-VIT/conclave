@@ -3,7 +3,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, t
 import { config } from "../config/config.js";
 import { drainCalendarTasks } from "../server/calendarTasks.js";
 import { createMemoryBackend, createMemoryData } from "../server/controlPlane/backends/memory.js";
-import { CALENDAR_CHANGED, CALENDAR_TASK_RETRY_DELAYS_MS } from "../server/controlPlane/calendarTaskCommands.js";
+import { CALENDAR_CHANGED, CALENDAR_TASK_LEASE_MS, CALENDAR_TASK_RETRY_DELAYS_MS } from "../server/controlPlane/calendarTaskCommands.js";
+import { fail } from "../server/controlPlane/model.js";
 import { controlPlaneStore, type ControlPlaneStore } from "../server/controlPlane/store.js";
 import { createSfuApp } from "../server/http/createApp.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
@@ -22,7 +23,17 @@ let errors: MockInstance<(...args: unknown[]) => void>;
 const servers: Server[] = [];
 
 beforeAll(() => {
-  restoreFetch = installFakeFetch(() => google, () => email);
+  const original = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.hostname !== "127.0.0.1") throw new Error(`Unexpected outbound request: ${url.origin}`);
+    return original(input, init);
+  };
+  const restoreFakeFetch = installFakeFetch(() => google, () => email);
+  restoreFetch = () => {
+    restoreFakeFetch();
+    globalThis.fetch = original;
+  };
 });
 
 afterAll(() => {
@@ -49,11 +60,15 @@ afterEach(async () => {
 
 const sfuWithClock = async () => {
   const clock = { now: Date.now() };
-  const seams = { afterBookingCommit: null as (() => Promise<void>) | null };
+  const seams = { afterBookingCommit: null as (() => Promise<void>) | null, commitConflicts: 0 };
   const store = controlPlaneStore(createMemoryBackend(createMemoryData()), () => clock.now);
   const controlPlane: ControlPlaneStore = {
     ...store,
     commit: async (command) => {
+      if (seams.commitConflicts > 0) {
+        seams.commitConflicts -= 1;
+        return fail("conflict", "This changed elsewhere at the same moment. Try again.");
+      }
       const result = await store.commit(command);
       const booked = result.ok && typeof result.value === "object" && result.value !== null && "calendarTaskId" in result.value;
       const seam = seams.afterBookingCommit;
@@ -103,6 +118,119 @@ const savedMeeting = async (call: Sfu["call"], id: string) =>
   (await call("GET", `/scheduled-meetings/${id}`)).body.scheduledMeeting as Record<string, unknown>;
 
 const calendarTasks = (state: SfuState) => state.controlPlane.read((view) => view.all("calendarTask").map((stored) => stored.value));
+
+describe("public booking confirmation", () => {
+  beforeEach(() => {
+    vi.stubEnv("SCHEDULING_EMAIL_WORKER_URL", EMAIL_WORKER_URL);
+    vi.stubEnv("SCHEDULING_EMAIL_WORKER_SECRET", "tasks-email-secret");
+    vi.stubEnv("SFU_FOLLOW_UP_RETRY_DELAYS_MS", "0,0");
+    email = new FakeEmail(gates);
+  });
+
+  const onlyBookingId = async (call: Sfu["call"]) => {
+    const { body } = await call("GET", "/scheduling/bookings");
+    const bookings = body.bookings as Array<{ id: string }>;
+    expect(bookings).toHaveLength(1);
+    return bookings[0].id;
+  };
+
+  it("confirms a saved booking and retries only the email result after Redis conflicts", async () => {
+    const { call, username, seams } = await sfuWithClock();
+    gates.parking.add("email");
+    const booking = bookIntro(call, username);
+    let id = "";
+    try {
+      await vi.waitFor(() => expect(gates.parked.map((entry) => entry.kind)).toEqual(["email"]));
+      id = await onlyBookingId(call);
+      seams.commitConflicts = 2;
+    } finally {
+      gates.drain();
+    }
+
+    const booked = await booking;
+    expect(booked.status).toBe(201);
+    expect(booked.body.booking).toMatchObject({ id, emailNotificationStatus: "sent" });
+    await vi.waitFor(async () => {
+      expect(await savedMeeting(call, id)).toMatchObject({ status: "scheduled", emailNotificationStatus: "sent" });
+    });
+    expect(email?.sent).toEqual([
+      { type: "booking-attendee-confirmation", meetingId: id, to: "guest@example.test" },
+      { type: "booking-host-notification", meetingId: id, to: "host@example.test" },
+    ]);
+  });
+
+  it.each(["cancel", "delete"] as const)("does not confirm when the host can %s after the initial calendar lease expires", async (action) => {
+    const { state, clock, call, username, seams } = await sfuWithClock();
+    let id = "";
+    seams.afterBookingCommit = async () => {
+      id = await onlyBookingId(call);
+      clock.now += CALENDAR_TASK_LEASE_MS;
+      await drainCalendarTasks(state);
+      expect(google.events.size).toBe(1);
+      gates.parking.add("google-delete");
+      const ended = action === "cancel"
+        ? await call("POST", `/scheduled-meetings/${id}/cancel`)
+        : await call("DELETE", `/scheduled-meetings/${id}`);
+      expect(ended.status).toBe(200);
+      expect(await calendarTasks(state)).toMatchObject([{ action: "delete", meetingId: id }]);
+    };
+    try {
+      const booked = await bookIntro(call, username);
+      expect(booked.status).toBe(409);
+      expect(booked.body).toEqual({ error: "This booking is no longer available." });
+      expect(email?.sent).toEqual([]);
+      if (action === "cancel") {
+        expect(await savedMeeting(call, id)).toMatchObject({ status: "cancelled", emailNotificationStatus: "pending" });
+      } else {
+        expect((await call("GET", `/scheduled-meetings/${id}`)).status).toBe(404);
+      }
+    } finally {
+      gates.drain();
+      await vi.waitFor(() => expect(state.calendarTasks.draining).toBe(false));
+    }
+    expect(google.events.size).toBe(0);
+  });
+
+  it("uses the linked event when another calendar worker completes the booking first", async () => {
+    const { state, clock, call, username, seams } = await sfuWithClock();
+    seams.afterBookingCommit = async () => {
+      clock.now += CALENDAR_TASK_LEASE_MS;
+      await drainCalendarTasks(state);
+    };
+    const booked = await bookIntro(call, username);
+
+    expect(booked.status).toBe(201);
+    expect(google.created).toHaveLength(1);
+    expect(booked.body.booking).toMatchObject({
+      calendarEventId: google.created[0].id,
+      syncStatus: "synced",
+      emailNotificationStatus: "sent",
+    });
+    expect(email?.sent.map((sent) => sent.type)).toEqual(["booking-attendee-confirmation", "booking-host-notification"]);
+  });
+
+  it.each([0, 1])("rejects a cancellation while email is in flight with %i result write conflicts", async (conflicts) => {
+    const { call, username, seams, state } = await sfuWithClock();
+    gates.parking.add("email");
+    const booking = bookIntro(call, username);
+    let id = "";
+    try {
+      await vi.waitFor(() => expect(gates.parked.map((entry) => entry.kind)).toEqual(["email"]));
+      id = await onlyBookingId(call);
+      expect((await call("POST", `/scheduled-meetings/${id}/cancel`)).status).toBe(200);
+      await vi.waitFor(() => expect(state.calendarTasks.draining).toBe(false));
+      seams.commitConflicts = conflicts;
+    } finally {
+      gates.drain();
+    }
+
+    const booked = await booking;
+    expect(booked.status).toBe(409);
+    expect(booked.body).toEqual({ error: "This booking is no longer available." });
+    await vi.waitFor(() => expect(seams.commitConflicts).toBe(0));
+    expect(await savedMeeting(call, id)).toMatchObject({ status: "cancelled", emailNotificationStatus: "pending" });
+  });
+});
 
 describe("a calendar task Google keeps refusing", () => {
   it("stops after a bounded number of attempts, logs it, marks the booking failed and reports it in /health", async () => {
