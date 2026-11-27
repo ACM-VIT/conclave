@@ -55,6 +55,10 @@ struct ActiveAppSessionError: LocalizedError, Equatable {
     }
 }
 
+private enum LocalAppEdits {
+    case clean, unverified, lostRenderer
+}
+
 @MainActor
 final class ActiveAppSession {
 
@@ -107,9 +111,10 @@ final class ActiveAppSession {
     private var connectionEpoch = 0
     private var primeTask: Task<Void, Never>? = nil
     private var syncTask: Task<Void, Never>? = nil
-    private var ownedEmbed = false
+    private var localEdits = LocalAppEdits.clean
+    private var watchHidden = false
     private var leaveRequestId = ""
-    private var leaveReply: ((Bool) -> Void)? = nil
+    private var leaveReplies: [(Bool) -> Void] = []
     private var leaveTimeout: Task<Void, Never>? = nil
     private var leaveVerification: Task<Void, Never>? = nil
     private var seenRequestIds: [String] = []
@@ -163,7 +168,8 @@ final class ActiveAppSession {
         seenRequestIds = []
         hasRoomData = false
         embedReady = false
-        ownedEmbed = false
+        localEdits = LocalAppEdits.clean
+        watchHidden = false
         lifecycle = ActiveAppLifecycle.ended
         emit(ActiveAppEvent.make(kind: ActiveAppEventKind.lifecycle, appSessionId: ended, lifecycle: lifecycle))
     }
@@ -172,6 +178,17 @@ final class ActiveAppSession {
         if appSessionId.isEmpty { return }
         detachBridge(appSessionId: appSessionId)
         onBridgeEnded?(appSessionId)
+    }
+
+    func releaseEmbedIfClean() {
+        if localEdits == LocalAppEdits.clean { releaseEmbed() }
+    }
+
+    func setWatchHidden(_ hidden: Bool) {
+        if appId != "watch" || watchHidden == hidden { return }
+        finishLeave(requestId: leaveRequestId, saved: false)
+        watchHidden = hidden
+        sendHostStatus()
     }
 
     func reset() {
@@ -319,16 +336,11 @@ final class ActiveAppSession {
     @discardableResult
     func attachBridge(appSessionId id: String, deliver: @escaping (String) -> Void) -> Bool {
         if id.isEmpty || id != appSessionId { return false }
-        finishLeave(requestId: leaveRequestId, saved: false)
+        invalidateBridge()
         self.deliver = deliver
         bridgeSessionId = id
-        bridgeGeneration += 1
         seenRequestIds = []
         embedBundleVersion = ""
-        embedReady = false
-        snapshotDelivered = false
-        syncTask?.cancel()
-        syncTask = nil
         lifecycle = ActiveAppLifecycle.opening
         emit(ActiveAppEvent.make(kind: ActiveAppEventKind.loadStarted, appSessionId: id, lifecycle: lifecycle))
         return true
@@ -337,7 +349,15 @@ final class ActiveAppSession {
     func detachBridge(appSessionId id: String, mount: Int = 0) {
         if id.isEmpty || id != bridgeSessionId { return }
         if mount != 0 && mount != bridgeGeneration { return }
+        invalidateBridge()
+        emit(ActiveAppEvent.make(kind: ActiveAppEventKind.loadDetached, appSessionId: id, lifecycle: lifecycle))
+    }
+
+    private func invalidateBridge() {
         finishLeave(requestId: leaveRequestId, saved: false)
+        if localEdits == LocalAppEdits.unverified {
+            localEdits = LocalAppEdits.lostRenderer
+        }
         bridgeGeneration += 1
         deliver = nil
         bridgeSessionId = ""
@@ -345,17 +365,12 @@ final class ActiveAppSession {
         snapshotDelivered = false
         syncTask?.cancel()
         syncTask = nil
-        emit(ActiveAppEvent.make(kind: ActiveAppEventKind.loadDetached, appSessionId: id, lifecycle: lifecycle))
     }
 
     func embedFailed(appSessionId id: String, issue: AppHostIssue, mount: Int = 0) {
         if id.isEmpty || id != appSessionId { return }
         if mount != 0 && mount != bridgeGeneration { return }
-        finishLeave(requestId: leaveRequestId, saved: false)
-        embedReady = false
-        snapshotDelivered = false
-        syncTask?.cancel()
-        syncTask = nil
+        invalidateBridge()
         lifecycle = ActiveAppLifecycle.failed
         emit(ActiveAppEvent.make(kind: ActiveAppEventKind.failed, appSessionId: id, lifecycle: lifecycle, issue: issue))
     }
@@ -383,12 +398,14 @@ final class ActiveAppSession {
     }
 
     func prepareToLeave() async -> Bool {
-        if !ownedEmbed { return true }
-        guard embedReady, isConnectionLive, isRelayAllowed(), leaveRequestId.isEmpty else { return false }
-        let id = nextRequestId()
+        if localEdits == LocalAppEdits.lostRenderer { return false }
+        if !embedReady { return localEdits == LocalAppEdits.clean }
+        guard isConnectionLive, isRelayAllowed() else { return false }
         return await withCheckedContinuation { continuation in
+            leaveReplies.append { saved in continuation.resume(returning: saved) }
+            if !leaveRequestId.isEmpty { return }
+            let id = nextRequestId()
             leaveRequestId = id
-            leaveReply = { saved in continuation.resume(returning: saved) }
             leaveTimeout = Task { @MainActor [weak self] in
                 guard let self else { return }
                 await self.sleep(8_000.0)
@@ -404,13 +421,14 @@ final class ActiveAppSession {
     private func finishLeave(requestId: String, saved: Bool) {
         if requestId.isEmpty || requestId != leaveRequestId { return }
         leaveRequestId = ""
-        let reply = leaveReply
-        leaveReply = nil
+        let replies = leaveReplies
+        leaveReplies = []
         leaveTimeout?.cancel()
         leaveTimeout = nil
         leaveVerification?.cancel()
         leaveVerification = nil
-        reply?(saved)
+        if saved { localEdits = LocalAppEdits.clean }
+        for reply in replies { reply(saved) }
     }
 
     private func verifySaved(requestId: String) -> AppBridgeRejection {
@@ -445,6 +463,8 @@ final class ActiveAppSession {
             startSync(stateVector: message.bytes, requestId: message.requestId)
         case .verifySaved:
             return verifySaved(requestId: message.requestId)
+        case .editsPending:
+            if localEdits == LocalAppEdits.clean { localEdits = LocalAppEdits.unverified }
         case .update:
             if !embedReady { return reject(AppBridgeRejection.notAttached) }
             sendActiveAppYjsUpdate(message.bytes)
@@ -472,14 +492,13 @@ final class ActiveAppSession {
         if message.appId != appId { return reject(AppBridgeRejection.badPayload) }
         if message.version != AppBridgeProtocol.version
             || ActiveAppSession.bundleMajor(message.bundleVersion) != AppBridgeProtocol.bundleMajor {
-            embedReady = false
+            invalidateBridge()
             lifecycle = ActiveAppLifecycle.failed
             emit(ActiveAppEvent.make(kind: ActiveAppEventKind.failed, appSessionId: appSessionId, lifecycle: lifecycle,
                                      issue: AppHostIssue.versionMismatch, bundleVersion: message.bundleVersion))
             return reject(AppBridgeRejection.versionMismatch)
         }
         embedReady = true
-        ownedEmbed = true
         snapshotDelivered = false
         embedBundleVersion = message.bundleVersion
         lifecycle = isConnectionLive ? ActiveAppLifecycle.opening : ActiveAppLifecycle.reconnecting
@@ -589,6 +608,7 @@ final class ActiveAppSession {
         let payload: [String: Any] = [
             "readOnly": isReadOnly,
             "connection": isConnectionLive ? "live" : "reconnecting",
+            "locallyHidden": watchHidden,
             "reduceMotion": reduceMotion,
             "pencilOnly": pencilOnly,
             "userId": userId,

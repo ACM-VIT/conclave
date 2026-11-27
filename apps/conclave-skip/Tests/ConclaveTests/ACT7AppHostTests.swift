@@ -350,6 +350,33 @@ struct ACT7AppHostTests {
         #expect(presenter.model.phase == .failed)
         #expect(await relay.prepareToLeave())
         #expect(!wire.types().contains("prepareToLeave"))
+        let id = relay.appSessionId
+        presenter.retry()
+        #expect(relay.attachBridge(appSessionId: id) { _ in })
+        relay.acceptPrimedSnapshot(wire.syncResponse, appSessionId: id)
+        #expect(ready(relay) == .none)
+        #expect(presenter.model.phase == .ready)
+    }
+
+    @Test func aFreshRendererCannotCertifyEditsLostByItsPredecessor() async {
+        let wire = Wire()
+        let relay = session(wire)
+        let id = relay.appSessionId
+        let mount = relay.bridgeGeneration
+        #expect(ready(relay) == .none)
+        let dirty = envelope(relay, "editsPending", [:], requestId: "e-edit")
+        #expect(relay.receiveFromEmbed(raw: dirty, origin: AppBridgeProtocol.iosOrigin, isMainFrame: true, mount: mount) == .none)
+        relay.embedFailed(appSessionId: id, issue: .rendererGone, mount: mount)
+        #expect(!(await relay.prepareToLeave()))
+        #expect(relay.attachBridge(appSessionId: id) { _ in })
+        #expect(ready(relay) == .none)
+        let staleAck = envelope(relay, "ack", ["ok": true], requestId: "n-1")
+        #expect(relay.receiveFromEmbed(raw: staleAck, origin: AppBridgeProtocol.iosOrigin, isMainFrame: true, mount: mount) == .notAttached)
+        #expect(!(await relay.prepareToLeave()))
+
+        relay.end()
+        relay.begin(appId: "whiteboard", callSessionId: "next-call", isReadOnly: false)
+        #expect(await relay.prepareToLeave(), "A new call does not inherit the previous app's lost edits.")
     }
 
     @Test func movedHelpersKeepTheViewModelGuards() async throws {

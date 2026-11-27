@@ -24,6 +24,7 @@ import {
 export type HostStatus = {
   readOnly: boolean;
   connection: "live" | "reconnecting";
+  locallyHidden: boolean;
   reduceMotion: boolean;
   pencilOnly: boolean;
   userId: string;
@@ -80,6 +81,7 @@ type AwarenessChange = { added: number[]; updated: number[]; removed: number[] }
 const INITIAL_HOST_STATUS: HostStatus = {
   readOnly: true,
   connection: "live",
+  locallyHidden: false,
   reduceMotion: false,
   pencilOnly: false,
   userId: "",
@@ -114,7 +116,7 @@ export class NativeEmbedSession {
   private readonly pendingAwareness = new Set<number>();
   private awarenessTimer: ReturnType<typeof setTimeout> | null = null;
   private lastStatus = "";
-  private needsSaveCheck = false;
+  private saveCheck: "none" | "sync" | "local" = "none";
   private leaveRequest: { id: string; phase: "draining" | "verifying" } | null = null;
   private readonly uploads = createUploadQueue((_appId, _replicaId, upload) => {
     if (this.closed || this.host.readOnly || this.host.connection !== "live") return false;
@@ -309,7 +311,7 @@ export class NativeEmbedSession {
       return;
     }
     if (diff.length <= 2) return;
-    this.needsSaveCheck = true;
+    if (this.saveCheck === "none") this.saveCheck = "sync";
     this.uploads.add(this.scope.appId, undefined, diff);
   }
 
@@ -321,7 +323,7 @@ export class NativeEmbedSession {
       return;
     }
     if (request.phase !== "draining" || this.uploads.hasPending(this.scope.appId)) return;
-    if (!this.needsSaveCheck) {
+    if (this.saveCheck === "none") {
       this.finishLeave(true);
       return;
     }
@@ -342,7 +344,7 @@ export class NativeEmbedSession {
         saved = false;
       }
     }
-    if (saved) this.needsSaveCheck = false;
+    if (saved) this.saveCheck = "none";
     this.finishLeave(saved);
     return "none";
   }
@@ -373,6 +375,7 @@ export class NativeEmbedSession {
     this.host = {
       readOnly: payload.readOnly === true,
       connection: payload.connection === "reconnecting" ? "reconnecting" : "live",
+      locallyHidden: payload.locallyHidden === true,
       reduceMotion: payload.reduceMotion === true,
       pencilOnly: payload.pencilOnly === true,
       userId: typeof payload.userId === "string" ? cutText(payload.userId, 128) : "",
@@ -453,7 +456,10 @@ export class NativeEmbedSession {
 
   private readonly handleDocUpdate = (update: Uint8Array, origin: unknown): void => {
     if (origin === REMOTE || this.closed) return;
-    this.needsSaveCheck = true;
+    if (this.saveCheck !== "local") {
+      this.saveCheck = "local";
+      this.send("editsPending", {});
+    }
     if (!this.synced) return;
     if (this.host.readOnly || this.host.connection !== "live") return;
     this.uploads.add(this.scope.appId, undefined, update);

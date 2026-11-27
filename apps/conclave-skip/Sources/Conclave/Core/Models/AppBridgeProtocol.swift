@@ -88,7 +88,7 @@ enum AppBridgeProtocol {
 }
 
 enum AppBridgeInboundType: String, CaseIterable, Equatable {
-    case ready, sync, verifySaved, update, awareness, status, ack, resize
+    case ready, sync, verifySaved, editsPending, update, awareness, status, ack, resize
 }
 
 enum AppBridgeOutboundType: String, CaseIterable, Equatable {
@@ -233,7 +233,7 @@ enum AppBridgeCodec {
             let vector = bytes(payload["stateVector"], limit: AppBridgeProtocol.stateVectorByteLimit)
             if vector.rejection != AppBridgeRejection.none { return AppBridgeDecodeResult.rejected(vector.rejection) }
             return accepted(AppBridgeInbound.make(type: type, requestId: requestId, bytes: vector.data))
-        case .verifySaved:
+        case .verifySaved, .editsPending:
             return accepted(AppBridgeInbound.make(type: type, requestId: requestId))
         case .update:
             let update = bytes(payload["update"], limit: AppBridgeProtocol.updateByteLimit)

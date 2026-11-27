@@ -1,6 +1,7 @@
 package conclave.module
 
 import android.os.Looper
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -155,6 +156,29 @@ class ACT7AppHostBridgeTests {
         assertTrue(relay.attachBridge(appSessionId = relay.appSessionId) {})
         presenter.fireReadyTimeout(appSessionId = relay.appSessionId, reloadSerial = presenter.model.reloadSerial)
         assertEquals(AppHostIssue.timedOut, presenter.model.issue)
+    }
+
+    @Test fun rendererLossOnlyBlocksStageChangeForUnverifiedLocalEdits() {
+        runBlocking {
+            for (edited in listOf(false, true)) {
+                val relay = ActiveAppSession()
+                relay.bundleOrigin = AppBridgeProtocol.androidOrigin
+                relay.begin(appId = "watch", callSessionId = call, isReadOnly = false)
+                val id = relay.appSessionId
+                val ready = envelope("ready", JSONObject().put("bundleVersion", "1.1.0").put("appId", "watch"), appSessionId = id)
+                relay.attachBridge(appSessionId = id) {}
+                relay.acceptPrimedSnapshot(AppsSyncResponse(syncMessage = skip.foundation.Data(), stateVector = null, awarenessUpdate = null), appSessionId = id)
+                val mount = relay.bridgeGeneration
+                assertEquals(AppBridgeRejection.none, relay.receiveFromEmbed(raw = ready, origin = AppBridgeProtocol.androidOrigin, isMainFrame = true, mount = mount))
+                val pending = envelope("editsPending", JSONObject(), requestId = "e-edit", appSessionId = id)
+                if (edited) {
+                    assertEquals(AppBridgeRejection.none, relay.receiveFromEmbed(raw = pending, origin = AppBridgeProtocol.androidOrigin, isMainFrame = true, mount = mount))
+                }
+                relay.embedFailed(appSessionId = id, issue = AppHostIssue.rendererGone, mount = mount)
+                assertEquals(!edited, relay.prepareToLeave())
+                assertEquals(AppBridgeRejection.notAttached, relay.receiveFromEmbed(raw = pending, origin = AppBridgeProtocol.androidOrigin, isMainFrame = true, mount = mount))
+            }
+        }
     }
 
     @Test fun missingWebMessageListenerShowsTheFailureState() {
