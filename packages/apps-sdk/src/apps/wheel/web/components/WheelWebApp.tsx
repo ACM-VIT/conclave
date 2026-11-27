@@ -17,6 +17,7 @@ import {
   getEntries,
   getHistory,
   getRemoveWinnerOnDone,
+  getSpin,
   recordResult,
   removeEntryById,
   reorderEntries,
@@ -201,7 +202,7 @@ export function WheelWebApp() {
       const recorded = () => isRecordedIn(doc);
       const finalizeResult = () =>
         documents.writeOnce(APP_ID, `result:${settled.spinId}`, (live) => {
-          if (isRecordedIn(live)) return;
+          if (getSpin(live)?.spinId !== settled.spinId || isRecordedIn(live)) return;
           recordResult(live, {
             spinId: settled.spinId,
             label: winner.label,
