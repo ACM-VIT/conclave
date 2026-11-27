@@ -1,10 +1,38 @@
 import { describe, expect, it } from "vitest";
 import { createBatchStore, createOutbox, type OutboxDeps } from "../src/app/lib/telemetry-outbox";
 import { type OutboxModule, type SimResult, simulate } from "./support/outbox-sim";
-import { PARTIAL_HANDOFF, PARTIAL_RETRY, THREAD_CASES } from "./support/outbox-sim-cases";
+import { PARTIAL_HANDOFF, PARTIAL_RETRY, REGRESSION_SEEDS, THREAD_CASES } from "./support/outbox-sim-cases";
 
-const RUNS = Number(process.env.OUTBOX_SIM_RUNS ?? 300);
+const SWEEP_RUNS = Number(process.env.OUTBOX_SIM_RUNS ?? 0);
 const FIRST_SEED = Number(process.env.OUTBOX_SIM_FIRST_SEED ?? 1);
+const SWEEP_CHUNK = 1000;
+
+const runSeeds = async (seeds: readonly number[]) => {
+  const failures: Array<Pick<SimResult, "seed" | "violations">> = [];
+  const totals = { runs: 0, multiTab: 0, aborted: 0, refusedWrites: 0, retryAfters: 0, closes: 0, counted: 0, races: 0, throttles: 0, lockRejects: 0, readFailures: 0, partials: 0 };
+  for (const seed of seeds) {
+    if (failures.length >= 5) break;
+    const result = await simulate(seed);
+    totals.runs += 1;
+    if (result.tabs > 1) totals.multiTab += 1;
+    totals.aborted += result.aborted;
+    totals.refusedWrites += result.refusedWrites;
+    totals.retryAfters += result.retryAfters;
+    totals.closes += result.closes;
+    totals.counted += result.counted;
+    totals.races += result.races;
+    totals.throttles += result.throttles;
+    totals.lockRejects += result.lockRejects;
+    totals.readFailures += result.readFailures;
+    totals.partials += result.partials;
+    if (result.violations.length > 0) failures.push({ seed, violations: result.violations.slice(0, 3) });
+  }
+  return { failures, totals };
+};
+
+const sweeps = Array.from({ length: Math.ceil(SWEEP_RUNS / SWEEP_CHUNK) }, (_, chunk) =>
+  Array.from({ length: Math.min(SWEEP_CHUNK, SWEEP_RUNS - chunk * SWEEP_CHUNK) }, (_, offset) => FIRST_SEED + chunk * SWEEP_CHUNK + offset),
+);
 
 describe("the outbox in a simulated browser", () => {
   it.each(THREAD_CASES.map((thread) => [thread.name, thread] as const))("%s", async (_name, thread) => {
@@ -67,28 +95,20 @@ describe("the outbox in a simulated browser", () => {
     expect(result.violations.map(({ kind }) => kind)).toContain("work left with no owner");
   });
 
-  it(`keeps every invariant over ${RUNS} random runs of 1 to 3 tabs`, async () => {
-    const failures: Array<Pick<SimResult, "seed" | "violations">> = [];
-    const totals = { runs: 0, multiTab: 0, aborted: 0, refusedWrites: 0, retryAfters: 0, closes: 0, counted: 0, races: 0, throttles: 0, lockRejects: 0, readFailures: 0, partials: 0 };
-    for (let seed = FIRST_SEED; seed < FIRST_SEED + RUNS && failures.length < 5; seed++) {
-      const result = await simulate(seed);
-      totals.runs += 1;
-      if (result.tabs > 1) totals.multiTab += 1;
-      totals.aborted += result.aborted;
-      totals.refusedWrites += result.refusedWrites;
-      totals.retryAfters += result.retryAfters;
-      totals.closes += result.closes;
-      totals.counted += result.counted;
-      totals.races += result.races;
-      totals.throttles += result.throttles;
-      totals.lockRejects += result.lockRejects;
-      totals.readFailures += result.readFailures;
-      totals.partials += result.partials;
-      if (result.violations.length > 0) failures.push({ seed, violations: result.violations.slice(0, 3) });
-    }
+  it(`keeps every invariant over the ${REGRESSION_SEEDS.length} regression seeds of 1 to 3 tabs`, async () => {
+    const { failures, totals } = await runSeeds(REGRESSION_SEEDS);
 
     expect(failures).toEqual([]);
-    expect(totals.runs).toBe(RUNS);
+    expect(totals.runs).toBe(REGRESSION_SEEDS.length);
     for (const [name, total] of Object.entries(totals)) expect(total, name).toBeGreaterThan(0);
-  }, 900_000);
+  }, 300_000);
+
+  for (const seeds of sweeps) {
+    it(`keeps every invariant over random seeds ${seeds[0]} to ${seeds[seeds.length - 1]}`, async () => {
+      const { failures, totals } = await runSeeds(seeds);
+
+      expect(failures).toEqual([]);
+      expect(totals.runs).toBe(seeds.length);
+    }, 900_000);
+  }
 });

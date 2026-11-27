@@ -13,6 +13,12 @@ type ThreadCase = {
   posts?: number;
 };
 
+export const REGRESSION_SEEDS: readonly number[] = [
+  15, 18, 23, 25, 28, 37, 41, 42, 43, 49, 51, 54, 58, 62, 69, 75, 77, 81, 89, 102, 108, 109, 113, 122, 125, 133,
+  134, 141, 145, 152, 162, 163, 178, 179, 181, 190, 201, 205, 229, 234, 235, 252, 253, 254, 255, 262, 264, 283,
+  284, 293, 298, 299,
+];
+
 const quiet = {
   refuseRate: 0,
   beaconRefuseRate: 1,

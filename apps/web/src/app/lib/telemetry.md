@@ -185,7 +185,13 @@ batches one replay drops are reported together as
 keepalive request in flight as the page went away). The full lifecycle, every
 state and event with the owner of the next step, is in the PR that added it
 (#265), and `test/telemetry-outbox-model.test.ts` checks it in a seeded
-simulation of up to three tabs.
+simulation of up to three tabs. CI runs its fixed cases and a fixed list of
+regression seeds: every seed from 1 to 300 that fails on an earlier outbox
+version or a mutant that 20 or fewer of those 300 seeds catch. After changing
+the outbox or the model, run `pnpm -C apps/web test:outbox-model:extended`,
+which also sweeps seeds 1 to 10,000 (`OUTBOX_SIM_RUNS` and
+`OUTBOX_SIM_FIRST_SEED` pick the range), and add any seed that finds a new
+bug to `REGRESSION_SEEDS`.
 
 Once the page has started to go away (hidden, `pagehide` or `freeze` seen),
 every later report, such as the call summary the call tracker sends as the

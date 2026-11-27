@@ -20,6 +20,7 @@
     "analyze:serve": "next experimental-analyze --serve",
     "test:unit": "vitest run --dir test",
     "test": "pnpm run test:unit",
+    "test:outbox-model:extended": "OUTBOX_SIM_RUNS=10000 vitest run test/telemetry-outbox-model.test.ts",
     "typecheck": "next typegen && tsc --noEmit && pnpm run scheduling-email:typecheck && pnpm run transcript:typecheck",
     "sync:noise-suppressor": "node scripts/sync-noise-suppressor-assets.mjs",
     "sync:mediapipe": "node scripts/sync-mediapipe-assets.mjs",
