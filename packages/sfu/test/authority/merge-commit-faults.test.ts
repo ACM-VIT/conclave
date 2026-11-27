@@ -326,6 +326,20 @@ describe("a guest link plan (Sol)", () => {
     return { onA, onB };
   };
 
+  it("reports the blocked passes without staging their app data", async () => {
+    const app = notesApp("notes");
+    const room = new Harness([app.authority]);
+    const { onA, onB } = await withNotes(room, app.contract);
+    room.room.blockUser(onA.who.userKey);
+    ownerCalls.count = 0;
+
+    const link = room.room.planGuestLink([{ guestProof: "pass-a" }], "pass-b");
+
+    expect(link).toMatchObject({ blocked: true, recordable: false, passes: new Set(["pass-a", "pass-b"]) });
+    expect(ownerCalls.count).toBe(0);
+    expect(sameGuest(room, onA, onB)).toBe(false);
+  });
+
   it("plans the merge under the current policy even before the policy sweep", async () => {
     const app = notesApp("notes", { webinarOnlyMerge: true });
     const room = new Harness([app.authority]);

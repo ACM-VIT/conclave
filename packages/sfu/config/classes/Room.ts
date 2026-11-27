@@ -1167,11 +1167,12 @@ export class Room {
     }
     if (!grows) return undefined;
     const { merges } = this.guestLinkOf(passes);
-    const staged = passes.size <= GUEST_PASS_GROUP_LIMIT ? this.stageGuestMerges(merges) : null;
+    const blocked = this.guestHolds(this.blockedUsers, "", guestProof, passes);
+    const staged = !blocked && passes.size <= GUEST_PASS_GROUP_LIMIT ? this.stageGuestMerges(merges) : null;
     return {
       guestProof,
       passes,
-      blocked: this.guestHolds(this.blockedUsers, "", guestProof, passes),
+      blocked,
       recordable: staged !== null,
       merges,
       staged,
