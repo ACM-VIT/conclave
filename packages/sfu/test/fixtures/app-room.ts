@@ -78,7 +78,7 @@ const enter = (state: SfuState, room: Room, joiner: ReturnType<typeof fakeSocket
 };
 
 const newRoom = (state: SfuState, id: string): Room => {
-  const room = new Room({ id, clientId: "conclave", workerPid: null, router: {} as Router, appDocuments: state.appDocuments });
+  const room = new Room({ id, clientId: "conclave", workerPid: null, router: { closed: true } as Router, appDocuments: state.appDocuments });
   state.rooms.set(room.channelId, room);
   return room;
 };
@@ -188,7 +188,7 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
     send: (update: Uint8Array, replicaId?: string, part?: unknown) =>
       listeners.get("apps:yjs:update")!({ appId, update, replicaId, ...(part === undefined ? {} : { part }) }),
     sendList: (updates: unknown, replicaId?: string) => listeners.get("apps:yjs:update")!({ appId, updates, replicaId }),
-    acknowledged: (payload: { update?: Uint8Array; updates?: unknown; part?: unknown }, replicaId?: string) =>
+    acknowledged: (payload: { update?: Uint8Array | string; updates?: unknown; part?: unknown }, replicaId?: string) =>
       new Promise<{ receipt: unknown; inbox: Received[]; relayed: number }>((resolve) => {
         listeners.get("apps:yjs:update")!({ appId, replicaId, ...payload }, (receipt: unknown) =>
           resolve({ receipt, inbox: [...self.member.inbox], relayed: relayed.length }),

@@ -151,6 +151,41 @@ const merged = (...updates: Uint8Array[]) => {
   return textOf(doc);
 };
 
+describe("current Wheel document contract", () => {
+  it("rehydrates a retained Wheel document after worker eviction but not after room teardown", async () => {
+    const fixture = createFixture();
+    const pool = createPool({ residentBytes: RESIDENT_OVERHEAD_BYTES, workerUrl: STALLING_WORKER, workerData: fixture.workerData });
+    const room = inRoom(pool, "retained-wheel", { appId: "wheel" });
+    const legacy = new Y.Doc();
+    cleanups.push(() => legacy.destroy());
+    const entries = new Y.Array<{ id: string; label: string }>();
+    const stored = [{ id: "ada", label: "Ada" }, { id: "grace", label: "Grace" }];
+    legacy.getMap("wheel").set("entries", entries);
+    entries.push(stored);
+
+    await room.open();
+    const { document } = await fixture.next("loaded");
+    expect((await room.acknowledged({ update: Y.encodeStateAsUpdate(legacy) })).receipt).toEqual({ committed: true });
+    await fixture.next("dropped");
+    expect(await room.close()).toMatchObject({ success: true });
+    expect(await room.present("wheel")).toMatchObject({ success: true });
+    const { doc: cold } = await room.joinDocument();
+    cleanups.push(() => cold.destroy());
+    expect(await fixture.next("loaded")).toMatchObject({ document });
+    expect((cold.getMap("wheel").get("entries") as Y.Array<unknown>).toArray()).toEqual(stored);
+    expect(cold.getArray("wheel.entries").toArray()).toEqual([]);
+
+    room.room.close();
+    await pool.close();
+    const restarted = inRoom(createPool(), "retained-wheel", { appId: "wheel" });
+    await restarted.open();
+    const { doc: fresh } = await restarted.joinDocument();
+    cleanups.push(() => fresh.destroy());
+    expect(fresh.getMap("wheel").has("entries")).toBe(false);
+    expect(fresh.getArray("wheel.entries").toArray()).toEqual([]);
+  });
+});
+
 describe("app document engine", () => {
   const steppingClock = () => {
     let clock = 0;
