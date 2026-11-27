@@ -26,7 +26,6 @@ import {
   type SetStateAction,
   useCallback,
   useEffect,
-  useEffectEvent,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -52,6 +51,7 @@ import {
   stageRailClass,
   stageRailStyle,
   stageRailTileClass,
+  stageRectSize,
   stageSplitClass,
 } from "./stage-layout";
 import ParticipantVideo from "./ParticipantVideo";
@@ -81,9 +81,17 @@ import {
 import { useElementSize } from "../hooks/useElementSize";
 import { computeTileChrome } from "../lib/tile-chrome";
 import {
+  LOCAL_TILE_ID,
+  OVERFLOW_TILE_ID,
+  PRESENTATION_TILE_ID,
   resolveMeetingStageLayout,
+  resolveTiledGridPlacement,
   type MeetingStageTile,
 } from "../lib/meeting-stage-layout";
+import {
+  ROOM_TILING_METADATA_INTERVAL_MS,
+  usePublishStagePlacement,
+} from "../hooks/useStagePlacementPublisher";
 import { readVideoAspect, resolveTileAspect } from "../lib/tile-video-framing";
 
 interface GridLayoutProps {
@@ -238,7 +246,6 @@ const computeMobilePortraitGridLayout = (
     positions,
   };
 };
-const ROOM_TILING_METADATA_INTERVAL_MS = 200;
 const ROOM_TILING_PROMOTE_DELAY_MS = 1200;
 const ROOM_TILING_MIN_SWITCH_INTERVAL_MS = 8000;
 const FLIP_DURATION_MS = 220;
@@ -246,7 +253,6 @@ const REFLOW_DURATION_MS = 280;
 const FLIP_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
 const FONT_SANS = "'PolySans Trial', system-ui, sans-serif";
 const LOCAL_STAGE_ID = "__local__";
-const PRESENTATION_TILE_ID = "__presentation__";
 
 type EffectiveMeetViewMode = MeetViewMode | "sideBySide";
 type ResolvedSelfViewMode = Exclude<MeetSelfViewMode, "auto">;
@@ -344,108 +350,6 @@ type MeetLocalVideoTracking = {
   } | null;
   receivedAt: number;
 };
-
-type MeetRoomTilingMetadataBase = {
-  source: "client";
-  intervalMs: number;
-  promoteDelayMs: number;
-  minSwitchIntervalMs: number;
-  activeSpeakerId: string | null;
-  featuredSpeakerId: string | null;
-  requestedMode: MeetViewMode;
-  renderedMode: EffectiveMeetViewMode;
-  effectiveMode: EffectiveMeetViewMode;
-  autoStageMode: string;
-  dynamicCrop: boolean;
-  presenting: boolean;
-  presentation: {
-    tileId: string;
-    presenterId: string | null;
-    producerId: string | null;
-    visible: boolean;
-    primary: boolean;
-    focus: boolean;
-  };
-  pinnedId: string | null;
-  primaryIds: string[];
-  focusIds: string[];
-  visibleRemoteIds: string[];
-  hiddenIds: string[];
-  warmIds: string[];
-  warmReasons: Record<string, MeetRoomTilingWarmReason[]>;
-  fallbackLevel: number;
-  orderedRemoteIds: string[];
-  scores: MeetRoomTilingScore[];
-  counts: {
-    orderedRemote: number;
-    visible: number;
-    hidden: number;
-    warm: number;
-    totalGrid: number;
-    stageRail: number;
-    maxTiles: number;
-    requestedMaxTiles: number;
-    autoTileLimit: number;
-    recentlyVisibleWarm: number;
-    priorityWarm: number;
-    handRaisedWarm: number;
-    featuredSpeakerWarm: number;
-    stageRailCapacity: number;
-    stageRailRemoteCapacity: number;
-  };
-  stage: {
-    mainKind: "presentation" | "local" | "remote" | "none";
-    candidateMainKind: "presentation" | "local" | "remote" | "none";
-    mainParticipantId: string | null;
-    sideCompanionKind: "local" | "remote" | "none";
-    sideCompanionId: string | null;
-    sideBySide: boolean;
-    spotlight: boolean;
-  };
-  selfView: {
-    requested: MeetSelfViewMode;
-    effective: ResolvedSelfViewMode;
-    placement: "stage" | "tile" | "floating" | "minimized" | "none";
-    corner: MeetSelfViewCorner;
-  };
-  layout: {
-    width: number;
-    height: number;
-    cols: number;
-    rows: number;
-    tileWidth: number;
-    tileHeight: number;
-    contentWidth: number;
-    contentHeight: number;
-    offsetX: number;
-    offsetY: number;
-    positions: Array<GridTilePosition & { id: string }>;
-    gridVideoFit: "cover" | "contain";
-    fullVideoTileIds: string[];
-  };
-  localVideo: MeetLocalVideoTracking;
-};
-
-type MeetRoomTilingMetadata = MeetRoomTilingMetadataBase & {
-  sequence: number;
-  timestamp: number;
-  performanceTime: number;
-  signature: string;
-};
-
-type MeetRoomTilingDebugSnapshot = {
-  current: MeetRoomTilingMetadata | null;
-  history: MeetRoomTilingMetadata[];
-  sequence: number;
-  intervalMs: number;
-};
-
-declare global {
-  interface Window {
-    __conclaveGetMeetRoomTilingDebug?: () => MeetRoomTilingDebugSnapshot;
-    __conclaveMeetRoomTilingDebug?: MeetRoomTilingDebugSnapshot;
-  }
-}
 
 const hasLiveTrack = (
   stream: MediaStream | null | undefined,
@@ -915,7 +819,7 @@ function GridLayout({
   sidePanelReserve = 0,
   isMobile = false,
 }: GridLayoutProps) {
-  const stageRootRef = useRef<HTMLDivElement>(null);
+  const stageBoxRef = useRef<HTMLDivElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const localGridTileRef = useRef<HTMLDivElement>(null);
   const localGridTileSize = useElementSize(localGridTileRef);
@@ -1376,22 +1280,25 @@ function GridLayout({
         : null,
       presenting: hasPresentation,
       spotlight: renderedViewMode === "spotlight",
-      tileSelfView: shouldShowSelfAsTile,
+      selfView: { mode: effectiveSelfViewMode, corner: requestedSelfViewCorner },
+      galleryOpen: isOverflowOpen,
       maxTiles: maxGridTiles,
     });
   }, [
     companionParticipant,
+    effectiveSelfViewMode,
     gridSize,
     hasFeaturedVideoSpeaker,
     hasPresentation,
     isLocalFeaturedSpeaker,
     isLocalPinned,
+    isOverflowOpen,
     maxGridTiles,
     orderedRemoteParticipants,
     pinnedParticipant,
     preferredRemoteParticipant,
     renderedViewMode,
-    shouldShowSelfAsTile,
+    requestedSelfViewCorner,
     wantsStageLayout,
   ]);
   const usesStageLayout = stageLayout !== null;
@@ -1409,9 +1316,6 @@ function GridLayout({
   const stageRailTileCount = stageLayout ? stageLayout.rail.length + Number(stageLayout.overflow) : 0;
   const stageRailCapacity = stageLayout?.railSlots ?? 0;
   const stageRailRemoteCapacity = stageLayout?.remoteRailCount ?? 0;
-  const presentationRenderedAsPrimary = hasGridPresentationTile || stageMainKind === "presentation";
-  const presentationRenderedInRail = stageLayout?.rail.some((tile) => tile.kind === "presentation") ?? false;
-  const isPresentationRendered = presentationRenderedAsPrimary || presentationRenderedInRail;
 
   useEffect(() => {
     const video = localVideoRef.current;
@@ -1518,13 +1422,112 @@ function GridLayout({
   const showOverflowTile = stageLayout?.overflow ?? hiddenParticipantsCount > 0;
   const showOverflowGallery = showOverflowTile && isOverflowOpen;
   const showOverflowTileInGrid = showOverflowTile && !isOverflowOpen && !stageLayout;
-  const roomTilingRemoteVisibleIds = useMemo(() => {
-    const participants = stageLayout
-      ? stageLayout.tiles.flatMap((tile) => tile.kind === "remote" ? [tile.participant] : [])
-      : visibleParticipants;
-    const rendered = showOverflowGallery ? [...participants, ...overflowParticipants] : participants;
-    return rendered.map((participant) => participant.userId);
-  }, [overflowParticipants, showOverflowGallery, stageLayout, visibleParticipants]);
+  const tiledGridTileIds = useMemo(() => {
+    if (stageLayout) return [];
+    const ids: string[] = [];
+    if (hasGridPresentationTile) ids.push(PRESENTATION_TILE_ID);
+    if (shouldShowSelfAsTile) ids.push(LOCAL_TILE_ID);
+    visibleParticipants.forEach((participant) => ids.push(participant.userId));
+    if (showOverflowTileInGrid) ids.push(OVERFLOW_TILE_ID);
+    return ids;
+  }, [
+    hasGridPresentationTile,
+    shouldShowSelfAsTile,
+    showOverflowTileInGrid,
+    stageLayout,
+    visibleParticipants,
+  ]);
+  const totalParticipants = tiledGridTileIds.length;
+  const gridUsableWidth = Math.max(0, gridSize.width - GRID_PADDING * 2);
+  const gridUsableHeight = Math.max(0, gridSize.height - GRID_PADDING * 2);
+  const isMobilePortraitGrid = isMobilePortrait(
+    isMobile,
+    gridUsableWidth,
+    gridUsableHeight,
+  );
+  const usesVideoShapedTiles = usesAutoDynamicCrop && !isMobilePortraitGrid;
+  const tileAspects = useMemo(
+    () =>
+      usesVideoShapedTiles
+        ? tiledGridTileIds.map((id) =>
+            resolveTileAspect(
+              videoAspectById.get(id) ?? null,
+              fullVideoTileIds.has(id),
+            ),
+          )
+        : undefined,
+    [fullVideoTileIds, tiledGridTileIds, usesVideoShapedTiles, videoAspectById],
+  );
+  const layout = useMemo(() => {
+    if (isMobilePortraitGrid) {
+      return computeMobilePortraitGridLayout(
+        totalParticipants,
+        gridUsableWidth,
+        gridUsableHeight,
+        GRID_GAP,
+        maxGridTiles,
+      );
+    }
+    const { maxCols, targetAspect } = getGridPackingParams(
+      isMobile,
+      gridUsableWidth,
+    );
+    return computeGridLayout(totalParticipants, gridUsableWidth, gridUsableHeight, {
+      gap: GRID_GAP,
+      maxCols,
+      maxTilesPerPage: maxGridTiles,
+      targetAspect,
+      tileAspects,
+    });
+  }, [
+    totalParticipants,
+    gridUsableWidth,
+    gridUsableHeight,
+    isMobilePortraitGrid,
+    maxGridTiles,
+    isMobile,
+    tileAspects,
+  ]);
+  const tileStyle =
+    layout.tileWidth > 0
+      ? { width: layout.tileWidth, height: layout.tileHeight }
+      : undefined;
+  const tiledGridPositionById = useMemo(() => {
+    const positions = new Map<string, GridTilePosition>();
+    tiledGridTileIds.forEach((id, index) => {
+      const position = layout.positions[index];
+      if (position) positions.set(id, position);
+    });
+    return positions;
+  }, [layout.positions, tiledGridTileIds]);
+  const tiledGridPlacement = useMemo(
+    () =>
+      resolveTiledGridPlacement({
+        size: { width: gridUsableWidth, height: gridUsableHeight },
+        tiles: tiledGridTileIds.map((id) => ({
+          id,
+          rect: tiledGridPositionById.get(id) ?? null,
+        })),
+        hiddenIds: hiddenParticipants.map((participant) => participant.userId),
+        galleryOpen: isOverflowOpen,
+        selfView: { mode: effectiveSelfViewMode, corner: requestedSelfViewCorner },
+      }),
+    [
+      effectiveSelfViewMode,
+      gridUsableHeight,
+      gridUsableWidth,
+      hiddenParticipants,
+      isOverflowOpen,
+      requestedSelfViewCorner,
+      tiledGridPositionById,
+      tiledGridTileIds,
+    ],
+  );
+  const stagePlacement = stageLayout ?? tiledGridPlacement;
+  const selfViewPlacement = stagePlacement.selfView;
+  const roomTilingRemoteVisibleIds = stagePlacement.hints.visibleRemoteIds;
+  const roomTilingPrimaryIds = stagePlacement.hints.primaryIds;
+  const roomTilingHiddenIds = stagePlacement.hints.hiddenIds;
   const roomTilingRemoteVisibleIdSignature = useMemo(
     () => roomTilingRemoteVisibleIds.join(","),
     [roomTilingRemoteVisibleIds],
@@ -1699,31 +1702,7 @@ function GridLayout({
     recentlyVisibleWarmRevision,
     roomTilingRemoteVisibleIds,
   ]);
-  const tiledGridTileIds = useMemo(() => {
-    if (stageLayout) return [];
-    const ids: string[] = [];
-    if (hasGridPresentationTile) ids.push(PRESENTATION_TILE_ID);
-    if (shouldShowSelfAsTile) ids.push("local");
-    visibleParticipants.forEach((participant) => ids.push(participant.userId));
-    if (showOverflowTileInGrid) ids.push("overflow");
-    return ids;
-  }, [
-    hasGridPresentationTile,
-    shouldShowSelfAsTile,
-    showOverflowTileInGrid,
-    stageLayout,
-    visibleParticipants,
-  ]);
-  const totalParticipants = tiledGridTileIds.length;
   const overflowPreviewParticipants = overflowParticipants.slice(0, 4);
-  const roomTilingPrimaryIds = useMemo(() => {
-    if (!stageLayout) return tiledGridTileIds;
-    return stageLayout.tiles.flatMap((tile) =>
-      tile.kind === "presentation"
-        ? presentationRenderedAsPrimary ? [PRESENTATION_TILE_ID] : []
-        : [tile.kind === "local" ? "local" : tile.participant.userId],
-    );
-  }, [presentationRenderedAsPrimary, stageLayout, tiledGridTileIds]);
   const roomTilingFocusIds = useMemo(() => {
     const ids: string[] = [];
     if (usesStageLayout && stageMainKind === "remote" && stageMainParticipantId) {
@@ -1743,13 +1722,6 @@ function GridLayout({
     stageMainParticipantId,
     usesStageLayout,
   ]);
-  const roomTilingHiddenIds = useMemo(
-    () =>
-      showOverflowGallery
-        ? []
-        : overflowParticipants.map((participant) => participant.userId),
-    [showOverflowGallery, overflowParticipants],
-  );
   const roomTilingWarmIds = useMemo(
     () => warmParticipants.map((participant) => participant.userId),
     [warmParticipants],
@@ -1837,68 +1809,6 @@ function GridLayout({
 
   const localDisplayName = getDisplayName(currentUserId);
 
-  const gridUsableWidth = Math.max(0, gridSize.width - GRID_PADDING * 2);
-  const gridUsableHeight = Math.max(0, gridSize.height - GRID_PADDING * 2);
-  const isMobilePortraitGrid = isMobilePortrait(
-    isMobile,
-    gridUsableWidth,
-    gridUsableHeight,
-  );
-  const usesVideoShapedTiles = usesAutoDynamicCrop && !isMobilePortraitGrid;
-  const tileAspects = useMemo(
-    () =>
-      usesVideoShapedTiles
-        ? tiledGridTileIds.map((id) =>
-            resolveTileAspect(
-              videoAspectById.get(id) ?? null,
-              fullVideoTileIds.has(id),
-            ),
-          )
-        : undefined,
-    [fullVideoTileIds, tiledGridTileIds, usesVideoShapedTiles, videoAspectById],
-  );
-  const layout = useMemo(() => {
-    if (isMobilePortraitGrid) {
-      return computeMobilePortraitGridLayout(
-        totalParticipants,
-        gridUsableWidth,
-        gridUsableHeight,
-        GRID_GAP,
-        maxGridTiles,
-      );
-    }
-    const { maxCols, targetAspect } = getGridPackingParams(
-      isMobile,
-      gridUsableWidth,
-    );
-    return computeGridLayout(totalParticipants, gridUsableWidth, gridUsableHeight, {
-      gap: GRID_GAP,
-      maxCols,
-      maxTilesPerPage: maxGridTiles,
-      targetAspect,
-      tileAspects,
-    });
-  }, [
-    totalParticipants,
-    gridUsableWidth,
-    gridUsableHeight,
-    isMobilePortraitGrid,
-    maxGridTiles,
-    isMobile,
-    tileAspects,
-  ]);
-  const tileStyle =
-    layout.tileWidth > 0
-      ? { width: layout.tileWidth, height: layout.tileHeight }
-      : undefined;
-  const tiledGridPositionById = useMemo(() => {
-    const positions = new Map<string, GridTilePosition>();
-    tiledGridTileIds.forEach((id, index) => {
-      const position = layout.positions[index];
-      if (position) positions.set(id, position);
-    });
-    return positions;
-  }, [layout.positions, tiledGridTileIds]);
   const tiledGridTileStyleById = useMemo(() => {
     const styles = new Map<string, CSSProperties>();
     tiledGridPositionById.forEach((position, id) => {
@@ -1942,23 +1852,10 @@ function GridLayout({
     ? { objectPosition: localTrackingObjectPosition }
     : undefined;
   const showFloatingSelfView =
-    !isLocalPinned &&
-    stageMainKind !== "local" &&
-    (effectiveSelfViewMode === "floating" ||
-      (usesSpotlightLayout && shouldShowSelfAsTile));
+    selfViewPlacement.placement === "floating" && selfViewPlacement.rect !== null;
   const showMinimizedSelfView =
-    !isLocalPinned &&
-    stageMainKind !== "local" &&
-    effectiveSelfViewMode === "minimized";
-  const actualSelfViewPlacement = stageMainKind === "local"
-    ? "stage"
-    : (stageLayout ? stageLayout.tiles.some((tile) => tile.kind === "local") : shouldShowSelfAsTile)
-      ? "tile"
-      : showFloatingSelfView
-        ? "floating"
-        : showMinimizedSelfView
-          ? "minimized"
-          : "none";
+    selfViewPlacement.placement === "minimized" && selfViewPlacement.rect !== null;
+  const actualSelfViewPlacement = selfViewPlacement.placement;
   const roomTilingFallbackLevel = !hasMeasuredGrid
     ? 2
     : usesStageLayout &&
@@ -1969,12 +1866,8 @@ function GridLayout({
       : usesMeasuredAutoTileLimit && autoGridTileLimit < requestedMaxTiles
         ? 1
         : 0;
-  const roomTilingMetadataRef = useRef<MeetRoomTilingMetadata | null>(null);
-  const roomTilingHistoryRef = useRef<MeetRoomTilingMetadata[]>([]);
-  const roomTilingMetadataBase = useMemo<MeetRoomTilingMetadataBase>(
+  const roomTilingDetails = useMemo(
     () => ({
-      source: "client",
-      intervalMs: ROOM_TILING_METADATA_INTERVAL_MS,
       promoteDelayMs: ROOM_TILING_PROMOTE_DELAY_MS,
       minSwitchIntervalMs: ROOM_TILING_MIN_SWITCH_INTERVAL_MS,
       activeSpeakerId,
@@ -1989,15 +1882,10 @@ function GridLayout({
         tileId: PRESENTATION_TILE_ID,
         presenterId: presentationPresenterId,
         producerId: presentationProducerId,
-        visible: isPresentationRendered,
-        primary: presentationRenderedAsPrimary,
-        focus: presentationRenderedAsPrimary,
+        focus: stagePlacement.hints.presentation.primary,
       },
       pinnedId,
-      primaryIds: roomTilingPrimaryIds,
       focusIds: roomTilingFocusIds,
-      visibleRemoteIds: roomTilingRemoteVisibleIds,
-      hiddenIds: roomTilingHiddenIds,
       warmIds: roomTilingWarmIds,
       warmReasons: roomTilingWarmReasons,
       fallbackLevel: roomTilingFallbackLevel,
@@ -2040,6 +1928,7 @@ function GridLayout({
       stage: {
         mainKind: usesStageLayout ? stageMainKind ?? "none" : "none",
         candidateMainKind: stageMainKind ?? "none",
+        rects: stageLayout?.rects ?? null,
         mainParticipantId: usesStageLayout ? stageMainParticipantId : null,
         sideCompanionKind: usesSideBySideLayout
           ? sideBySideCompanionKind ?? "none"
@@ -2058,6 +1947,8 @@ function GridLayout({
         effective: effectiveSelfViewMode,
         placement: actualSelfViewPlacement,
         corner: requestedSelfViewCorner,
+        placedCorner: selfViewPlacement.corner,
+        rect: selfViewPlacement.rect,
       },
       layout: {
         width: gridSize.width,
@@ -2089,10 +1980,8 @@ function GridLayout({
       gridSize.height,
       gridSize.width,
       gridVideoObjectFit,
-      hasGridPresentationTile,
       hasPresentation,
       hiddenParticipantsCount,
-      isPresentationRendered,
       gridTilePlacements,
       layout.cols,
       layout.contentHeight,
@@ -2107,22 +1996,22 @@ function GridLayout({
       orderedRemoteParticipants,
       presentationPresenterId,
       presentationProducerId,
-      presentationRenderedAsPrimary,
       pinnedId,
       renderedViewMode,
       requestedMaxTiles,
       requestedSelfViewCorner,
       requestedSelfViewMode,
-      roomTilingHiddenIds,
       roomTilingFallbackLevel,
-      roomTilingPrimaryIds,
       roomTilingFocusIds,
       roomTilingRemoteVisibleIds,
       roomTilingWarmReasons,
       roomTilingScores,
       roomTilingWarmIds,
+      selfViewPlacement,
       sideBySideCompanionKind,
       sideBySideCompanionParticipantId,
+      stageLayout,
+      stagePlacement,
       stageRailCapacity,
       stageMainKind,
       stageMainParticipantId,
@@ -2137,75 +2026,8 @@ function GridLayout({
       warmParticipants.length,
     ],
   );
-  const roomTilingMetadataSignature = useMemo(
-    () => JSON.stringify(roomTilingMetadataBase),
-    [roomTilingMetadataBase],
-  );
-
-  const getRoomTilingSnapshot = useCallback(
-    (): MeetRoomTilingDebugSnapshot => ({
-      current: roomTilingMetadataRef.current,
-      history: roomTilingHistoryRef.current,
-      sequence: roomTilingMetadataRef.current?.sequence ?? 0,
-      intervalMs: ROOM_TILING_METADATA_INTERVAL_MS,
-    }),
-    [],
-  );
-
-  const publishRoomTiling = useEffectEvent(
-    (heartbeat = false) => {
-      const previous = roomTilingMetadataRef.current;
-      if (
-        !heartbeat &&
-        previous?.signature === roomTilingMetadataSignature
-      ) {
-        return;
-      }
-
-      const metadata: MeetRoomTilingMetadata = {
-        ...roomTilingMetadataBase,
-        sequence: (previous?.sequence ?? 0) + 1,
-        timestamp: Date.now(),
-        performanceTime: Math.round(performance.now()),
-        signature: roomTilingMetadataSignature,
-      };
-      roomTilingMetadataRef.current = metadata;
-      roomTilingHistoryRef.current = [
-        ...roomTilingHistoryRef.current,
-        metadata,
-      ].slice(-24);
-      window.__conclaveMeetRoomTilingDebug = getRoomTilingSnapshot();
-      window.dispatchEvent(
-        new CustomEvent("conclave:meet-room-tiling", { detail: metadata }),
-      );
-    },
-  );
-
-  useEffect(() => {
-    window.__conclaveGetMeetRoomTilingDebug = getRoomTilingSnapshot;
-    window.__conclaveMeetRoomTilingDebug = getRoomTilingSnapshot();
-    let interval: number | undefined;
-    try {
-      if (window.localStorage.getItem("conclave:debug-video-effects") === "1") {
-        interval = window.setInterval(
-          () => publishRoomTiling(true),
-          ROOM_TILING_METADATA_INTERVAL_MS,
-        );
-      }
-    } catch {}
-
-    return () => {
-      window.clearInterval(interval);
-      if (window.__conclaveGetMeetRoomTilingDebug === getRoomTilingSnapshot) {
-        delete window.__conclaveGetMeetRoomTilingDebug;
-        delete window.__conclaveMeetRoomTilingDebug;
-      }
-    };
-  }, [getRoomTilingSnapshot]);
-
-  useLayoutEffect(() => {
-    publishRoomTiling();
-  }, [roomTilingMetadataSignature]);
+  const publishedPlacement = usePublishStagePlacement(stagePlacement, roomTilingDetails);
+  const stage = publishedPlacement.arrangement === "stage" ? publishedPlacement : null;
   const setSelfViewMode = useCallback(
     (selfViewMode: MeetSelfViewMode) => {
       onViewSettingsChange?.((current) => ({ ...current, selfViewMode }));
@@ -2220,7 +2042,7 @@ function GridLayout({
   );
   const resolveSelfViewCornerFromPoint = useCallback(
     (clientX: number, clientY: number): MeetSelfViewCorner => {
-      const rect = stageRootRef.current?.getBoundingClientRect();
+      const rect = stageBoxRef.current?.getBoundingClientRect();
       const midpointX = (rect?.left ?? 0) + (rect?.width ?? window.innerWidth) / 2;
       const midpointY = (rect?.top ?? 0) + (rect?.height ?? window.innerHeight) / 2;
       const vertical = clientY < midpointY ? "top" : "bottom";
@@ -2230,7 +2052,7 @@ function GridLayout({
     [],
   );
   const getSelfViewDragPoint = useCallback((clientX: number, clientY: number) => {
-    const rect = stageRootRef.current?.getBoundingClientRect();
+    const rect = stageBoxRef.current?.getBoundingClientRect();
     if (!rect) return { x: clientX, y: clientY };
     return {
       x: Math.min(Math.max(clientX - rect.left, 24), Math.max(24, rect.width - 24)),
@@ -2276,11 +2098,11 @@ function GridLayout({
     ],
   );
   const selfViewCornerClass =
-    requestedSelfViewCorner === "top-left"
+    selfViewPlacement.corner === "top-left"
       ? "left-4 top-4"
-      : requestedSelfViewCorner === "top-right"
+      : selfViewPlacement.corner === "top-right"
         ? "right-4 top-4"
-        : requestedSelfViewCorner === "bottom-left"
+        : selfViewPlacement.corner === "bottom-left"
           ? "bottom-4 left-4"
           : "bottom-4 right-4";
   const selfViewDragStyle = selfViewDragPoint
@@ -2434,32 +2256,36 @@ function GridLayout({
     }
   };
 
-  const stageRail = stageLayout && stageRailTileCount > 0 ? (
+  const stageRail = stage && stageRailTileCount > 0 ? (
     <div
-      className={stageLayout.companion
-        ? stageLayout.split.mode === "stack"
+      className={stage.companion
+        ? stage.split.mode === "stack"
           ? "flex h-full min-w-0 flex-1 flex-row gap-3 overflow-x-auto overflow-y-hidden pb-1"
-          : "flex max-h-[35%] flex-none flex-col gap-3 overflow-y-auto overflow-x-hidden pr-1"
-        : stageRailClass(stageLayout.split.mode)}
-      style={stageLayout.companion ? undefined : stageRailStyle(stageLayout.split)}
+          : "flex flex-none flex-col gap-3 overflow-y-auto overflow-x-hidden pr-1"
+        : stageRailClass(stage)}
+      style={!stage.companion
+        ? stageRailStyle(stage)
+        : stage.split.mode === "side" && stage.rects.railBox
+          ? { height: stage.rects.railBox.height }
+          : undefined}
       data-meet-stage-rail
     >
-      {stageLayout.rail.map((tile) => (
+      {stage.rail.map((tile) => (
         <div
           key={tile.kind === "remote" ? tile.participant.userId : tile.kind}
-          className={`${stageRailTileClass(stageLayout.split.mode)} max-h-full`}
+          className={`${stageRailTileClass(stage)} max-h-full`}
         >
           {renderStageTile(tile, "rail")}
         </div>
       ))}
-      {stageLayout.overflow ? (
+      {stage.overflow ? (
         <button
           type="button"
           onClick={() => setIsOverflowOpen((prev) => !prev)}
           aria-expanded={showOverflowGallery}
           aria-label={`Show ${hiddenParticipantsCount} more participants`}
           title={`Show ${hiddenParticipantsCount} more participants`}
-          className={`acm-video-tile group flex flex-col items-center justify-center bg-[#131316] text-[#fafafa] transition-colors hover:border-[#fafafa]/15 ${stageRailTileClass(stageLayout.split.mode)}`}
+          className={`acm-video-tile group flex flex-col items-center justify-center bg-[#131316] text-[#fafafa] transition-colors hover:border-[#fafafa]/15 ${stageRailTileClass(stage)}`}
         >
           <div className="absolute inset-2 grid grid-cols-2 grid-rows-2 gap-1 opacity-30 transition-opacity duration-200 group-hover:opacity-50">
             {overflowPreviewParticipants.map((participant) => (
@@ -2486,7 +2312,6 @@ function GridLayout({
 
   return (
     <div
-      ref={stageRootRef}
       className="relative flex flex-1 min-h-0 flex-col"
       style={{ fontFamily: FONT_SANS }}
     >
@@ -2506,6 +2331,7 @@ function GridLayout({
         ))}
       </div>
 
+      <div ref={stageBoxRef} className="relative flex min-h-0 flex-1">
       <div
         ref={gridRef}
         data-meet-view-layout={usesStageLayout ? renderedViewMode : "tiled"}
@@ -2612,7 +2438,7 @@ function GridLayout({
         data-meet-room-tiling-warm-hold={RECENTLY_VISIBLE_WARM_HOLD_MS}
         data-meet-room-tiling-warm-reasons={roomTilingWarmReasonsJson}
         data-meet-room-tiling-scores={roomTilingScoresJson}
-        className={`relative flex flex-1 min-h-0 p-4 ${
+        className={`relative flex min-h-0 min-w-0 flex-1 p-4 ${
           usesMobileScrollGrid
             ? "overflow-y-auto overflow-x-hidden"
             : "overflow-hidden"
@@ -2623,10 +2449,10 @@ function GridLayout({
         }`}
         style={{ gap: GRID_GAP }}
       >
-        {stageLayout ? (
+        {stage ? (
           <div
-            className={stageSplitClass(stageLayout.split.mode)}
-            data-meet-stage-split={stageLayout.split.mode}
+            className={stageSplitClass(stage)}
+            data-meet-stage-split={stage.split.mode}
             data-meet-side-by-side={usesSideBySideLayout || undefined}
             data-meet-side-by-side-companion-kind={sideBySideCompanionKind ?? undefined}
             data-meet-side-by-side-companion={sideBySideCompanionKind === "local"
@@ -2639,23 +2465,26 @@ function GridLayout({
                 ? PRESENTATION_TILE_ID
                 : stageMainKind === "local" ? currentUserId : stageMainParticipantId ?? undefined}
             >
-              {renderStageTile(stageLayout.main, "main")}
-              {stageLayout.compactPin ? (
-                <div className="absolute bottom-0 left-0 z-30 h-[min(4.5rem,60%)] w-[min(7rem,48%)]">
-                  {renderStageTile(stageLayout.compactPin, "rail")}
+              {renderStageTile(stage.main, "main")}
+              {stage.compactPin && stage.rects.compactPin ? (
+                <div
+                  className="absolute bottom-0 left-0 z-30"
+                  style={stageRectSize(stage.rects.compactPin)}
+                >
+                  {renderStageTile(stage.compactPin, "rail")}
                 </div>
               ) : null}
             </div>
 
-            {stageLayout.companion ? (
+            {stage.companion ? (
               <div
-                className={stageLayout.split.mode === "stack"
+                className={stage.split.mode === "stack"
                   ? "flex w-full shrink-0 flex-row gap-3"
                   : "flex shrink-0 flex-col gap-3"}
-                style={stageRailStyle(stageLayout.split)}
+                style={stageRailStyle(stage)}
               >
                 <div className="relative min-h-0 min-w-0 flex-[1.15]">
-                  {renderStageTile(stageLayout.companion, "companion")}
+                  {renderStageTile(stage.companion, "companion")}
                 </div>
                 {stageRail}
               </div>
@@ -2963,6 +2792,70 @@ function GridLayout({
           </>
         )}
       </div>
+      {showFloatingSelfView && selfViewPlacement.rect ? (
+        <div
+          className={`group absolute z-20 overflow-hidden rounded-2xl shadow-[0_16px_42px_rgba(0,0,0,0.38)] ${
+            selfViewDragPoint ? "" : selfViewCornerClass
+          }`}
+          style={{ ...stageRectSize(selfViewPlacement.rect), ...selfViewDragStyle }}
+          data-meet-floating-self-view="true"
+          data-meet-detached-self-view="floating"
+          data-meet-self-view-corner={selfViewPlacement.corner}
+          data-meet-self-view-dragging={selfViewDragPoint ? "true" : "false"}
+        >
+          <LocalVideoTile
+            stream={localStream}
+            isCameraOff={isCameraOff}
+            isMuted={isMuted}
+            isHandRaised={isHandRaised}
+            isMirrorCamera={isMirrorCamera}
+            displayName={localDisplayName}
+            userEmail={userEmail}
+            isActiveSpeaker={isLocalActiveSpeaker}
+            isPinned={isLocalPinned}
+            onTogglePin={toggleLocalPin}
+            tracking={localVideoTracking}
+            cropPosition={localTrackingObjectPosition}
+          />
+          <div className="absolute left-2 top-2 z-10 flex gap-1.5 opacity-0 transition-opacity duration-[120ms] group-hover:opacity-100 focus-within:opacity-100">
+            <button
+              type="button"
+              onPointerDown={beginSelfViewDrag}
+              aria-label="Move self-view"
+              title="Move self-view"
+              className="inline-flex h-7 w-7 cursor-grab items-center justify-center rounded-full border border-[#fafafa]/12 bg-black/65 text-[#fafafa]/82 shadow-[0_8px_20px_rgba(0,0,0,0.3)] transition-colors hover:bg-black/80 hover:text-[#fafafa] active:cursor-grabbing"
+            >
+              <Move size={14} strokeWidth={1.8} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelfViewMode("minimized")}
+              aria-label="Minimize self-view"
+              title="Minimize self-view"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[#fafafa]/12 bg-black/65 text-[#fafafa]/82 shadow-[0_8px_20px_rgba(0,0,0,0.3)] transition-colors hover:bg-black/80 hover:text-[#fafafa]"
+            >
+              <Minimize2 size={14} strokeWidth={1.8} />
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {showMinimizedSelfView && selfViewPlacement.rect ? (
+        <MinimizedSelfViewPill
+          displayName={localDisplayName}
+          userEmail={userEmail}
+          isMuted={isMuted}
+          isHandRaised={isHandRaised}
+          corner={selfViewPlacement.corner}
+          cornerClass={selfViewCornerClass}
+          maxWidth={selfViewPlacement.rect.width}
+          dragStyle={selfViewDragStyle}
+          isDragging={Boolean(selfViewDragPoint)}
+          onDragStart={beginSelfViewDrag}
+          onRestore={() => setSelfViewMode("floating")}
+        />
+      ) : null}
+      </div>
 
       {showOverflowTile ? (
         <div
@@ -3022,68 +2915,6 @@ function GridLayout({
         </div>
       ) : null}
 
-      {showFloatingSelfView ? (
-        <div
-          className={`group absolute z-20 h-28 w-[min(15rem,32vw)] min-w-[10rem] overflow-hidden rounded-2xl shadow-[0_16px_42px_rgba(0,0,0,0.38)] ${
-            selfViewDragPoint ? "" : selfViewCornerClass
-          }`}
-          style={selfViewDragStyle}
-          data-meet-floating-self-view="true"
-          data-meet-detached-self-view="floating"
-          data-meet-self-view-corner={requestedSelfViewCorner}
-          data-meet-self-view-dragging={selfViewDragPoint ? "true" : "false"}
-        >
-          <LocalVideoTile
-            stream={localStream}
-            isCameraOff={isCameraOff}
-            isMuted={isMuted}
-            isHandRaised={isHandRaised}
-            isMirrorCamera={isMirrorCamera}
-            displayName={localDisplayName}
-            userEmail={userEmail}
-            isActiveSpeaker={isLocalActiveSpeaker}
-            isPinned={isLocalPinned}
-            onTogglePin={toggleLocalPin}
-            tracking={localVideoTracking}
-            cropPosition={localTrackingObjectPosition}
-          />
-          <div className="absolute left-2 top-2 z-10 flex gap-1.5 opacity-0 transition-opacity duration-[120ms] group-hover:opacity-100 focus-within:opacity-100">
-            <button
-              type="button"
-              onPointerDown={beginSelfViewDrag}
-              aria-label="Move self-view"
-              title="Move self-view"
-              className="inline-flex h-7 w-7 cursor-grab items-center justify-center rounded-full border border-[#fafafa]/12 bg-black/65 text-[#fafafa]/82 shadow-[0_8px_20px_rgba(0,0,0,0.3)] transition-colors hover:bg-black/80 hover:text-[#fafafa] active:cursor-grabbing"
-            >
-              <Move size={14} strokeWidth={1.8} />
-            </button>
-            <button
-              type="button"
-              onClick={() => setSelfViewMode("minimized")}
-              aria-label="Minimize self-view"
-              title="Minimize self-view"
-              className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[#fafafa]/12 bg-black/65 text-[#fafafa]/82 shadow-[0_8px_20px_rgba(0,0,0,0.3)] transition-colors hover:bg-black/80 hover:text-[#fafafa]"
-            >
-              <Minimize2 size={14} strokeWidth={1.8} />
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      {showMinimizedSelfView ? (
-        <MinimizedSelfViewPill
-          displayName={localDisplayName}
-          userEmail={userEmail}
-          isMuted={isMuted}
-          isHandRaised={isHandRaised}
-          corner={requestedSelfViewCorner}
-          cornerClass={selfViewCornerClass}
-          dragStyle={selfViewDragStyle}
-          isDragging={Boolean(selfViewDragPoint)}
-          onDragStart={beginSelfViewDrag}
-          onRestore={() => setSelfViewMode("floating")}
-        />
-      ) : null}
     </div>
   );
 }
@@ -3475,6 +3306,7 @@ const MinimizedSelfViewPill = memo(function MinimizedSelfViewPill({
   isHandRaised,
   corner,
   cornerClass,
+  maxWidth,
   dragStyle,
   isDragging,
   onDragStart,
@@ -3486,6 +3318,7 @@ const MinimizedSelfViewPill = memo(function MinimizedSelfViewPill({
   isHandRaised: boolean;
   corner: MeetSelfViewCorner;
   cornerClass: string;
+  maxWidth: number;
   dragStyle?: CSSProperties;
   isDragging: boolean;
   onDragStart: (event: ReactPointerEvent<HTMLElement>) => void;
@@ -3493,10 +3326,10 @@ const MinimizedSelfViewPill = memo(function MinimizedSelfViewPill({
 }) {
   return (
     <div
-      className={`absolute z-20 flex max-w-[min(19rem,44vw)] items-center gap-2 rounded-full border border-[#fafafa]/12 bg-[#111114]/92 px-2.5 py-2 text-[#fafafa] shadow-[0_14px_36px_rgba(0,0,0,0.36)] ${
+      className={`absolute z-20 flex items-center gap-2 rounded-full border border-[#fafafa]/12 bg-[#111114]/92 px-2.5 py-2 text-[#fafafa] shadow-[0_14px_36px_rgba(0,0,0,0.36)] ${
         isDragging ? "" : cornerClass
       }`}
-      style={dragStyle}
+      style={{ maxWidth, ...dragStyle }}
       data-meet-minimized-self-view="true"
       data-meet-detached-self-view="minimized"
       data-meet-self-view-corner={corner}
