@@ -31,6 +31,7 @@ enum AppBridgeProtocol {
     static let commandTimeoutMillis = 10000.0
     static let addOutcomeAsks = 4
     static let addOutcomeWindowMillis = 60000.0
+    static let addOutcomeUnknown = "outcomeUnknown"
 
     static func entryFile(appId: String) -> String {
         if appId == "whiteboard" { return "whiteboard.html" }

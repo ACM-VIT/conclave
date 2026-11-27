@@ -1,5 +1,8 @@
-export const respond = <T>(callback: unknown, payload: T): void => {
+export const respond = <T>(
+  callback: ((response: T) => void) | undefined,
+  payload: NoInfer<T>,
+): void => {
   if (typeof callback === "function") {
-    (callback as (response: T) => void)(payload);
+    callback(payload);
   }
 };

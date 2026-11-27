@@ -48,11 +48,10 @@ import {
   planFieldEdit,
   sanitizeInstitutionDisplayName,
   trackFieldHistory,
-  isMediaDeviceBlocked,
 } from "../lib/utils";
 import type { SetupNotice } from "../lib/setup-notice";
 import RoomPresenceBadge from "./RoomPresenceBadge";
-import { useCameraPermissionState } from "../hooks/useCameraPermissionState";
+import { useCameraAccessBlocked } from "../hooks/useCameraAccessBlocked";
 import { useClipboardCopy } from "../hooks/useClipboardCopy";
 import { useCodeField } from "../hooks/useCodeField";
 import { applyRejoinMedia, saveRejoinIntent, type RejoinMedia } from "../lib/rejoin-intent";
@@ -423,24 +422,16 @@ function JoinScreen({
     ? videoEffectsBridgeState.debugStats
     : null;
   const previewStream = processedPreviewStream ?? localStream;
-  const cameraPermissionState = useCameraPermissionState();
   const hasLivePreviewCamera = Boolean(
     localStream
       ?.getVideoTracks()
       .some((track) => track.readyState === "live" && track.enabled),
   );
-  const isCameraBlocked = isMediaDeviceBlocked(mediaError, "camera");
-  const isCameraPermissionBlocked =
-    isCameraBlocked ||
-    (!hasLivePreviewCamera &&
-      (cameraPermissionState === "prompt" ||
-        cameraPermissionState === "denied"));
-  const shouldShowPermissionCta =
-    !hasLivePreviewCamera &&
-    !isCameraOn &&
-    (cameraPermissionState === "prompt" ||
-      cameraPermissionState === "denied" ||
-      isCameraBlocked);
+  const isCameraPermissionBlocked = useCameraAccessBlocked({
+    hasLiveCamera: hasLivePreviewCamera,
+    mediaError,
+  });
+  const shouldShowPermissionCta = !isCameraOn && isCameraPermissionBlocked;
   const tightAudioChip = shouldShowPermissionCta && isAudioOnly;
   const prewarmLiveCameraEffects = (reason: string) => {
     if (activeVideoEffectsCount <= 0 && !isEffectsOpen) return;

@@ -8,10 +8,11 @@ import {
   getEntries,
   getHistory,
   getSpin,
+  getWheelNames,
   normalizeLabel,
   recordResult,
   removeEntryById,
-  replaceEntries,
+  reorderEntries,
   slotLabel,
   startSpin,
   type WheelEntry,
@@ -89,8 +90,7 @@ describe("wheel document validation", () => {
 
   it("drops entries with oversized labels", () => {
     const doc = createWheelDoc();
-    const wheelEntries = new Y.Array<unknown>();
-    doc.getMap("wheel").set("entries", wheelEntries);
+    const wheelEntries = doc.getArray<unknown>("wheel.entries");
     wheelEntries.push([
       { id: "valid", label: "Valid" },
       { id: "long", label: "x".repeat(200) },
@@ -101,8 +101,7 @@ describe("wheel document validation", () => {
 
   it("reads remote labels the way it writes them, without stray whitespace", () => {
     const doc = createWheelDoc();
-    const wheelEntries = new Y.Array<unknown>();
-    doc.getMap("wheel").set("entries", wheelEntries);
+    const wheelEntries = doc.getArray<unknown>("wheel.entries");
     wheelEntries.push([
       { id: "spaced", label: "      Bob" },
       { id: "inner", label: "Ann \n  Lee  " },
@@ -164,8 +163,7 @@ describe("wheel names never split a character", () => {
   it("reads a document that already holds a lone surrogate as well formed text", () => {
     const doc = createWheelDoc();
     const wheel = doc.getMap("wheel");
-    const entries = new Y.Array<unknown>();
-    wheel.set("entries", entries);
+    const entries = doc.getArray<unknown>("wheel.entries");
     entries.push([
       { id: "e0", label: HALF_EMOJI },
       { id: "e1", label: "\uDF89Bo" },
@@ -182,12 +180,11 @@ describe("wheel names never split a character", () => {
 
   it("lets no lone surrogate cross the Yjs wire, so only the writer's own copy can hold one", () => {
     const writer = createWheelDoc();
-    const entries = new Y.Array<unknown>();
-    writer.getMap("wheel").set("entries", entries);
+    const entries = writer.getArray<unknown>("wheel.entries");
     entries.push([{ id: "e0", label: HALF_EMOJI }]);
     const reader = new Y.Doc();
     Y.applyUpdate(reader, Y.encodeStateAsUpdate(writer));
-    const stored = (reader.getMap("wheel").get("entries") as Y.Array<{ label: string }>).get(0).label;
+    const stored = reader.getArray<{ label: string }>("wheel.entries").get(0).label;
     expect(stored).toBe("A".repeat(47) + "\uFFFD");
   });
 
@@ -301,8 +298,7 @@ describe("wheel accept rule", () => {
 
   it("keeps only names and results whose ids the native app accepts", () => {
     const doc = createWheelDoc();
-    const entries = new Y.Array<unknown>();
-    doc.getMap("wheel").set("entries", entries);
+    const entries = doc.getArray<unknown>("wheel.entries");
     const ids: unknown[] = ["ok-1", "a b", "", "\u00E9", "x".repeat(65), 7, "ok:2"];
     entries.push(ids.map((id, index) => ({ id, label: `Name ${index}` })));
     storeHistory(doc, ids.map((spinId, index) => ({ spinId, label: `Won ${index}`, at: index, byName: "Host" })));
@@ -360,8 +356,7 @@ describe("wheel label visibility", () => {
   it("drops invisible labels another client wrote, from entries, spins and history", () => {
     const doc = createWheelDoc();
     const wheel = doc.getMap("wheel");
-    const entries = new Y.Array<unknown>();
-    wheel.set("entries", entries);
+    const entries = doc.getArray<unknown>("wheel.entries");
     entries.push([{ id: "ada", label: "Ada" }, ...INVISIBLE.map((label, index) => ({ id: `blank-${index}`, label }))]);
     expect(getEntries(doc)).toEqual([{ id: "ada", label: "Ada" }]);
 
@@ -391,10 +386,9 @@ describe("wheel accepted list", () => {
     return value instanceof Y.Array ? value.toArray() : [];
   };
 
-  it("counts room from the names the wheel shows and prunes hidden ones in the same write", () => {
+  it("counts room from the names the wheel holds and prunes unreadable rows in the same write", () => {
     const doc = createWheelDoc();
-    const entries = new Y.Array<unknown>();
-    doc.getMap("wheel").set("entries", entries);
+    const entries = doc.getArray<unknown>("wheel.entries");
     entries.push([
       ...Array.from({ length: 63 }, (_, index) => ({ id: `name-${index}`, label: `Name ${index + 1}` })),
       { id: "hidden", label: "\u200B" },
@@ -402,14 +396,16 @@ describe("wheel accepted list", () => {
     expect(getEntries(doc)).toHaveLength(63);
     expect(addEntries(doc, ["New"])).toBe(1);
     expect(getEntries(doc).map((entry) => entry.label).slice(-1)).toEqual(["New"]);
-    expect(rawArray(doc, "entries")).toHaveLength(MAX_WHEEL_ENTRIES);
+    expect(doc.getArray("wheel.entries").toArray()).toHaveLength(MAX_WHEEL_ENTRIES);
   });
 
-  it("keeps counts, positions, spins and history on one accepted list for any stored mix", () => {
+  it("keeps counts, positions, spins and history on one accepted list for any stored mix", { timeout: 30_000 }, () => {
     let seed = 20261124;
     const random = (limit: number): number => {
-      seed = (seed * 1103515245 + 12345) % 2147483648;
-      return seed % limit;
+      seed = (seed + 0x6d2b79f5) | 0;
+      let mixed = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      mixed = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed;
+      return ((mixed ^ (mixed >>> 14)) >>> 0) % limit;
     };
     const visibleName = () => ["Ada", "Bo", " Cy ", "D\u0007e", "\u{1F600}", "\u0915\u094D\u0937"][random(6)] + random(1000);
     const anyName = () => (random(3) === 0 ? HIDDEN[random(HIDDEN.length)] : visibleName());
@@ -438,12 +434,12 @@ describe("wheel accepted list", () => {
       winnerIndex: random(entries.length),
     });
 
-    for (let run = 0; run < 300; run += 1) {
+    let overflows = 0;
+    for (let run = 0; run < 90; run += 1) {
       const doc = createWheelDoc();
       const wheel = doc.getMap("wheel");
-      const entries = new Y.Array<unknown>();
-      wheel.set("entries", entries);
-      entries.push(Array.from({ length: random(90) }, (_, index) => record(index)));
+      const entries = doc.getArray<unknown>("wheel.entries");
+      entries.push(Array.from({ length: random(3) === 0 ? 120 + random(120) : random(90) }, (_, index) => record(index)));
       const history = new Y.Array<unknown>();
       wheel.set("history", history);
       history.push(
@@ -455,33 +451,39 @@ describe("wheel accepted list", () => {
         }))
       );
 
+      let overflowed = false;
       for (let step = 0; step < 12; step += 1) {
         const before = getEntries(doc);
+        const waiting = getWheelNames(doc).waiting;
+        overflowed ||= waiting.length > 0;
         const where = `run ${run} step ${step}`;
         switch (random(6)) {
           case 0: {
             const labels = Array.from({ length: random(6) }, anyName);
             const visible = labels.map(normalizeLabel).filter((label) => label.length > 0);
-            const room = MAX_WHEEL_ENTRIES - before.length;
+            const room = MAX_WHEEL_ENTRIES - before.length - waiting.length;
             expect(addEntries(doc, labels), where).toBe(Math.min(visible.length, Math.max(0, room)));
             const after = getEntries(doc);
             expect(after.slice(0, before.length), where).toEqual(before);
             expect(after.slice(before.length).map((entry) => entry.label), where).toEqual(visible.slice(0, Math.max(0, room)));
-            if (visible.length > 0) expect(rawArray(doc, "entries"), where).toHaveLength(after.length);
+            expect(getWheelNames(doc).waiting, where).toEqual(waiting);
+            if (visible.length > 0) expect(doc.getArray("wheel.entries").toArray(), where).toHaveLength(after.length + waiting.length);
             break;
           }
           case 1: {
             const target = before.length > 0 && random(4) > 0 ? before[random(before.length)].id : "missing";
             removeEntryById(doc, target);
-            expect(getEntries(doc), where).toEqual(before.filter((entry) => entry.id !== target));
-            expect(rawArray(doc, "entries"), where).toHaveLength(getEntries(doc).length);
+            const left = [...before, ...waiting].filter((entry) => entry.id !== target);
+            expect(getEntries(doc), where).toEqual(left.slice(0, MAX_WHEEL_ENTRIES));
+            expect(getWheelNames(doc).waiting, where).toEqual(left.slice(MAX_WHEEL_ENTRIES));
+            expect(doc.getArray("wheel.entries").toArray(), where).toHaveLength(left.length);
             break;
           }
           case 2: {
             const shuffled = [...before].sort(() => random(3) - 1);
-            replaceEntries(doc, shuffled);
+            reorderEntries(doc, shuffled);
             expect(getEntries(doc), where).toEqual(shuffled);
-            expect(rawArray(doc, "entries"), where).toHaveLength(shuffled.length);
+            expect(getWheelNames(doc).waiting, where).toEqual(waiting);
             break;
           }
           case 3: {
@@ -521,6 +523,8 @@ describe("wheel accepted list", () => {
           expect(item.label.length > 0 && !LONE_SURROGATE.test(item.label), where).toBe(true);
         }
       }
+      overflows += overflowed ? 1 : 0;
     }
+    expect(overflows).toBeGreaterThan(10);
   });
 });

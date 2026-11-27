@@ -302,6 +302,75 @@ describe("wheel label coverage", () => {
   });
 });
 
+describe("wheel label list rows", () => {
+  const LONG = "Maximiliana Featherstonehaugh-Worthington";
+
+  it("numbers a slice with the row its name holds in the names list, wherever the slice sits on the dial", () => {
+    const names = ["Ada", LONG, "Grace", "Linus", "Alan", "Ken"];
+    const shape = geometry(names.length);
+    expect(fitWheelLabels(names, shape, measure).labels[1]).toMatchObject({ text: "2", numbered: true });
+    const moved = fitWheelLabels(names, shape, measure, [3, 5, 1, 2, 4, 6]);
+    expect(moved.labels[1]).toMatchObject({ text: "5", numbered: true });
+    expect(fitsUpright(moved.labels[1]!, moved.fontSize, shape)).toBe(true);
+    expect(moved.labels.map((label) => label?.text)).toEqual(["Ada", "5", "Grace", "Linus", "Alan", "Ken"]);
+  });
+
+  it("gives no number to a slice whose name left the list, and keeps every other slice labelled", () => {
+    const names = ["Ada", LONG, "Grace", "Linus", "Alan", "Ken"];
+    const fitted = fitWheelLabels(names, geometry(names.length), measure, [1, null, 2, 3, null, 4]);
+    expect(fitted.labels.map((label) => label?.text)).toEqual(["Ada", undefined, "Grace", "Linus", "Alan", "Ken"]);
+    const allGone = fitWheelLabels(names, geometry(names.length), measure, names.map(() => null));
+    expect(allGone.labels.map((label) => label?.text)).toEqual(["Ada", undefined, "Grace", "Linus", "Alan", "Ken"]);
+  });
+
+  it("numbers a lone slice with its row, or leaves it bare when its name left the list", () => {
+    const fifteen = Array.from({ length: 15 }, () => "\u{1F468}").join("\u200D");
+    expect(fitSingleLabel(fifteen, 1018, measure, 7)).toEqual({ text: "7", numbered: true });
+    expect(fitSingleLabel(fifteen, 1018, measure, null)).toBeNull();
+    expect(fitSingleLabel("Ada", 1018, measure, null)).toEqual({ text: "Ada", numbered: false });
+  });
+
+  it("shows each listed slice its name or its own row number, and never a number on an unlisted slice, for any names, rows and wheel size", () => {
+    let seed = 20261127;
+    const random = (limit: number): number => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let mixed = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      mixed = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed;
+      return ((mixed ^ (mixed >>> 14)) >>> 0) % limit;
+    };
+    const pool = ["A", "Ada", "Margaret Hamilton", LONG, `\u0915${"\u094D\u0915".repeat(23)}`, "\u5C71\u7530\u592A\u90CE"];
+    let numbered = 0;
+    let bare = 0;
+    for (let run = 0; run < 600; run += 1) {
+      const count = 2 + random(63);
+      const names = Array.from({ length: count }, () => pool[random(pool.length)]);
+      const order = Array.from({ length: count + random(8) }, (_, index) => index + 1).sort(() => random(3) - 1);
+      const rows = names.map((_, index) => (random(6) === 0 ? null : order[index]));
+      const shape = geometry(count, 180 + random(721));
+      const fitted = fitWheelLabels(names, shape, measure, rows);
+      const where = `run ${run}`;
+      const anyLabel = fitted.labels.some((label) => label !== null);
+      fitted.labels.forEach((label, index) => {
+        if (label === null) {
+          if (rows[index] === null) bare += 1;
+          else expect(anyLabel, `${where} slice ${index}`).toBe(false);
+          return;
+        }
+        if (!label.numbered) {
+          expect(label.text, `${where} slice ${index}`).toBe(names[index]);
+          return;
+        }
+        numbered += 1;
+        expect(label.text, `${where} slice ${index}`).toBe(String(rows[index]));
+        expect(fitsUpright(label, fitted.fontSize, shape), `${where} slice ${index}`).toBe(true);
+      });
+      if (anyLabel) expect(fitted.fontSize * shape.pxPerUnit, where).toBeGreaterThanOrEqual(shape.minScreenPx - 1e-9);
+    }
+    expect(numbered).toBeGreaterThan(500);
+    expect(bare).toBeGreaterThan(200);
+  });
+});
+
 describe("wheel label fallback", () => {
   const LONG_NAMES = ["A".repeat(48), "Maximiliana Featherstonehaugh-Worthington Smythe"];
 

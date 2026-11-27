@@ -14,6 +14,7 @@ export function meetingPanelKey(
 type MeetingPanelBoundaryProps = {
   name: string;
   onClose?: () => void;
+  onFailed?: () => void;
   children: ReactNode;
 };
 
@@ -29,6 +30,10 @@ export default class MeetingPanelBoundary extends Component<
 
   static getDerivedStateFromError(): MeetingPanelBoundaryState {
     return { status: "failed" };
+  }
+
+  componentDidCatch() {
+    this.props.onFailed?.();
   }
 
   render() {
