@@ -301,7 +301,7 @@ export class LocalRoomRegistry implements RoomRegistry {
   instanceUrl?: string;
   private region?: string;
   private owners = new Map<string, RoomOwnerRecord>();
-  private lastGenerations = new Map<string, number>();
+  private lastGeneration = 0;
   private heldGenerations = new Map<string, number>();
   private placements = new Map<string, RoomPlacementRecord>();
   private ttlMs: number;
@@ -416,7 +416,7 @@ export class LocalRoomRegistry implements RoomRegistry {
     }
 
     const generation =
-      this.heldGenerations.get(input.channelId) ?? this.nextGeneration(input.channelId);
+      this.heldGenerations.get(input.channelId) ?? this.nextGeneration();
     this.heldGenerations.set(input.channelId, generation);
     const owner = { ...this.createOwner(input), generation };
     this.owners.set(input.channelId, owner);
@@ -424,10 +424,9 @@ export class LocalRoomRegistry implements RoomRegistry {
     return { ok: true, owner, continuous: true, generation };
   }
 
-  private nextGeneration(channelId: string): number {
-    const generation = Math.max(this.now(), (this.lastGenerations.get(channelId) ?? 0) + 1);
-    this.lastGenerations.set(channelId, generation);
-    return generation;
+  private nextGeneration(): number {
+    this.lastGeneration = Math.max(this.now(), this.lastGeneration + 1);
+    return this.lastGeneration;
   }
 
   async renewRoom(input: {

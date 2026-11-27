@@ -1225,10 +1225,7 @@ const stillRemovedIn = ({ decisions, endedAt }: StoredDecisions): string[] =>
     .filter(([, decision]) => decision.removed && decision.at > (endedAt ?? -1))
     .map(([email]) => email);
 
-const withDecisions = (
-  meeting: object,
-  stored: StoredDecisions,
-): Record<string, unknown> => ({
+const withDecisions = <Meeting extends object>(meeting: Meeting, stored: StoredDecisions) => ({
   ...meeting,
   readmissionRequiredEmails: stillRemovedIn(stored),
   readmissionDecisions: stored.decisions,
@@ -1354,28 +1351,44 @@ const createFileScheduledMeetingPersistence = (
   };
 };
 
-export const scheduledMeetingJsonStore: JsonStoreAdapter<ScheduledMeeting[]> = {
+type ArchivedMeeting = ReturnType<typeof withDecisions<ScheduledMeeting>>;
+
+const meetingFieldsForComparison = ({
+  readmissionRequiredEmails: _removed,
+  readmissionDecisions: _decisions,
+  readmissionEndedAt: _ended,
+  readmissionWriteGeneration: _generation,
+  ...fields
+}: ArchivedMeeting) => fields;
+
+export const scheduledMeetingJsonStore: JsonStoreAdapter<ArchivedMeeting[]> = {
   decode: (data) => {
     if (!Array.isArray(data)) throw new Error("it is not a list of scheduled meetings");
-    return data
-      .map((entry) => normalizeStoredMeeting(entry))
-      .filter((entry): entry is ScheduledMeeting => Boolean(entry))
-      .map((meeting) => ({ ...meeting, readmissionRequiredEmails: [] }));
+    return data.flatMap((entry) => {
+      const meeting = normalizeStoredMeeting(entry);
+      return meeting ? [withDecisions(meeting, storedDecisionsOf(entry))] : [];
+    });
   },
   write: (path, meetings) => {
     void createFileScheduledMeetingPersistence(path).save(meetings);
   },
   collections: {
-    meetings: jsonStoreCollection<ScheduledMeeting[], ScheduledMeeting>({
+    meetings: jsonStoreCollection<ArchivedMeeting[], ArchivedMeeting>({
       index: "byId",
       rows: (meetings) => meetings,
       key: (meeting) => meeting.id,
       stamp: (meeting) => meeting.updatedAt,
+      compare: meetingFieldsForComparison,
       claims: scheduledMeetingClaims,
       canDelete: true,
     }),
   },
-  build: (_base, rows) => rows.meetings as ScheduledMeeting[],
+  build: (base, rows) => {
+    const known = new Map(base.map((meeting) => [meeting.id, meeting]));
+    return (rows.meetings as ArchivedMeeting[]).map((meeting) =>
+      withDecisions(meeting, storedDecisionsOf({ ...(known.get(meeting.id) ?? meeting) })),
+    );
+  },
 };
 
 const RELEASE_BOOKING_SLOT_LOCK_SCRIPT = `

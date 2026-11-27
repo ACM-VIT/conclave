@@ -515,6 +515,15 @@ describe("an invitee a host removed, in a JSON meeting store an older SFU's copy
   });
   const loaded = async () => (await createScheduledMeetingPersistence().load())[0];
 
+  it("retains removal decisions when restoring an archived schedule into an empty store", async () => {
+    write(copyPath(store), [removedIn(meeting("Intro call", 100))]);
+
+    expect(await loaded()).toMatchObject({ title: "Intro call", readmissionRequiredEmails: [INVITEE] });
+    const [stored] = JSON.parse(readFileSync(activePath(store), "utf8"));
+    expect(stored.readmissionDecisions).toEqual({ [INVITEE]: { removed: true, at: 50 } });
+    expect(stored.readmissionWriteGeneration).toBe(7);
+  });
+
   it("stays removed, and the SFU starts, when the copy holds the same meeting as it was before the removal", async () => {
     write(activePath(store), [removedIn(meeting("Intro call", 100))]);
     write(copyPath(store), [meeting("Intro call", 100)]);
