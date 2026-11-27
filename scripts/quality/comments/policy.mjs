@@ -54,7 +54,7 @@ export const vendoredIgnores = (packageDir) =>
 const SPDX_LINE = /^SPDX-License-Identifier: [A-Za-z0-9.+()-]+(?: (?:AND|OR|WITH) [A-Za-z0-9.+()-]+)*$/;
 const COPYRIGHT_LINE = /^Copyright (?:\(c\) |\(C\) |© )?\d{4}(?:\s*[-,]\s*\d{4})*,? \S.*$/;
 const LICENSE_TITLE = /^(?:The )?(?:MIT|ISC|BSD [23]-Clause|Apache) License(?: \((?:MIT|ISC)\))?:?\.?$|^Version 2\.0, January 2004$/i;
-const NOTICE_LINE = /^(?:Copyright\b.*|All rights reserved\.?|https?:\/\/\S+)$/i;
+const NOTICE_LINE = /^(?:Copyright (?:\([cC]\)|©) \S.*|All rights reserved\.?|https?:\/\/\S+)$/i;
 
 const squash = (text) => text.replace(/[“”]/g, '"').replace(/[‘’]/g, "'").replace(/\s+/g, "").toLowerCase();
 
@@ -64,12 +64,20 @@ const SPDX_VAR = /<<var;name="([^"]*)";original="(?:[^"\\]|\\.)*";match="((?:[^"
 
 const compileSpdxTemplate = (template) => {
   let pattern = "";
+  let noticeOpening = "";
   for (let index = 0; index < template.length; ) {
     SPDX_VAR.lastIndex = index;
     const variable = SPDX_VAR.exec(template);
     if (variable) {
-      if (variable[1] !== "copyright") pattern += `(?:${variable[2].replace(/\\s[+*]?|\s/g, "")})`;
-      else pattern = pattern.replace(/(?:copyright)?$/, "");
+      if (variable[1] !== "copyright") {
+        const field = variable[2].replace(/\\s[+*]?|\s/g, "").replace(/(?<!\\)\.([+*])(?!\?)/g, (_, repeat) =>
+          `${noticeOpening ? `(?:(?!${noticeOpening}).)` : "."}${repeat}?`,
+        );
+        pattern += `(?:${field})`;
+      } else {
+        pattern = pattern.replace(/(?:copyright)?$/, "");
+        noticeOpening = escapeRegex(squash(template.slice(SPDX_VAR.lastIndex).trimStart().split(/<<|\n/, 1)[0]));
+      }
       index = SPDX_VAR.lastIndex;
     } else if (template.startsWith("<<beginOptional>>", index)) {
       pattern += "(?:";
@@ -259,9 +267,10 @@ const licenseHeaderIndexes = (source, comments, isDirective) => {
       return [start, combined.length];
     }),
   );
-  const covered = (from, to) => ([start, end]) => start >= from && end <= to;
+  const matches = licenseMatches(combined);
+  const covered = ([start, end]) => matches.some(([from, to]) => start >= from && end <= to);
   const touches = (from, to) => ([start, end]) => start < to && end > from;
-  for (const [from, to] of licenseMatches(combined)) {
+  for (const [from, to] of matches) {
     const inside = spans.map((lineSpans) => lineSpans.some(touches(from, to)));
     let first = inside.indexOf(true);
     let last = inside.lastIndexOf(true);
@@ -269,7 +278,7 @@ const licenseHeaderIndexes = (source, comments, isDirective) => {
     while (first > 0 && linesOf[first - 1].every(isNoticePart)) first -= 1;
     while (last < run.length - 1 && linesOf[last + 1].length > 0 && linesOf[last + 1].every(isNoticePart)) last += 1;
     for (let position = first; position <= last; position += 1) {
-      if (linesOf[position].every((line, index) => isNoticePart(line) || covered(from, to)(spans[position][index]))) indexes.add(run[position]);
+      if (linesOf[position].every((line, index) => isNoticePart(line) || covered(spans[position][index]))) indexes.add(run[position]);
     }
   }
   return indexes;

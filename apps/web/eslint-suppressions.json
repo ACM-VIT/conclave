@@ -34,11 +34,6 @@
       "count": 4
     }
   },
-  "src/app/components/MeetingAppLayout.tsx": {
-    "conclave/no-comments": {
-      "count": 1
-    }
-  },
   "src/app/components/MeetsMainContent.tsx": {
     "conclave/no-comments": {
       "count": 6

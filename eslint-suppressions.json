@@ -339,11 +339,6 @@
       "count": 4
     }
   },
-  "packages/sfu/server/socket/registerConnectionHandlers.ts": {
-    "conclave/no-comments": {
-      "count": 1
-    }
-  },
   "packages/sfu/server/sqliteWriteCheck.ts": {
     "conclave/no-comments": {
       "count": 4
@@ -352,11 +347,6 @@
   "packages/sfu/server/state.ts": {
     "conclave/no-comments": {
       "count": 1
-    }
-  },
-  "packages/sfu/server/transcript/relayRegistry.ts": {
-    "conclave/no-comments": {
-      "count": 3
     }
   },
   "packages/sfu/server/webcamReceiverCapacityProof.ts": {
@@ -372,11 +362,6 @@
   "packages/sfu/test/admission-ledger.test.ts": {
     "conclave/no-comments": {
       "count": 3
-    }
-  },
-  "packages/sfu/test/apps-doc-size-limit.test.ts": {
-    "conclave/no-comments": {
-      "count": 1
     }
   },
   "packages/sfu/test/authority/act-cost.test.ts": {
@@ -535,11 +520,6 @@
     }
   },
   "packages/sfu/utilities/createWorkers.ts": {
-    "conclave/no-comments": {
-      "count": 2
-    }
-  },
-  "packages/sfu/utilities/getWorker.ts": {
     "conclave/no-comments": {
       "count": 2
     }

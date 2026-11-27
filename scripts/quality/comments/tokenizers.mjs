@@ -291,11 +291,12 @@ const kotlinLexer = (file) => {
   }
   const classpath = KOTLIN_JARS.map((jar) => kotlinJar(file, jar)).join(path.delimiter);
   const helperHash = sha256Of(KOTLIN_HELPER).slice(0, 16);
-  const classes = toolCache("kotlin-lexer", `kotlin-${KOTLIN_VERSION}`, `helper-${helperHash}`);
+  const javaRelease = "17";
+  const classes = toolCache("kotlin-lexer", `kotlin-${KOTLIN_VERSION}`, `helper-java${javaRelease}-${helperHash}`);
   const installed = path.join(classes, "KotlinComments.class");
   if (!existsSync(installed)) {
     const temp = `${classes}.${uniqueSuffix()}.partial`;
-    const compile = spawnSync("javac", ["-d", temp, "-cp", classpath, KOTLIN_HELPER], { encoding: "utf8" });
+    const compile = spawnSync("javac", ["--release", javaRelease, "-d", temp, "-cp", classpath, KOTLIN_HELPER], { encoding: "utf8" });
     if (compile.status !== 0) {
       rmSync(temp, { recursive: true, force: true });
       fail(file, `could not compile the Kotlin lexer helper:\n${compile.stderr}`);

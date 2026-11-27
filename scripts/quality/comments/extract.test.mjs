@@ -809,6 +809,34 @@ const asLines = (lines) => lines.map((line) => `// ${line}`.trimEnd());
 const asBlock = (lines) => ["/*", ...lines.map((line) => ` * ${line}`.trimEnd()), " */"];
 const withRights = (lines) => lines.flatMap((line) => (/^Copyright /.test(line) ? [line, "All rights reserved."] : [line]));
 
+toolTest("a TODO between complete ISC notices is not part of either notice", [], () => {
+  const todo = "TODO: replace the temporary cache.";
+  for (const comment of [asBlock, asLines]) {
+    const notice = comment(ISC_NOTICE);
+    const separate = `/* ${todo} */`;
+    const source = [...notice, separate, ...notice, "export {};"].join("\n");
+    const comments = extract(source, "notices.ts");
+    assert.deepEqual(comments.filter((c) => !c.allowed).map((c) => c.text), [separate]);
+    assert.ok(comments.filter((c) => c.text !== separate).every((c) => c.allowed === "license-header"));
+  }
+  for (const [between, allowed] of [[todo, null], ["", "license-header"]]) {
+    const source = [...asBlock([...ISC_NOTICE, between, ...ISC_NOTICE]), "export {};"].join("\n");
+    assert.deepEqual(extract(source, "notices.ts").map((c) => c.allowed), [allowed]);
+  }
+});
+
+toolTest("an incomplete ISC notice cannot borrow text from the next notice", [], () => {
+  const todo = "/* TODO: replace the temporary cache. */";
+  const source = [...asBlock(ISC_NOTICE.slice(0, -1)), todo, ...asBlock(ISC_NOTICE), "export {};"].join("\n");
+  assert.deepEqual(extract(source, "notices.ts").map((c) => c.allowed), [null, null, "license-header"]);
+});
+
+toolTest("copyright prose beside a complete ISC notice is not a notice", [], () => {
+  const prose = "// Copyright Dialog uses the same layout as Settings.";
+  const source = [...asBlock(ISC_NOTICE), prose, "export {};"].join("\n");
+  assert.deepEqual(extract(source, "notice.ts").map((c) => c.allowed), ["license-header", null]);
+});
+
 for (const id of ["MIT", "ISC", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0"]) {
   toolTest(`the verbatim SPDX ${id} notice is a license header and a TODO after it is not`, [], () => {
     for (const lines of [filled(SPDX_TEXTS[id]), withRights(filled(SPDX_TEXTS[id]))]) {
@@ -881,7 +909,10 @@ toolTest("concurrent cold-cache Kotlin runs share one install from verified loca
   assert.equal(rig.downloaded(), "");
   const kotlinDir = path.join(rig.cache, "conclave", "kotlin-lexer", "kotlin-2.4.21");
   assert.deepEqual(readdirSync(path.join(kotlinDir, "jars")).sort(), ["kotlin-compiler-embeddable-2.4.21.jar", "kotlin-stdlib-2.4.21.jar"]);
-  assert.equal(readdirSync(kotlinDir).filter((entry) => entry.startsWith("helper-")).length, 1);
+  const helpers = readdirSync(kotlinDir).filter((entry) => entry.startsWith("helper-"));
+  assert.equal(helpers.length, 1);
+  const bytecode = readFileSync(path.join(kotlinDir, helpers[0], "KotlinComments.class"));
+  assert.ok(bytecode.readUInt16BE(6) <= 61, "the cached helper must run on JDK 17");
 });
 
 toolTest("a fixture whose language needs an undeclared tool fails in every environment", [], () => {
