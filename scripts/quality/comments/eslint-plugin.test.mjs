@@ -67,6 +67,17 @@ test("a file with only allowed comments passes", () => {
   assert.deepEqual(lint("#!/usr/bin/env node\n/// <reference types=\"node\" />\nexport {};\n", "cli.mjs"), []);
 });
 
+test("copyright case and spacing do not change the ESLint exemption", () => {
+  for (const notice of [
+    "COPYRIGHT 2026 Example Inc.",
+    "Copyright  2026  Example Inc.",
+    "Copyright\t(C)\t2024 - 2026\tExample Inc.",
+  ]) {
+    const source = `// ${notice}\n// Copyright dialog uses the new layout.\nexport {};\n`;
+    assert.deepEqual(lint(source, "notice.ts"), [{ line: 2, messageId: "comment" }], notice);
+  }
+});
+
 test("the next-line form cannot switch the rule off", () => {
   assert.deepEqual(
     lint("// eslint-disable-next-line conclave/no-comments -- sneaky\nconst a = 1; // hidden\n", "a.ts"),

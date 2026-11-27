@@ -837,6 +837,21 @@ toolTest("copyright prose beside a complete ISC notice is not a notice", [], () 
   assert.deepEqual(extract(source, "notice.ts").map((c) => c.allowed), ["license-header", null]);
 });
 
+for (const id of ["ISC", "Apache-2.0"]) {
+  toolTest(`the complete ${id} notice keeps its exemption when the copyright spacing or case changes`, [], () => {
+    for (const heading of ["COPYRIGHT 2024 Example Inc.", "Copyright  2024  Example Inc."]) {
+      const lines = filled(SPDX_TEXTS[id]).map((line) => line === "Copyright 2024 Example Inc." ? heading : line);
+      assert.ok(lines.includes(heading));
+      for (const comment of [asLines, asBlock]) {
+        const source = [...comment(lines), "export {};"].join("\n");
+        const comments = extract(source, "notice.ts");
+        assert.ok(comments.length > 0);
+        assert.deepEqual(comments.filter((c) => c.allowed !== "license-header").map((c) => c.text), [], heading);
+      }
+    }
+  });
+}
+
 for (const id of ["MIT", "ISC", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0"]) {
   toolTest(`the verbatim SPDX ${id} notice is a license header and a TODO after it is not`, [], () => {
     for (const lines of [filled(SPDX_TEXTS[id]), withRights(filled(SPDX_TEXTS[id]))]) {

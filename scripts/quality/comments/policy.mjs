@@ -52,7 +52,7 @@ export const vendoredIgnores = (packageDir) =>
   VENDORED_PREFIXES.filter((prefix) => prefix.startsWith(packageDir)).map((prefix) => prefix.slice(packageDir.length));
 
 const SPDX_LINE = /^SPDX-License-Identifier: [A-Za-z0-9.+()-]+(?: (?:AND|OR|WITH) [A-Za-z0-9.+()-]+)*$/;
-const COPYRIGHT_LINE = /^Copyright (?:\(c\) |\(C\) |© )?\d{4}(?:\s*[-,]\s*\d{4})*,? \S.*$/;
+const COPYRIGHT_LINE = /^Copyright\s+(?:(?:\(c\)|©)\s+)?\d{4}(?:\s*[-,]\s*\d{4})*,?\s+\S.*$/i;
 const LICENSE_TITLE = /^(?:The )?(?:MIT|ISC|BSD [23]-Clause|Apache) License(?: \((?:MIT|ISC)\))?:?\.?$|^Version 2\.0, January 2004$/i;
 const NOTICE_LINE = /^(?:Copyright (?:\([cC]\)|©) \S.*|All rights reserved\.?|https?:\/\/\S+)$/i;
 
