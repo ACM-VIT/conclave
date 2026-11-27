@@ -37,6 +37,7 @@ const fakeSocket = (id: string, hub: Hub, relayed?: Uint8Array[]) => {
   };
   const socket = {
     id,
+    connected: true,
     data: { user: {} },
     rooms,
     on: (event: string, listener: Listener) => {
@@ -77,7 +78,7 @@ const enter = (state: SfuState, room: Room, joiner: ReturnType<typeof fakeSocket
 };
 
 const newRoom = (state: SfuState, id: string): Room => {
-  const room = new Room({ id, clientId: "conclave", workerPid: null, router: {} as Router });
+  const room = new Room({ id, clientId: "conclave", workerPid: null, router: {} as Router, appDocuments: state.appDocuments });
   state.rooms.set(room.channelId, room);
   return room;
 };
@@ -161,6 +162,7 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
     context.currentRoom = other;
     context.currentClient = moved;
     await call("apps:open", { appId });
+    await requestSync(new Y.Doc(), true, true);
     return other;
   };
   return {
@@ -174,8 +176,14 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
     peer,
     strangerIn,
     getState: () => call("apps:getState"),
-    open: () => call("apps:open", { appId }),
-    close: () => call("apps:close"),
+    open: async () => {
+      const response = await call("apps:open", { appId });
+      await requestSync(new Y.Doc(), true, true);
+      return response;
+    },
+    present: (id: string, expectedRevision?: number) => call<{ success: boolean; code?: string }>("apps:open", { appId: id, expectedRevision }),
+    close: () => call<{ success: boolean }>("apps:close"),
+    clear: () => call("apps:discard", { appId, expectedRevision: context.currentRoom!.apps.stageRevision }),
     send: (update: Uint8Array, replicaId?: string, part?: unknown) =>
       listeners.get("apps:yjs:update")!({ appId, update, replicaId, ...(part === undefined ? {} : { part }) }),
     sendList: (updates: unknown, replicaId?: string) => listeners.get("apps:yjs:update")!({ appId, updates, replicaId }),

@@ -191,24 +191,6 @@ export const registerScheduledMeetingRoutes = (
     }
   };
 
-  const findMeetingByRoomCode = async (
-    clientId: string,
-    roomCode: string,
-  ): Promise<ScheduledMeeting | null> => {
-    for (const candidateClientId of clientIdCandidates(clientId)) {
-      const meeting = getScheduledMeetingByRoomCode(
-        state.scheduledMeetings,
-        candidateClientId,
-        roomCode,
-      );
-      if (!meeting) continue;
-      if (meeting.clientId === clientId) return meeting;
-      const migrated = await migrateMeetingNamespace(meeting, clientId);
-      return migrated ?? meeting;
-    }
-    return null;
-  };
-
   const listMeetingsForClient = async (options: {
     clientId: string;
     ownerEmail?: string;
@@ -286,7 +268,7 @@ export const registerScheduledMeetingRoutes = (
     }
   });
 
-  app.get("/scheduled-meetings/by-room/:roomCode", async (req, res) => {
+  app.get("/scheduled-meetings/by-room/:roomCode", (req, res) => {
     if (!requireSecret(req, res)) return;
     const clientId = resolveClientId(req);
     const roomCode = normalizeIdentifier(
@@ -297,7 +279,7 @@ export const registerScheduledMeetingRoutes = (
       res.status(400).json({ error: "Room code is required" });
       return;
     }
-    const meeting = await findMeetingByRoomCode(clientId, roomCode);
+    const meeting = getScheduledMeetingByRoomCode(state.scheduledMeetings, clientId, roomCode);
     if (!meeting) {
       res.status(404).json({ error: "Scheduled meeting not found" });
       return;
@@ -305,7 +287,7 @@ export const registerScheduledMeetingRoutes = (
     res.json({ scheduledMeeting: serializeMeeting(meeting) });
   });
 
-  app.get("/scheduled-meetings/public/by-room/:roomCode", async (req, res) => {
+  app.get("/scheduled-meetings/public/by-room/:roomCode", (req, res) => {
     if (!requireSecret(req, res)) return;
     const clientId = resolveClientId(req);
     const roomCode = normalizeIdentifier(
@@ -316,7 +298,7 @@ export const registerScheduledMeetingRoutes = (
       res.status(400).json({ error: "Room code is required" });
       return;
     }
-    const meeting = await findMeetingByRoomCode(clientId, roomCode);
+    const meeting = getScheduledMeetingByRoomCode(state.scheduledMeetings, clientId, roomCode);
     if (!meeting) {
       res.status(404).json({ error: "Scheduled meeting not found" });
       return;

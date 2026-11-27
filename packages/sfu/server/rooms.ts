@@ -210,6 +210,7 @@ export const getOrCreateRoomWithOrigin = async (
         id: roomId,
         router,
         clientId,
+        appDocuments: state.appDocuments,
         webRtcServer: getWorkerWebRtcServer(worker),
         workerPid: typeof worker.pid === "number" ? worker.pid : null,
       });

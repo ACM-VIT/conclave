@@ -139,7 +139,7 @@ describe("app changes sent in parts", () => {
     sendRange(room, old, "a", "copy-1", 0, 1);
     await room.moveTo("old-watch-elsewhere");
     sendRange(room, newer, "b", "copy-2", 0, 1);
-    [...room.state.rooms.values()].find((candidate) => candidate.id === "old-watch")!.clearAppState("board");
+    [...room.state.rooms.values()].find((candidate) => candidate.id === "old-watch")!.apps.discard("board");
     expect(room.state.appChangeStaging.used()).toBe(newer[0].length);
     sendRange(room, newer, "b", "copy-2", 1);
 
@@ -181,7 +181,9 @@ describe("app changes sent in parts", () => {
     }
     expect(build63.updates()).toEqual([small]);
     expect(build63.states()).toEqual([null, "board"]);
-    expect(room.inbox.filter(({ event }) => event === "apps:yjs:update" || event === "apps:state")).toEqual([]);
+    expect(room.inbox.filter(({ event }) => event === "apps:yjs:update" || event === "apps:state")).toEqual(
+      [small, large].map((update) => ({ event: "apps:yjs:update", payload: { appId: "board", update } })),
+    );
   });
 
   it("are not relayed again when a resend changes nothing, so build 63 reloads once", async () => {
@@ -532,7 +534,7 @@ describe("app uploads", () => {
     const author = new Y.Doc();
     await room.close();
     const notOpen = await room.acknowledged({ update: edit(author, (text) => text.insert(0, "x")) }, "copy-n");
-    expect(refusalsIn(notOpen.inbox)).toEqual([]);
+    expect(refusalsIn(notOpen.inbox)).toEqual(["not-live"]);
     await room.open();
 
     const parts = inParts(bigChange(new Y.Doc(), 20 * KIB, "s"), 10 * KIB);
@@ -544,7 +546,7 @@ describe("app uploads", () => {
     }
     const last = await room.acknowledged({ update: parts.at(-1)!, part: { id: "c", index: parts.length - 1, count: parts.length } }, "copy-p");
     expect(last.relayed).toBe(relayedBefore + 1);
-    expect(room.refused).toEqual([]);
+    expect(room.refused.map(({ reason }) => reason)).toEqual(["not-live"]);
   });
 });
 
@@ -555,7 +557,7 @@ describe("app state answers", () => {
 
     room.leave();
 
-    expect(await room.getState()).toEqual({ activeAppId: null, locked: false, notInRoom: true });
+    expect(await room.getState()).toMatchObject({ activeAppId: null, locked: false, notInRoom: true });
   });
 });
 

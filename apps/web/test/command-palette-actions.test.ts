@@ -267,6 +267,26 @@ describe("buildPaletteActions", () => {
     expect(ids(withoutRoom)).not.toContain("copy-code");
   });
 
+  it("shows a room with no shareable link as a disabled row that says so", () => {
+    const copyLink = vi.fn();
+    const linkable = buildPaletteActions(baseProps(), noDevices, { onCopyMeetingLink: copyLink });
+    const row = linkable.find((action) => action.id === "copy-link");
+    expect(row).toMatchObject({ label: "Copy meeting link", disabled: false });
+    row?.run();
+    expect(copyLink).toHaveBeenCalledOnce();
+
+    const unlinkable = buildPaletteActions(baseProps({ roomId: "team_room" }), noDevices, {
+      onCopyMeetingLink: null,
+    });
+    expect(unlinkable.find((action) => action.id === "copy-link")).toMatchObject({
+      label: "No shareable link for this room",
+      disabled: true,
+    });
+    expect(filterPaletteActions(unlinkable, "copy meeting link").map((action) => action.id)).toContain("copy-link");
+
+    expect(ids(buildPaletteActions(baseProps(), noDevices))).not.toContain("copy-link");
+  });
+
   it("offers the keyboard-shortcuts reference when a handler is provided", () => {
     const showShortcuts = vi.fn();
     const without = buildPaletteActions(baseProps(), noDevices);

@@ -1,7 +1,10 @@
 import { Worker } from "node:worker_threads";
 import { APP_DOCUMENT_MAX_BYTES, APP_DOCUMENT_UPDATE_MAX_BYTES } from "@conclave/apps-sdk/limits";
 import { Logger } from "../../../utilities/loggers.js";
-import type { FromWorker, Operation, ToWorker } from "./engine.js";
+import type { WriteRefusal } from "../../roomApps.js";
+import type { FromWorker, Operation, ToWorker, WorkerProposal } from "./engine.js";
+
+export type { WorkerProposal } from "./engine.js";
 
 export const MAX_APP_DOCUMENT_BYTES = APP_DOCUMENT_MAX_BYTES;
 export const MAX_APP_UPDATE_BYTES = APP_DOCUMENT_UPDATE_MAX_BYTES;
@@ -10,6 +13,8 @@ export type Refusal =
   | "too-large"
   | "invalid"
   | "missing-dependency"
+  | "malformed"
+  | "unresolved"
   | "timed-out"
   | "crashed"
   | "queue-full"
@@ -18,13 +23,22 @@ export type Refusal =
 
 export type Refused = { ok: false; reason: Refusal };
 export type ApplyResult = { ok: true; unchanged?: true } | Refused;
+type ValidatedResult = { ok: true; update: Uint8Array; unchanged?: true } | { ok: false; reason: WriteRefusal };
+type WriteCommit = {
+  preflight: () => WriteRefusal | null;
+  authorize: (candidate: WorkerProposal) => WriteRefusal | null;
+};
+type CheckResult = { ok: true; unchanged: boolean } | Refused;
+
 export type SyncResult = { ok: true; update: Uint8Array; stateVector: Uint8Array } | Refused;
 
 export type AppDocument = {
   apply: (update: Uint8Array) => Promise<ApplyResult>;
   applyAssembled: (update: Uint8Array) => Promise<ApplyResult>;
+  applyValidated: (updates: Uint8Array[], assembled: boolean, decision: WriteCommit) => Promise<ValidatedResult>;
+  changesNothing: (update: Uint8Array) => Promise<boolean>;
   sync: (stateVector: Uint8Array) => Promise<SyncResult>;
-  onClose: (listener: () => void) => () => void;
+  retryLoad: () => void;
   close: () => void;
 };
 
@@ -66,6 +80,8 @@ export type AppDocumentPoolOptions = {
 
 type Job = { bytes: number } & (
   | { kind: "apply"; update: Uint8Array; assembled: boolean; settle: (result: ApplyResult) => void }
+  | { kind: "validate"; updates: Uint8Array[]; assembled: boolean; decision: WriteCommit; settle: (result: ValidatedResult) => void }
+  | { kind: "check"; update: Uint8Array; settle: (result: CheckResult) => void }
   | { kind: "sync"; stateVector: Uint8Array; settle: (result: SyncResult) => void }
 );
 
@@ -113,12 +129,21 @@ const MIB = 1024 * 1024;
 
 const residentCost = (entry: Entry): number => entry.committedBytes + RESIDENT_OVERHEAD_BYTES;
 
-const operationOf = (job: Job): Operation =>
-  job.kind === "apply"
-    ? job.assembled
-      ? { kind: "apply", update: job.update, assembled: true }
-      : { kind: "apply", update: job.update }
-    : { kind: "sync", stateVector: job.stateVector };
+const operationOf = (job: Job): Operation => {
+  switch (job.kind) {
+    case "apply":
+      return { kind: "apply", update: job.update, assembled: job.assembled ? true : undefined };
+    case "validate":
+      return {
+        kind: "apply", update: job.updates[0], rest: job.updates.slice(1),
+        assembled: job.assembled ? true : undefined, validate: true,
+      };
+    case "check":
+      return { kind: "check", update: job.update };
+    case "sync":
+      return { kind: "sync", stateVector: job.stateVector };
+  }
+};
 
 export const createAppDocumentPool = ({
   workers,
@@ -151,7 +176,13 @@ export const createAppDocumentPool = ({
   let closed = false;
   let closing: Promise<void> | null = null;
 
-  const refuse = (job: Job, reason: Refusal): void => job.settle({ ok: false, reason });
+  const refuse = (job: Job, reason: Refusal): void => {
+    if (job.kind === "validate") {
+      job.settle({ ok: false, reason: reason === "closed" ? "not-live" : reason === "missing-dependency" ? "unresolved" : reason });
+    } else {
+      job.settle({ ok: false, reason });
+    }
+  };
 
   const release = (entry: Entry, job: Job): void => {
     entry.queued.jobs -= 1;
@@ -232,6 +263,17 @@ export const createAppDocumentPool = ({
     void stopped.finally(() => terminating.delete(stopped));
   };
 
+  const commit = (entry: Entry, update: Uint8Array, compacted: Uint8Array | null): void => {
+    if (compacted) {
+      entry.base = compacted;
+      entry.tail = [];
+      entry.committedBytes = compacted.length;
+    } else {
+      entry.tail.push(update);
+      entry.committedBytes += update.length;
+    }
+  };
+
   const settle = (entry: Entry, job: Job, reply: FromWorker): void => {
     if (entry.status !== "open") {
       refuse(job, refusalFor(entry, "closed"));
@@ -241,20 +283,30 @@ export const createAppDocumentPool = ({
       refuse(job, reply.reason);
       return;
     }
-    if (job.kind === "apply" && reply.type === "applied") {
-      if (reply.unchanged) {
-        job.settle({ ok: true, unchanged: true });
+    if (job.kind === "validate" && reply.type === "proposed") {
+      let reason: WriteRefusal | null;
+      try {
+        reason = job.decision.authorize(reply.proposal);
+      } catch (error) {
+        Logger.error("[Apps] Authorizing a document update failed", error);
+        reason = "invalid";
+      }
+      if (reason !== null) {
+        putAside(entry.slot, entry);
+        job.settle({ ok: false, reason });
         return;
       }
-      if (reply.compacted) {
-        entry.base = reply.compacted;
-        entry.tail = [];
-        entry.committedBytes = reply.compacted.length;
-      } else {
-        entry.tail.push(job.update);
-        entry.committedBytes += job.update.length;
-      }
-      job.settle({ ok: true });
+      if (!reply.unchanged) commit(entry, reply.update, reply.compacted);
+      job.settle({ ok: true, update: reply.update, unchanged: reply.unchanged });
+      return;
+    }
+    if (job.kind === "apply" && reply.type === "applied") {
+      if (!reply.unchanged) commit(entry, job.update, reply.compacted);
+      job.settle(reply.unchanged ? { ok: true, unchanged: true } : { ok: true });
+      return;
+    }
+    if (job.kind === "check" && reply.type === "checked") {
+      job.settle({ ok: true, unchanged: reply.unchanged });
       return;
     }
     if (job.kind === "sync" && reply.type === "synced") {
@@ -262,6 +314,7 @@ export const createAppDocumentPool = ({
       return;
     }
     Logger.error(`[Apps] App document worker answered ${job.kind} with ${reply.type}`);
+    putAside(entry.slot, entry);
     refuse(job, "crashed");
   };
 
@@ -383,10 +436,25 @@ export const createAppDocumentPool = ({
 
   const pump = (slot: Slot): void => {
     if (closed || slot.run) return;
-    const entry = slot.ready.shift();
+    let entry = slot.ready.shift();
+    while (entry) {
+      const head = entry.waiting[0];
+      if (head?.kind !== "validate") break;
+      const refused = head.decision.preflight();
+      if (!refused) break;
+      entry.waiting.shift();
+      release(entry, head);
+      head.settle({ ok: false, reason: refused });
+      if (entry.waiting.length === 0) {
+        entry.ready = false;
+        entry = slot.ready.shift();
+      }
+    }
     if (!entry) return;
     entry.ready = false;
-    const jobs = entry.waiting.splice(0, JOBS_PER_RUN);
+    // A speculative write must have a commit verdict before another operation can read it.
+    const proposalAt = entry.waiting.findIndex((job) => job.kind === "validate");
+    const jobs = entry.waiting.splice(0, proposalAt === 0 ? 1 : proposalAt < 0 ? JOBS_PER_RUN : Math.min(proposalAt, JOBS_PER_RUN));
     const cold = entry.loadedIn !== slot.generation;
     const message: ToWorker = {
       type: "run",
@@ -487,26 +555,36 @@ export const createAppDocumentPool = ({
         if (refusal) settle({ ok: false, reason: refusal });
         else enqueue(entry, { kind: "apply", update: new Uint8Array(update), assembled, bytes: update.length, settle });
       });
-    const closeListeners = new Set<() => void>();
     return {
       apply: (update) => applyOne(update, false),
       applyAssembled: (update) => applyOne(update, true),
+      applyValidated: (updates, assembled, decision) =>
+        new Promise((settle) => {
+          const bytes = updates.reduce((sum, update) => sum + update.length, 0);
+          const refusal = admit(entry, bytes);
+          const job: Job = { kind: "validate", updates, assembled, decision, bytes, settle };
+          if (refusal) refuse(job, refusal);
+          else if (bytes === 0) settle({ ok: false, reason: "invalid" });
+          else enqueue(entry, { ...job, updates: updates.map((update) => new Uint8Array(update)) });
+        }),
+      changesNothing: (update) =>
+        new Promise<CheckResult>((settle) => {
+          const refusal = admit(entry, update.length);
+          if (refusal) settle({ ok: false, reason: refusal });
+          else enqueue(entry, { kind: "check", update: new Uint8Array(update), bytes: update.length, settle });
+        }).then((result) => result.ok && result.unchanged),
       sync: (stateVector) =>
         new Promise((settle) => {
           const refusal = admit(entry, stateVector.length);
           if (refusal) settle({ ok: false, reason: refusal });
           else enqueue(entry, { kind: "sync", stateVector: new Uint8Array(stateVector), bytes: stateVector.length, settle });
         }),
-      onClose: (listener) => {
-        closeListeners.add(listener);
-        return () => closeListeners.delete(listener);
+      retryLoad: () => {
+        if (entry.status !== "broken") return;
+        entry.status = "open";
+        entry.loadFailures = 0;
       },
-      close: () => {
-        closeEntry(entry);
-        const listeners = [...closeListeners];
-        closeListeners.clear();
-        for (const listener of listeners) listener();
-      },
+      close: () => closeEntry(entry),
     };
   };
 

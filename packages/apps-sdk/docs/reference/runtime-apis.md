@@ -37,7 +37,7 @@ Provider responsibilities:
 
 - create doc/awareness lazily per app id
 - relay Yjs and awareness events over socket
-- hold room app state (`activeAppId`, `locked`)
+- hold room app state (`activeAppId`, `locked`, `revision`, `savedAppIds`)
 - expose control methods and runtime metadata through context
 
 If provider is missing, SDK hooks throw immediately.
@@ -48,20 +48,58 @@ If provider is missing, SDK hooks throw immediately.
 
 Returns the full runtime context:
 
-- `state`: `{ activeAppId: string | null, locked: boolean }`
+- `state`: `{ activeAppId: string | null, locked: boolean, revision: number | null, savedAppIds: string[], docGeneration: number | null }`
+  - `activeAppId` is the app presented on the room's stage
+  - `revision` moves forward with every change; it is `null` on an older SFU
+  - `savedAppIds` lists apps off the stage whose document the room keeps
+  - `docGeneration` names the presented app's document; a new number means the room started it over
 - `apps`: app definitions supplied by the host
-- `openApp(appId, options?) => Promise<boolean>`
-- `closeApp() => Promise<boolean>`
-- `setLocked(locked) => Promise<boolean>`
+- `presentApp(appId) => Promise<AppsCommandResult>`: present an app on the stage
+- `closeApp() => Promise<AppsCommandResult>`: take it off the stage; the room keeps its document
+- `clearApp(appId) => Promise<AppsCommandResult>`: erase an app's document for everyone
+- `setLocked(locked) => Promise<AppsCommandResult>`
 - `refreshState() => void`
 - `getDoc(appId) => Y.Doc`
 - `getAwareness(appId) => Awareness`
+- `syncStatus`: `"idle" | "syncing" | "synced" | "failed"`, the presented app's first sync
+- `retrySync() => void`: start the presented app's first sync over
+- `presentedDocKey`: `string | null`, names the presented app's local document
+- `rejectedChange`: `{ at: number, reason: string } | null`, the last change the room refused
 - `documents`: `{ version, doc(appId), awareness(appId), writeOnce(appId, key, write) }`
-- `syncStatus`, `retrySync()`, `isRebuilding`, `rejectedChangeAt`, `rejectedChangeReason`
+- `isRebuilding`: the current copy is waiting for replacement
 - `user`, `isAdmin`, `isReadOnly`
 
-`documents.version` changes whenever the provider replaces a document (a refused
-change is rebuilt from the server), and hosts remount the app on that change.
+### Mounting the presented app
+
+Wait for `syncStatus` to become `synced` before mounting a new app copy.
+Key the mounted app with `presentedDocKey`. Keep an already mounted copy
+visible during catch-up, and disable interaction with it while
+`isRebuilding` is true. If the sync fails, show a retry that calls
+`retrySync()`.
+
+- `synced` means the room's first sync reply has filled the local copy. Edits
+  made before that would build a second document tree and could hide the
+  saved one for everyone.
+- Each sync belongs to one activation of the app on the stage and owns its
+  own timer and attempt count. A reply to an earlier sync, or to an earlier
+  attempt, changes nothing.
+- A retryable refusal, an unanswered request or a disconnected socket is
+  retried after 250 ms, doubling to a 4 s cap, or after the refusal's
+  `retryAfterMs` when that is longer.
+- The whole run has one 30 s deadline from the moment it starts. Each attempt
+  waits up to 8 s for a reply, never past the deadline, and a retry that
+  would start after the deadline is not made. So the status turns `failed` within 30 s
+  whether the room refuses every sync or never answers: refused at once,
+  after about 28 s; never answered, at 30 s. A refusal that is not retryable
+  fails at once, except an older SFU's rate-limit refusal, which has no
+  `retryable` field and is retried with the backoff.
+- `presentedDocKey` changes with every new local copy: a new `docGeneration`,
+  a close and present in one batch, a new socket, or a change the room
+  refused. The app then mounts again on the new document instead of keeping
+  the one the provider dropped.
+- After a final refusal, the provider replaces the local copy from the room
+  and sets `rejectedChange`. Show a short notice that the last change
+  was not saved.
 
 ### Uploads and refusals
 
@@ -167,7 +205,13 @@ rules above about running again apply after a rebuild.
 
 Ack behavior:
 
-- control methods resolve `false` if socket is unavailable or ack times out
+- control methods resolve `{ ok: true }`, or `{ ok: false, reason }` with `reason` one of:
+  - `"roomFull"`: the room keeps as many app documents as it can; clear one to present another
+  - `"staleStage"`: another host changed the stage first
+  - `"failed"`: anything else, such as no socket, no permission, a rate limit or an ack timeout
+- stage commands (present, close, clear, lock) send the `revision` the client last saw, and the SFU refuses
+  them when the stage has changed since
+- `clearApp` fails on an older SFU, which cannot clear a document
 - current timeout is 8 seconds in provider implementation
 
 ### `useAppDoc(appId)`

@@ -1,11 +1,16 @@
 import { performance } from "node:perf_hooks";
 import * as Y from "yjs";
 
+import { readUpdate, updateChangesNothing, type UpdateFacts } from "#app-documents/updateFacts";
+
+export type WorkerProposal = { facts: UpdateFacts; bytes: number; seen: Map<number, number> };
+
 export type Snapshot = { base: Uint8Array | null; tail: Uint8Array[] };
 
 export type Operation =
-  | { kind: "apply"; update: Uint8Array; assembled?: true }
-  | { kind: "sync"; stateVector: Uint8Array };
+  | { kind: "apply"; update: Uint8Array; assembled?: true; validate?: true; rest?: Uint8Array[] }
+  | { kind: "sync"; stateVector: Uint8Array }
+  | { kind: "check"; update: Uint8Array };
 
 export type ToWorker =
   | { type: "run"; document: number; load: Snapshot | null; operations: Operation[] }
@@ -13,8 +18,10 @@ export type ToWorker =
 
 type Answer =
   | { type: "applied"; compacted: Uint8Array | null; unchanged?: true }
+  | { type: "proposed"; proposal: WorkerProposal; update: Uint8Array; compacted: Uint8Array | null; unchanged?: true }
+  | { type: "checked"; unchanged: boolean }
   | { type: "synced"; update: Uint8Array; stateVector: Uint8Array }
-  | { type: "refused"; reason: "too-large" | "invalid" | "missing-dependency"; evicted: boolean };
+  | { type: "refused"; reason: "too-large" | "invalid" | "missing-dependency" | "malformed" | "unresolved"; evicted: boolean };
 
 export type FromWorker =
   | { type: "ready" }
@@ -73,7 +80,7 @@ export const createAppDocumentEngine = ({ maxDocumentBytes, maxUpdateBytes }: En
     return loaded;
   };
 
-  const apply = (id: number, loaded: Loaded, update: Uint8Array, assembled: boolean): [Answer, ArrayBuffer[]] => {
+  const apply = (id: number, loaded: Loaded, update: Uint8Array, assembled: boolean, exact = false): [Answer, ArrayBuffer[]] => {
     if (update.length > (assembled ? maxDocumentBytes : maxUpdateBytes)) {
       return [{ type: "refused", reason: "too-large", evicted: false }, []];
     }
@@ -100,7 +107,7 @@ export const createAppDocumentEngine = ({ maxDocumentBytes, maxUpdateBytes }: En
     loaded.uncompactedBytes += update.length;
     const growth = update.length * GROWTH_MARGIN;
     if (
-      loaded.measuredBytes + loaded.estimatedGrowth + growth <= maxDocumentBytes &&
+      !exact && loaded.measuredBytes + loaded.estimatedGrowth + growth <= maxDocumentBytes &&
       loaded.uncompactedBytes < COMPACT_AFTER_BYTES &&
       loaded.uncompactedMs < COMPACT_AFTER_MS
     ) {
@@ -117,6 +124,34 @@ export const createAppDocumentEngine = ({ maxDocumentBytes, maxUpdateBytes }: En
     loaded.uncompactedBytes = 0;
     loaded.uncompactedMs = 0;
     return [{ type: "applied", compacted: state }, [transferable(state)]];
+  };
+
+  const propose = (id: number, loaded: Loaded, operation: Extract<Operation, { kind: "apply" }>): [Answer, ArrayBuffer[]] => {
+    let update: Uint8Array;
+    let facts: UpdateFacts;
+    try {
+      update = operation.rest?.length ? Y.mergeUpdates([operation.update, ...operation.rest]) : operation.update;
+      facts = readUpdate(loaded.doc, update);
+    } catch {
+      return [{ type: "refused", reason: "malformed", evicted: false }, []];
+    }
+    if (!facts.resolvable) return [{ type: "refused", reason: "unresolved", evicted: false }, []];
+    const [answer, transfer] = apply(id, loaded, update, operation.assembled === true, true);
+    if (answer.type !== "applied") return [answer, transfer];
+    const seen = new Map<number, number>();
+    for (const [client] of loaded.doc.store.clients) seen.set(client, Y.getState(loaded.doc.store, client));
+    return [{
+      type: "proposed", update, compacted: answer.compacted, unchanged: answer.unchanged,
+      proposal: { facts, bytes: loaded.measuredBytes || 2, seen },
+    }, transfer];
+  };
+
+  const check = (loaded: Loaded, update: Uint8Array): [Answer, ArrayBuffer[]] => {
+    try {
+      return [{ type: "checked", unchanged: updateChangesNothing(loaded.doc, update) }, []];
+    } catch {
+      return [{ type: "refused", reason: "invalid", evicted: false }, []];
+    }
   };
 
   const sync = (loaded: Loaded, stateVector: Uint8Array): [Answer, ArrayBuffer[]] => {
@@ -152,7 +187,11 @@ export const createAppDocumentEngine = ({ maxDocumentBytes, maxUpdateBytes }: En
       const [answer, transfer] =
         operation.kind === "sync"
           ? sync(loaded, operation.stateVector)
-          : apply(message.document, loaded, operation.update, operation.assembled === true);
+          : operation.kind === "check"
+            ? check(loaded, operation.update)
+            : operation.validate
+              ? propose(message.document, loaded, operation)
+              : apply(message.document, loaded, operation.update, operation.assembled === true);
       post({ ...answer, elapsedMs: performance.now() - started }, transfer);
       if (answer.type === "refused" && answer.evicted) return;
       if (index < operations.length - 1 && performance.now() - runStarted >= RUN_SLICE_MS) {

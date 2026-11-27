@@ -154,6 +154,7 @@ const loadSessionModule = async () => {
         'export * from "./session.ts";',
         'export * from "./protocol.ts";',
         'export * as Y from "yjs";',
+        'export * as awarenessProtocol from "y-protocols/awareness";',
         'export { runWheelCommand } from "./wheel/commands.ts";',
         'export { createWheelDoc, getEntries } from "../apps/wheel/core/doc/index.ts";',
       ].join("\n"),
@@ -248,6 +249,8 @@ const makeRoom = (mod, context) => {
             }
           } else if (message.type === "ack") {
             client.acks.push(message);
+          } else if (message.type === "awareness") {
+            client.awareness.push(message.payload);
           }
         }
       }
@@ -262,6 +265,7 @@ const makeRoom = (mod, context) => {
       outbox,
       received: [],
       acks: [],
+      awareness: [],
       updatesPostedAt: [],
       updateSizes: [],
       requestNumber: 0,
@@ -406,6 +410,35 @@ test("an embed takes a relayed change of 300 KiB, or one at the document limit, 
   }
   assert.ok(ben.session.doc.getText("notes").length > 1_000_000);
   assert.deepEqual(ben.session.rejections, []);
+});
+
+test("an embed forwards only its own cursor when a peer's times out", { skip: skipConvergence }, async (context) => {
+  const harness = makeRoom(sessionModule, context);
+  const { awarenessProtocol } = sessionModule;
+  const ada = await harness.join("ada");
+  const ben = new awarenessProtocol.Awareness(new harness.Y.Doc());
+  context.after(() => ben.destroy());
+  ben.setLocalState({ user: { id: "ben" } });
+  harness.deliver(ada, "awareness", {
+    update: sessionModule.base64FromBytes(awarenessProtocol.encodeAwarenessUpdate(ben, [ben.clientID])),
+  });
+  context.mock.timers.tick(80);
+  await harness.pump();
+  ada.awareness.length = 0;
+
+  awarenessProtocol.removeAwarenessStates(ada.session.awareness, [ben.clientID], "timeout");
+  ada.session.awareness.setLocalStateField("cursor", { x: 3, y: 4 });
+  context.mock.timers.tick(80);
+  await harness.pump();
+
+  assert.ok(ada.awareness.length > 0, "the embed forwards its own cursor");
+  for (const payload of ada.awareness) {
+    const forwarded = new awarenessProtocol.Awareness(new harness.Y.Doc());
+    awarenessProtocol.applyAwarenessUpdate(forwarded, sessionModule.bytesFromBase64(payload.update, 65536).bytes, "host");
+    const ids = [...forwarded.meta.keys()].filter((id) => id !== forwarded.clientID);
+    forwarded.destroy();
+    assert.deepEqual(ids, [ada.session.awareness.clientID]);
+  }
 });
 
 test("read-only embeds draw nothing into the room", { skip: skipConvergence }, async (context) => {

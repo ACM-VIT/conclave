@@ -297,7 +297,7 @@ describe("app documents", { timeout: 30_000 }, () => {
 
     expect(await room.join()).toBe(merged(base, missing));
     expect(room.relayed).toEqual([base, missing]);
-    expect(room.refused).toEqual([{ appId: "board", replicaId: "second", reason: "missing-dependency" }]);
+    expect(room.refused).toEqual([{ appId: "board", replicaId: "second", reason: "unresolved" }]);
   });
 
   it("refuses an author's later edits after one is refused and tells the author once", async () => {
@@ -351,17 +351,24 @@ describe("app documents", { timeout: 30_000 }, () => {
     expect(late).toBe("hello after");
   });
 
-  it("tells an author when an update arrives too fast, but not a client that cannot hear it", async () => {
+  it("tells a current writer about the update limit and restarts a legacy writer's copy", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
-    const room = inRoom(createPool(), "rate-update");
-    await room.open();
-    const legacy = new Y.Doc();
-    const current = new Y.Doc();
+    const pool = createPool();
+    const legacy = inRoom(pool, "rate-legacy");
+    const current = inRoom(pool, "rate-current");
+    await legacy.open();
+    await current.open();
+    for (const [room, replica] of [[legacy, undefined], [current, "current"]] as const) {
+      const doc = new Y.Doc();
+      for (let index = 0; index < 61; index += 1) {
+        room.send(edit(doc, (text) => text.insert(0, "l")), replica);
+      }
+    }
 
-    for (let index = 0; index < 61; index += 1) room.send(edit(legacy, (text) => text.insert(0, "l")));
-    for (let index = 0; index < 5; index += 1) room.send(edit(current, (text) => text.insert(0, "c")), "current");
-
-    expect(room.refused).toEqual([{ appId: "board", replicaId: "current", reason: "rate-limited" }]);
+    expect(legacy.refused).toEqual([]);
+    const restart = legacy.inbox.find(({ event }) => event === "apps:state");
+    expect(restart?.payload).toMatchObject({ activeAppId: null });
+    expect(current.refused).toEqual([{ appId: "board", replicaId: "current", reason: "rate-limited" }]);
   });
 
   it("tells a client that can retry to try again while the queue is full, and holds an older client's sync until it can answer", async () => {
@@ -427,8 +434,8 @@ describe("app documents", { timeout: 30_000 }, () => {
     expect(await settledNow(older)).toBeUndefined();
 
     await room.close();
-    await room.open();
-    await stuck.close();
+    await room.present("board");
+    await stuck.clear();
     await vi.advanceTimersByTimeAsync(250);
 
     expect(await settledNow(older)).toEqual({ error: "App not active" });
@@ -444,7 +451,7 @@ describe("app documents", { timeout: 30_000 }, () => {
     expect(await settledNow(older)).toBeUndefined();
 
     await room.close();
-    await room.open();
+    await room.present("board");
     await vi.advanceTimersByTimeAsync(500);
 
     expect(await settledNow(older)).toEqual({ error: "App not active" });
@@ -499,7 +506,7 @@ describe("app documents", { timeout: 30_000 }, () => {
     expect(await settledNow(older)).toBeUndefined();
 
     room.disconnect();
-    await stuck.close();
+    await stuck.clear();
     await vi.advanceTimersByTimeAsync(30_000);
 
     expect(await settledNow(older)).toBeUndefined();
@@ -526,7 +533,7 @@ describe("app documents", { timeout: 30_000 }, () => {
     expect(await settledNow(Promise.race(held))).toBeUndefined();
     expect(await settledNow(room.requestSync(new Y.Doc(), false))).toEqual({ error: "Too many app sync requests" });
 
-    await stuck.close();
+    await stuck.clear();
     await vi.advanceTimersByTimeAsync(250);
 
     expect(await settledNow(Promise.race(held))).toBeUndefined();
@@ -915,10 +922,55 @@ describe("app documents", { timeout: 30_000 }, () => {
     expect(await joinedText(other)).toBe("hello");
   });
 
-  it("drops a closed app's queued updates and starts the reopened app empty", async () => {
+  it("keeps a worker-backed stroke already in flight when the host closes the board", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const fixture = createFixture();
+    const room = inRoom(createPool({ workerUrl: STALLING_WORKER, workerData: fixture.workerData }), "close-held", { appId: "whiteboard" });
+    await room.open();
+    const writer = new Y.Doc();
+    const update = edit(writer, (text) => text.insert(0, "HOLD this stroke"));
+    const upload = room.acknowledged({ update }, "stroke");
+    await fixture.next("held");
+    const close = room.close();
+    expect(await settledNow(close)).toBeUndefined();
+    expect(await settledNow(upload)).toBeUndefined();
+
+    fixture.release();
+    expect((await upload).relayed).toBe(1);
+    expect(await close).toMatchObject({ success: true });
+    expect(room.room.apps.snapshot().savedAppIds).toEqual(["whiteboard"]);
+    expect(await room.present("wheel")).toMatchObject({ success: true });
+    expect(await room.present("whiteboard")).toMatchObject({ success: true });
+    expect(await room.join()).toBe("HOLD this stroke");
+  });
+
+  it("never echoes the worker's speculative Wheel add before commit", async () => {
+    const fixture = createFixture();
+    const room = inRoom(createPool({ workerUrl: STALLING_WORKER, workerData: fixture.workerData }), "wheel-commit", { appId: "wheel" });
+    await room.open();
+    const writer = new Y.Doc();
+    writer.getArray("wheel.entries").push([{ id: "ada", label: "HOLD Ada" }]);
+    const update = Y.encodeStateAsUpdate(writer);
+    const upload = room.acknowledged({ update });
+    await fixture.next("held");
+    expect(await settledNow(upload)).toBeUndefined();
+    expect(room.inbox).toEqual([]);
+    expect(room.relayed).toEqual([]);
+
+    fixture.release();
+    expect(await upload).toEqual({
+      inbox: [{ event: "apps:yjs:update", payload: { appId: "wheel", update } }],
+      relayed: 1,
+    });
+    expect((await room.joinDocument()).doc.getArray("wheel.entries").toArray()).toEqual([
+      { id: "ada", label: "HOLD Ada" },
+    ]);
+  });
+
+  it("keeps only committed whiteboard edits across Close and Present when a worker misses its deadline", async () => {
     const clock = manualClock();
     const fixture = createFixture();
-    const room = inRoom(createPool({ deadlineMs: DEADLINE_MS, clock, workerUrl: STALLING_WORKER, workerData: fixture.workerData }), "close");
+    const room = inRoom(createPool({ deadlineMs: DEADLINE_MS, clock, workerUrl: STALLING_WORKER, workerData: fixture.workerData }), "close", { appId: "whiteboard" });
     await room.open();
     const { hello, fromOther, world } = authors();
     room.send(hello);
@@ -927,12 +979,16 @@ describe("app documents", { timeout: 30_000 }, () => {
     await fixture.next("stalled");
     room.send(world());
 
-    await room.close();
-    await room.open();
+    const before = room.room.apps.snapshot();
+    expect(await room.close()).toMatchObject({ success: true });
+    expect(room.room.apps.snapshot().savedAppIds).toEqual(["whiteboard"]);
+    expect(await room.present("wheel", before.revision)).toMatchObject({ success: false, code: "stale_revision" });
+    expect(await room.present("whiteboard")).toMatchObject({ success: true });
+    expect(room.room.apps.snapshot().docGeneration).toBe(before.docGeneration);
     const joined = room.join();
     await clock.expire(DEADLINE_MS);
 
-    expect(await joined).toBe("");
+    expect(await joined).toBe("hello");
     expect(room.relayed).toEqual([hello]);
   });
 });

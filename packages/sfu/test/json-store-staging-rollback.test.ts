@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,6 +25,7 @@ const saveArchive = (archive: string, file: string, source: string) => {
   const path = join(importDir(), "sfu-a", archive, file);
   mkdirSync(dirname(path), { recursive: true });
   copyFileSync(source, path);
+  return path;
 };
 const byId = (rows: Row[]) => Object.fromEntries(rows.map((row) => [row.id, row]));
 
@@ -43,7 +44,7 @@ afterEach(() => {
 });
 
 describe.each(stagingRollbackStores)("rolling back to staging's $name store and forward again", (store) => {
-  it("combines the file staging's code wrote with this SFU's own store, keeping the edit and every untouched record", async () => {
+  it("keeps the rollback edit and untouched records after adoption or manual reconciliation", async () => {
     vi.stubEnv(store.modeVariable, "json");
     const activePath = join(dir, "recordings", `${store.name}.json`);
     vi.stubEnv(store.pathVariable, activePath);
@@ -58,7 +59,15 @@ describe.each(stagingRollbackStores)("rolling back to staging's $name store and 
     vi.stubEnv(store.pathVariable, activePath);
     vi.stubEnv("CONCLAVE_FALLBACK_IMPORT_DIR", importDir());
 
-    saveArchive("20261124T000000000Z-after-the-rollback", `${store.name}.json`, stagingRollbackFixture(store.name));
+    const archive = saveArchive("20261124T000000000Z-after-the-rollback", `${store.name}.json`, stagingRollbackFixture(store.name));
+    if (store.name !== "scheduling") {
+      const originalActive = readFileSync(activePath, "utf8");
+      await expect(loaders[store.name]()).rejects.toThrow(/possible deletion/);
+      expect(readFileSync(activePath, "utf8")).toBe(originalActive);
+      expect(readFileSync(archive, "utf8")).toBe(readFileSync(stagingRollbackFixture(store.name), "utf8"));
+      copyFileSync(archive, activePath);
+      renameSync(archive, `${archive}.adopted`);
+    }
     const rolledForward = byId(await loaders[store.name]());
 
     expect(Object.keys(rolledForward).sort()).toEqual(Object.keys(stagingRows).sort());
