@@ -2487,6 +2487,7 @@ function GridLayout({
       >
         {stage ? (
           <div
+            key="meeting-stage"
             className={stageSplitClass(stage)}
             data-meet-stage-split={stage.split.mode}
             data-meet-side-by-side={usesSideBySideLayout || undefined}

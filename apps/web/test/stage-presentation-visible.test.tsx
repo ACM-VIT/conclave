@@ -272,6 +272,20 @@ it("renders the compact self-view on a full share and restores the preview when 
   expect(host!.querySelector('[data-meet-detached-self-view="pill"]')).toBeNull();
 });
 
+it("does not carry an in-flight tiled animation into the pinned stage", () => {
+  const render = stageHarness(["bob", "carol"], "floating");
+  const tiled = render("tiled", DESKTOP, true);
+  const shareTile = tiled.querySelector<HTMLElement>("[data-meet-presentation-tile]")!.parentElement!;
+  shareTile.style.transform = "translate3d(-180px, 0, 0)";
+
+  pinRemote(tiled, "bob");
+  const stage = tiled.querySelector<HTMLElement>("[data-meet-stage-split]")!;
+
+  expect(stage.style.transform).toBe("");
+  expect(stage.querySelector("[data-meet-presentation-tile]")).not.toBeNull();
+  expect(stage.querySelector('button[aria-label="Unpin"]')).not.toBeNull();
+});
+
 it("names no hidden camera as a focus", () => {
   const render = stageHarness(["bob", "carol"], "floating");
   const desktop = render("auto", DESKTOP, true);
