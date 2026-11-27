@@ -1129,3 +1129,50 @@ describe("webinar Q&A lists on a server without the runtime, in a large room", (
     expect(new Set(lists).size).toBe(451);
   });
 });
+
+it("defers fallback Q&A lists while a socket is backlogged and sends once after it drains", async () => {
+  const state = createSfuState({
+    roomRegistry: new LocalRoomRegistry({ instanceId: "lists-pressure", instanceUrl: "http://localhost", ttlMs: 45_000 }),
+    appsAuthority: null,
+  });
+  const room = addRoom(state, "lists-pressure-room");
+  const io = { to: () => ({ emit: () => {} }) } as never;
+  const webinar = getOrCreateWebinarRoomConfig(state.webinarConfigs, room.channelId);
+  const queue: { data: string }[] = [];
+  let slowLists = 0;
+  let fastLists = 0;
+  const slow = {
+    id: "slow",
+    conn: { writeBuffer: queue },
+    emit(event: string) {
+      if (event === "webinar:qaSnapshot") {
+        slowLists += 1;
+        queue.push({ data: "x".repeat(1024 * 1024) });
+      }
+    },
+  };
+  const fast = {
+    id: "fast",
+    emit(event: string) { if (event === "webinar:qaSnapshot") fastLists += 1; },
+  };
+  room.addClient(new Client({ id: "slow#1", socket: slow as never, mode: "webinar_attendee" }));
+  room.addClient(new Client({ id: "fast#1", socket: fast as never, mode: "webinar_attendee" }));
+
+  try {
+    for (let cycle = 0; cycle < 8; cycle += 1) {
+      webinar.enabled = false;
+      emitWebinarConfigChanged(io, state, room);
+      webinar.enabled = true;
+      emitWebinarConfigChanged(io, state, room);
+    }
+    expect(slowLists).toBe(1);
+    expect(fastLists).toBeGreaterThan(0);
+    queue.length = 0;
+    await until(() => slowLists === 2, "the backlogged viewer receives the replacement list");
+    await wait(350);
+    expect(slowLists).toBe(2);
+  } finally {
+    webinar.enabled = false;
+    emitWebinarConfigChanged(io, state, room);
+  }
+});

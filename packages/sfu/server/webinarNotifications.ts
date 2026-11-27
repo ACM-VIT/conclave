@@ -12,7 +12,8 @@ import type {
   WebinarQaSnapshot,
 } from "../types.js";
 import { emitToHosts } from "./admin/hostOnlyEvents.js";
-import { peekRoomAuthority } from "./apps/authority/index.js";
+import { peekRoomAuthority, socketPressure } from "./apps/authority/index.js";
+import { DEFAULT_AUTHORITY_LIMITS } from "./apps/authority/limits.js";
 import type { SfuState } from "./state.js";
 import {
   ensureWebinarLinkSlug,
@@ -62,6 +63,12 @@ const oldEventsAreTheBook = (state: SfuState): boolean =>
   !state.appsAuthority?.modules.some((module) => module.contract.id === "qa");
 
 /** Sends one client the room's webinar Q&A as their role reads it. */
+const qaListCanQueue = (client: Client): boolean => {
+  const { packets, bytes } = socketPressure(client.socket);
+  return packets < DEFAULT_AUTHORITY_LIMITS.socketSoftPackets &&
+    bytes < DEFAULT_AUTHORITY_LIMITS.socketSoftBytes;
+};
+
 const sendWebinarQaList = (room: Room, client: Client): void => {
   client.socket.emit("webinar:qaSnapshot", {
     roomId: room.id,
@@ -96,16 +103,25 @@ const listInTurns = (state: SfuState, room: Room): void => {
       return;
     }
     let sent = 0;
+    let waitingForDrain = false;
     for (const client of room.clients.values()) {
       if (listedForQa.has(client)) continue;
       if (sent === WEBINAR_QA_LISTS_PER_TURN) {
         setImmediate(turn);
         return;
       }
+      if (!qaListCanQueue(client)) {
+        waitingForDrain = true;
+        continue;
+      }
       sendWebinarQaList(room, client);
       sent += 1;
     }
-    listing.delete(room);
+    if (waitingForDrain) {
+      setTimeout(turn, DEFAULT_AUTHORITY_LIMITS.lagRecheckMs).unref();
+    } else {
+      listing.delete(room);
+    }
   };
   turn();
 };
@@ -117,7 +133,12 @@ const listInTurns = (state: SfuState, room: Room): void => {
 export const grantWebinarQaList = (state: SfuState, room: Room, client: Client): void => {
   if (!oldEventsAreTheBook(state)) return;
   if (!state.webinarConfigs.get(room.channelId)?.enabled) return;
-  sendWebinarQaList(room, client);
+  if (qaListCanQueue(client)) {
+    sendWebinarQaList(room, client);
+  } else {
+    listedForQa.delete(client);
+    listInTurns(state, room);
+  }
 };
 
 export const emitWebinarConfigChanged = (
