@@ -81,6 +81,21 @@ const lookupInTenant = async (
     : { kind: "unscheduled" };
 };
 
+const noActiveRoomOwner = async ({ roomCode, clientId }: RoomDestination, signal: AbortSignal): Promise<boolean> => {
+  const route = `/routing/rooms/${encodeURIComponent(clientId)}/${encodeURIComponent(roomCode)}`;
+  const results = await Promise.allSettled(resolveSfuUrls().map(async (sfuUrl) => {
+    const response = await fetch(sfuUrl.replace(/\/$/, "") + route, {
+      headers: { "x-sfu-secret": resolveSfuSecret(), accept: "application/json" },
+      cache: "no-store",
+      signal,
+    });
+    if (!response.ok) return false;
+    const body = (await response.json()) as { owner?: unknown } | null;
+    return body?.owner === null;
+  }));
+  return results.length > 0 && results.every((result) => result.status === "fulfilled" && result.value);
+};
+
 export const lookupScheduledMeetingForCode = async (
   destination: RoomDestination,
   { allowLegacyBooking = false }: { allowLegacyBooking?: boolean } = {},
@@ -92,7 +107,8 @@ export const lookupScheduledMeetingForCode = async (
     return primary;
   }
   const legacy = await lookupInTenant({ ...destination, clientId: CONCLAVE_SFU_CLIENT_ID }, deadline);
-  return legacy.kind === "scheduled" && legacy.meeting.bookingLink === true ? legacy : primary;
+  return legacy.kind === "scheduled" && legacy.meeting.bookingLink === true &&
+    await noActiveRoomOwner(destination, deadline) ? legacy : primary;
 };
 
 export const lookupScheduledMeetingHostEmail = async ({
