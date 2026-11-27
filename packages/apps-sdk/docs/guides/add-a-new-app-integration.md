@@ -16,6 +16,8 @@ pnpm -C packages/apps-sdk run new:app polls --name "Quick Polls"
 pnpm -C packages/apps-sdk run new:app polls --dry-run
 ```
 
+An app id is at most 48 lowercase letters, digits and dashes, starting with a letter. That rule is `appIdSchema` in `@conclave/apps-sdk/authority`, and `defineContract`, `new:app` and `check:apps` all check an id against it. The id is also the app's folder and the first part of its package subpaths, so `new:app` refuses one the SDK already uses (`authority`, `native-embed`, `sdk`, `apps`, `core`, `web`, `server`, `native`) and one `package.json` already exports something under. It refuses before writing any file.
+
 The command creates:
 
 ```text
@@ -101,15 +103,18 @@ Import the definition in `apps/web/src/app/meets-client.tsx` and append it to
 the stable `MEETING_APPS` array. `AppsProvider` exposes that array, and
 `MeetingAppLayout` renders the active definition's `web` component.
 
-Use `useApps()` from an admin control to open, close, or lock it:
+Use `useApps()` from an admin control to present, close, or lock it:
 
 ```ts
-const { openApp, closeApp, setLocked } = useApps();
+const { presentApp, closeApp, setLocked } = useApps();
 
-await openApp("polls");
+await presentApp("polls");
 await setLocked(true);
 await closeApp();
 ```
+
+Closing keeps the app's document for the rest of the meeting, so presenting it
+again picks up where everyone left off. `clearApp("polls")` erases it.
 
 ## 5. Verify it
 

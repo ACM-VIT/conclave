@@ -1,3 +1,4 @@
+import { runDetached } from "../runDetached.js";
 import type { TranscriptSpeaker } from "../../types.js";
 
 const WORKER_CONNECT_TIMEOUT_MS = 8000;
@@ -243,10 +244,7 @@ export class TranscriptWorkerRelayClient {
         try {
           socket.close();
         } catch {}
-        // Heartbeats are not buffered audio, but a failed write must still
-        // reconnect even when the room is silent and close never fires.
         if (this.hasConnected && !this.intentionallyClosed) this.scheduleReconnect();
-        // Queue the audio below while the replacement socket connects.
       }
     }
     if (
@@ -336,7 +334,7 @@ export class TranscriptWorkerRelayClient {
     this.reconnectAttempt += 1;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      void this.reconnect();
+      runDetached("Reconnecting to the transcript worker", () => this.reconnect());
     }, delay);
   }
 

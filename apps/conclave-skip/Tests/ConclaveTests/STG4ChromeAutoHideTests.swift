@@ -6,7 +6,7 @@ import Testing
 @MainActor
 struct STG4ChromeAutoHideTests {
     private func stage(_ inputs: StageInputs) -> StagePresenter {
-        let presenter = StagePresenter(shell: MeetingShellPresenter())
+        let presenter = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         presenter.setViewport(StagePoliciesTests.iphoneSE)
         presenter.apply(inputs)
         return presenter

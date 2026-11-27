@@ -26,12 +26,6 @@ type PlayerRoundState = {
 
 type WordSource = "setter" | "random";
 
-/**
- * - `solo`: everyone races on a private board (the original game).
- * - `relay`: one shared team board; contestants take turns guessing in a fixed
- *   rotation, each turn on its own timer.
- * - `huddle`: one shared team board; any contestant may guess at any time.
- */
 type WordleMode = "solo" | "relay" | "huddle";
 
 type TeamGuess = GuessResult & { by: string };
@@ -41,13 +35,9 @@ type TeamRoundState = {
   outcome: PlayerOutcome | null;
   solvedAt: number | null;
   solvedBy: string | null;
-  /** Contestants seated for this round, in turn order. */
   turnOrder: string[];
-  /** Relay only: index into `turnOrder` of whoever guesses next. */
   turnIndex: number;
-  /** Relay only: when the current turn passes on (0 outside relay). */
   turnDeadline: number;
-  /** Relay only: when the current guesser was first seen disconnected. */
   absentSince: number | null;
 };
 
@@ -56,9 +46,7 @@ type WordleState = {
   mode: WordleMode;
   wordSource: WordSource;
   turnTimeMs: number;
-  /** Shared board for team modes; null in solo. */
   team: TeamRoundState | null;
-  /** Relay: who opens the next round, so turns keep rotating across rounds. */
   nextStarterId: string | null;
   setterId: string | null;
   targetWord: string | null;
@@ -75,7 +63,6 @@ type WordleState = {
 
 const WORD_LENGTH = 5;
 const MAX_TRIES = 6;
-/** How long a relay guesser may be disconnected before their turn moves on. */
 const TURN_GRACE_MS = 5_000;
 
 const WORD_SET = new Set<string>(WORDLE_WORDS);
@@ -195,11 +182,6 @@ const allContestantsFinished = (state: WordleState, ctx: GameContext): boolean =
 const isActive = (ctx: GameContext, playerId: string): boolean =>
   ctx.activePlayers.some((player) => player.id === playerId);
 
-/**
- * Index of the next connected teammate after the current guesser, or null when
- * nobody else on the team is connected. The single source of the relay's
- * "who is up next" rule, shared by turn handoff and both views.
- */
 const nextActiveIndex = (team: TeamRoundState, ctx: GameContext): number | null => {
   const count = team.turnOrder.length;
   for (let step = 1; step < count; step += 1) {
@@ -209,7 +191,6 @@ const nextActiveIndex = (team: TeamRoundState, ctx: GameContext): number | null 
   return null;
 };
 
-/** Give the relay turn to `turnIndex` with a fresh timer. */
 const handTurn = (
   team: TeamRoundState,
   turnIndex: number,
@@ -230,14 +211,12 @@ const currentTurnId = (state: WordleState): string | null => {
   return team.turnOrder[team.turnIndex] ?? null;
 };
 
-/** Relay: the connected teammate who guesses after the current one, if any. */
 const upNextId = (state: WordleState, ctx: GameContext): string | null => {
   if (!state.team || !currentTurnId(state)) return null;
   const index = nextActiveIndex(state.team, ctx);
   return index == null ? null : state.team.turnOrder[index] ?? null;
 };
 
-/** Fresh per-round board(s) for the seated contestants and the chosen word. */
 const beginRound = (
   state: WordleState,
   ctx: GameContext,
@@ -317,7 +296,6 @@ const roundScore = (
 const accumulateScores = (state: WordleState, ctx: GameContext): Record<string, number> => {
   const scores = { ...state.scores };
   if (state.team) {
-    // Team modes: every seated teammate banks the shared board's score.
     const points = roundScore(state.team, state.maxTries);
     for (const playerId of state.team.turnOrder) {
       scores[playerId] = (scores[playerId] ?? 0) + points;
@@ -340,21 +318,12 @@ const finishRound = (state: WordleState, ctx: GameContext): WordleState => ({
   usedWords: state.targetWord
     ? [...state.usedWords, state.targetWord]
     : state.usedWords,
-  // `turnIndex` already points at whoever was up next, so the following round
-  // opens with them and the rotation carries on.
   nextStarterId: state.team ? state.team.turnOrder[state.team.turnIndex] ?? null : null,
 });
 
 const withResultsIfComplete = (state: WordleState, ctx: GameContext): WordleState =>
   allContestantsFinished(state, ctx) ? finishRound(state, ctx) : state;
 
-/**
- * Typed move contract. Decoded from the untrusted `GameMove` at the top of
- * `onMove`. The `word` field stays `unknown` on the decoded move: it is
- * validated by `normalizeWord` inside each case, because that validation needs
- * the role ("Word" vs "Guess") for its messages and must run after the phase and
- * setter/guesser checks so the original error precedence is preserved.
- */
 export type WordleMove =
   | { type: "start" }
   | { type: "setWord"; word: unknown }
@@ -570,9 +539,6 @@ export const wordleModule: GameModule<WordleState> = {
             nextTeam = { ...nextTeam, outcome: "lose" };
           }
           if (state.mode === "relay") {
-            // Always rotate, even on the final guess, so `turnIndex` names
-            // whoever opens the next round. With nobody else connected the
-            // guesser simply goes again.
             nextTeam = handTurn(
               nextTeam,
               nextActiveIndex(nextTeam, ctx) ?? nextTeam.turnIndex,
@@ -721,18 +687,12 @@ export const wordleModule: GameModule<WordleState> = {
       return finishRound({ ...state, players }, ctx);
     }
 
-    // Relay: a turn passes on when its timer runs out, or once the guesser has
-    // been disconnected for a short grace window (a reconnect blip keeps it).
-    // Every branch that changes nothing returns `state` itself, so an idle
-    // tick never triggers a broadcast.
     const turnId = currentTurnId(state);
     const team = state.team;
     if (!team || !turnId) return state;
 
     const nextIndex = nextActiveIndex(team, ctx);
     if (!isActive(ctx, turnId)) {
-      // Nobody else to hand to: hold the turn quietly until someone is back
-      // or the round deadline closes the board.
       if (nextIndex == null) return state;
       if (team.absentSince == null) {
         return { ...state, team: { ...team, absentSince: ctx.now } };
@@ -742,7 +702,6 @@ export const wordleModule: GameModule<WordleState> = {
     }
 
     if (ctx.now >= team.turnDeadline) {
-      // Alone on the team: the same guesser gets a fresh timer.
       return {
         ...state,
         team: handTurn(team, nextIndex ?? team.turnIndex, ctx, state.turnTimeMs),
@@ -805,8 +764,6 @@ export const wordleModule: GameModule<WordleState> = {
 
     const turnId = currentTurnId(state);
     const nextUpId = upNextId(state, ctx);
-    // Team boards are public: teammates share them, the setter already knows
-    // the word, and nobody is racing anyone, so there is nothing to hide.
     const teamView = team
       ? {
           guesses: team.guesses.map((entry) => ({
@@ -865,8 +822,6 @@ export const wordleModule: GameModule<WordleState> = {
   playerView(state, playerId, ctx) {
     const isSetter = state.setterId === playerId;
     const team = state.team;
-    // In team modes the shared board doubles as "my board", so clients that
-    // only know solo Wordle still render the team's rows and gate input on turn.
     const onTeam = Boolean(team?.turnOrder.includes(playerId));
     const progress: PlayerRoundState | null = team
       ? onTeam
@@ -896,16 +851,10 @@ export const wordleModule: GameModule<WordleState> = {
       myGuesses: progress?.guesses ?? [],
       myOutcome: progress?.outcome ?? null,
       mySolvedAt: progress?.solvedAt ?? null,
-      // The setter already knows the word, so their private view carries every
-      // contestant's live board (letters included) to spectate while waiting.
-      // Contestants never receive each other's boards; letters would leak.
       boards: !isSetter
         ? null
         : team
-          ? // Clients that predate team modes only show the setter `boards`, so
-            // mirror the shared board as one entry, labelled with whoever is up
-            // (or made the latest guess).
-            [
+          ? [
               {
                 playerId:
                   turnId ??

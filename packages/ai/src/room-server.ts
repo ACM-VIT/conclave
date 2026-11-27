@@ -20,8 +20,6 @@ export const ROOM_AI_ENV_FIELDS = [
   "CONCLAVE_AI_SETTINGS",
 ] as const;
 
-// Routed rooms share one account and endpoint for discovery and execution.
-// Missing room settings must never fall back to a different Worker's account.
 export function roomAiEnvironment(
   local: AiEnvironment,
   room: AiEnvironment,
@@ -36,7 +34,6 @@ export function roomAiEnvironment(
   };
 }
 
-// Called only by trusted servers. The shared secret never comes from a client.
 export const fetchRoomAiEnvironment = async (options: {
   sfuUrl: string;
   secret: string;
@@ -64,7 +61,6 @@ export const fetchRoomAiEnvironment = async (options: {
       AbortSignal.timeout(5000),
     ]),
     cache: "no-store",
-    // Workers supports manual redirects; never forward this secret to Location.
     redirect: "manual",
   });
   if (!response.ok)
@@ -82,7 +78,6 @@ export const fetchRoomAiEnvironment = async (options: {
   return result;
 };
 
-// Log only stable diagnostics, never request headers, identities or response bodies.
 export const describeRoomAiLookupFailure = (error: unknown) => {
   const detail =
     error && typeof error === "object"
@@ -114,6 +109,5 @@ export async function requestRoomAiSettings(options: {
   });
   const result = await response.json() as {error?: string; state?: RoomAiState};
   if (!response.ok) throw new Error(result.error || "Room AI settings could not be loaded.");
-  // Return configuration only. Credentials and transport data never enter a prompt.
   return Object.fromEntries((Object.keys(AI_FEATURES) as AiFeature[]).map(feature => [feature, resolveAiFeatureSettings({CONCLAVE_ASSISTANT_MODEL: result.state?.assistantModel ?? undefined}, feature, result.state?.features)]));
 }

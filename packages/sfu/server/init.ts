@@ -1,24 +1,13 @@
 import type { Worker } from "mediasoup/types";
 import type { Server as SocketIOServer } from "socket.io";
+import type { config as defaultConfig } from "../config/config.js";
 import createWorkers from "../utilities/createWorkers.js";
 import { Logger } from "../utilities/loggers.js";
 import { forceCloseRoom } from "./rooms.js";
 import type { SfuState } from "./state.js";
-import {
-  createScheduledWebinarPersistence,
-  loadPersistedSchedules,
-  type ScheduledWebinarPersistence,
-} from "./scheduledWebinars.js";
-import {
-  createScheduledMeetingPersistence,
-  loadPersistedMeetings,
-  type ScheduledMeetingPersistence,
-} from "./scheduledMeetings.js";
-import {
-  createSchedulingPersistence,
-  loadPersistedScheduling,
-  type SchedulingPersistence,
-} from "./scheduling.js";
+import { openControlPlane } from "./controlPlane/open.js";
+import { fenceControlPlane } from "./persistenceFence.js";
+import type { ControlPlaneStore } from "./controlPlane/store.js";
 
 const WORKER_RESTART_NOTICE =
   "The media server for this room restarted. Reconnecting...";
@@ -29,7 +18,7 @@ const wait = (ms: number): Promise<void> =>
     setTimeout(resolve, ms);
   });
 
-const cleanupDeadWorkerRooms = async (
+export const cleanupDeadWorkerRooms = async (
   state: SfuState,
   io: SocketIOServer | null,
   worker: Worker,
@@ -70,7 +59,7 @@ const cleanupDeadWorkerRooms = async (
     Logger.warn(
       `Closing room ${room.id} (${room.clientId}) after worker ${label} died`,
     );
-    forceCloseRoom(state, room.channelId);
+    forceCloseRoom(state, room);
   }
 
   if (io) {
@@ -86,13 +75,19 @@ const cleanupDeadWorkerRooms = async (
 
 export const initMediaSoup = async (
   state: SfuState,
-  getIo?: () => SocketIOServer | null,
+  config: Pick<typeof defaultConfig, "workerSettings" | "webRtcTransport">,
+  getIo: () => SocketIOServer | null,
+  signal: AbortSignal,
 ): Promise<void> => {
   state.workers = (await createWorkers({
+    plan: state.workerPlan,
+    settings: config.workerSettings,
+    transport: config.webRtcTransport,
+    signal,
     onWorkerDied: async (worker, label) => {
       await cleanupDeadWorkerRooms(
         state,
-        getIo?.() ?? null,
+        getIo(),
         worker,
         label,
       );
@@ -101,37 +96,13 @@ export const initMediaSoup = async (
   Logger.info(`Created ${state.workers.length} mediasoup workers`);
 };
 
-export const initScheduledWebinars = (
+export const initControlPlane = async (
   state: SfuState,
-  persistence: ScheduledWebinarPersistence = createScheduledWebinarPersistence(),
-): void => {
-  state.scheduledWebinarPersistence = persistence;
-  const loaded = loadPersistedSchedules(state.scheduledWebinars, persistence);
-  if (loaded > 0) {
-    Logger.info(`Restored ${loaded} scheduled webinar(s) from persistence`);
-  }
-};
-
-export const initScheduledMeetings = (
-  state: SfuState,
-  persistence: ScheduledMeetingPersistence = createScheduledMeetingPersistence(),
+  store?: ControlPlaneStore,
 ): Promise<void> => {
-  state.scheduledMeetingPersistence = persistence;
-  return loadPersistedMeetings(state.scheduledMeetings, persistence).then((loaded) => {
-    if (loaded > 0) {
-      Logger.info(`Restored ${loaded} scheduled meeting(s) from persistence`);
-    }
-  });
-};
-
-export const initScheduling = (
-  state: SfuState,
-  persistence: SchedulingPersistence = createSchedulingPersistence(),
-): Promise<void> => {
-  state.schedulingPersistence = persistence;
-  return loadPersistedScheduling(state.scheduling, persistence).then((loaded) => {
-    if (loaded > 0) {
-      Logger.info(`Restored ${loaded} scheduling record(s) from persistence`);
-    }
-  });
+  const opened = store ?? (await openControlPlane());
+  const previous = state.controlPlane;
+  if (previous === opened) return;
+  state.controlPlane = fenceControlPlane(opened, state.persistenceFence);
+  await previous.close();
 };

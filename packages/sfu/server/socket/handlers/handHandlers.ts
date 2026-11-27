@@ -24,7 +24,6 @@ export const registerHandHandlers = (context: ConnectionContext): void => {
           return;
         }
 
-        // Throttle: drop over-budget toggles (ack an error, do not broadcast).
         if (!takeToken(socket, "setHandRaised", RATE_LIMITS.hand)) {
           respond(callback, { error: "You are raising your hand too quickly" });
           return;

@@ -59,10 +59,8 @@ test("renders all 48 roles per scheme as unsigned ARGB Int64, plus typed metrics
   assert.deepEqual(avatar, [...native.avatar.palette]);
   assert.equal(avatar.length, 16);
   assert.equal(constants.get("avatarRing"), 0x2EFFFFFF);
-  // FND-1: the approved iOS Leave fill under Increase Contrast (owner OQ4) and the avatar tongue (F00 C07).
   assert.equal(constants.get("iosInCallLeaveHighContrast"), 0xFFE9152D);
   assert.equal(constants.get("avatarTongue"), 0xFFFF8FB1);
-  // FND-3 (S60 R6-7, F00 2.6 A9): the board squares from the zinc ramp, the same pair on both platforms.
   assert.equal(constants.get("iosGameBoardLight"), 0xFF71717A);
   assert.equal(constants.get("iosGameBoardDark"), 0xFF3F3F46);
   assert.equal(constants.get("androidExtendedGameBoardLight"), constants.get("iosGameBoardLight"));
@@ -90,8 +88,6 @@ test("asset catalogs encode all four coral appearances and platform-specific lau
   ]);
   assert.deepEqual(assetColors(outputs.get(`${assetsPath}/LaunchBackground.colorset/Contents.json`)).map((color) => color.rgb), ["F2F2F7", "000000"]);
   const expected = {
-    // S70 SX8: the notification accent is the light and night primary; S70 11 d: the launcher tile is the stage.
-    // S2-T2 (EF-2): the launch theme accent pair is the scheme's primary and onPrimary.
     values: [["conclave_window_background", "#FFFFFFFF"], ["sys_notification_accent", "#FFB94333"],
       ["conclave_primary", "#FFB94333"], ["conclave_on_primary", "#FFFFFFFF"],
       ["ic_launcher_background", "#FF0A0A0B"]],

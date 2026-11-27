@@ -15,7 +15,7 @@ struct PPL5WebinarSettingsTests {
     private func webinarPeople(queue: [PeopleWebinarHandInput] = [], invites: [PeopleStageInviteInput] = [],
                                queueKnown: Bool = true, attendees: Int = 128,
                                phase: String = MeetingPhaseKind.inCall.rawValue) -> (PeoplePresenter, CommandLog) {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let people = PeoplePresenter(shell: shell, stage: StagePresenter(shell: shell))
         let log = CommandLog()
         people.onCommand = { command, ticket in
@@ -150,7 +150,7 @@ struct PPL5WebinarSettingsTests {
     }
 
     @Test func meetingModeKeepsTheMeetingSections() {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let people = PeoplePresenter(shell: shell, stage: StagePresenter(shell: shell))
         people.apply(inputs(queue: Self.fourHands, invites: [], queueKnown: true, attendees: 0, webinar: false))
         #expect(people.snapshot.section(.inMeeting) != nil)
@@ -172,6 +172,17 @@ struct PPL5WebinarSettingsTests {
         invites = WebinarStageInvitePolicy.added(invites, userId: "a-jo#s1", name: "Jo B.")
         #expect(WebinarStageInvitePolicy.removed(invites, userId: "a-jo#s1").count == 1)
         #expect(WebinarStageInvitePolicy.rows(invites).map(\.displayName) == ["Jo B.", "Mina T."])
+    }
+
+    @Test func guestInviteClearsWhenTheServerNamesTheInviteItsStageSeatUsed() throws {
+        let invites = WebinarStageInvitePolicy.added([:], userId: "guest-gp_audience-key#view-1", name: "Mina T.")
+        #expect(WebinarStageInvitePolicy.afterPanelistJoin(invites, joinedUserId: "guest-gp_stage-key#view-1").count == 1)
+
+        let payload = #"{"roomId":"room","userId":"guest-gp_stage-key#view-1","invitedUserKeys":["guest-gp_audience-key"]}"#
+        let used = try JSONDecoder().decode(WebinarStageInviteUsedNotification.self, from: Data(payload.utf8))
+        #expect(WebinarStageInvitePolicy.afterInvitesUsed(invites, invitedUserKeys: used.invitedUserKeys ?? []).isEmpty)
+        #expect(WebinarStageInvitePolicy.afterInvitesUsed(invites, invitedUserKeys: ["guest-gp_someone-else"]).count == 1)
+        #expect(WebinarStageInvitePolicy.afterInvitesUsed(invites, invitedUserKeys: []).count == 1)
     }
 
     @Test func capacityRejectsZeroOverTheCapAndLetters() {
@@ -221,7 +232,7 @@ struct PPL5WebinarSettingsTests {
     }
 
     @Test func theAttendeeHandRowFollowsTheCapability() {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let identity = MeetingSessionIdentity(callSession: 1, attempt: 1, attemptToken: "t-1-1")
         shell.apply(MeetingShellInputs.make(identity: identity, connectionState: .joined, isWebinarAttendee: true))
         var hand = shell.controls.rows.first(where: { $0.id == MeetingControlID.hand.rawValue })

@@ -35,11 +35,6 @@ const normalizeWindow = (value) => {
   });
 };
 
-/**
- * Build absolute codec-observation targets. The last regular 500 ms tick is
- * replaced by an in-window terminal capture so asynchronous stats collection
- * can complete without pretending a post-window completion happened at end.
- */
 export function buildAlignedWindowObservationTargets({
   measurementWindow,
   observationIntervalMs = 500,
@@ -134,11 +129,6 @@ const cloneAndDeepFreeze = (value) => {
   return value;
 };
 
-/**
- * Arm an absolute-epoch observer without collecting pre-window evidence.
- * Timers are all scheduled from immutable epoch targets, so callback duration
- * cannot drift later targets. A tick is skipped rather than overlapped.
- */
 export function startEpochAlignedObserver({
   measurementWindow,
   observe,

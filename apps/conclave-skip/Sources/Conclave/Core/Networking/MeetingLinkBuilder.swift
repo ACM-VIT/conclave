@@ -29,11 +29,6 @@ enum MeetingLinkBuilder {
         return trimmed
     }
 
-    static func carriesClientId(_ clientId: String?) -> Bool {
-        guard let canonical = canonicalClientId(clientId) else { return false }
-        return canonical != defaultClientId
-    }
-
     static func encodeURIComponent(_ value: String) -> String {
         value.addingPercentEncoding(withAllowedCharacters: uriComponentAllowed) ?? value
     }
@@ -41,9 +36,10 @@ enum MeetingLinkBuilder {
     static func path(roomCode: String, clientId: String?) -> String {
         let room = roomCode.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !room.isEmpty else { return "" }
-        let base = "/" + encodeURIComponent(room)
-        guard let canonical = canonicalClientId(clientId), canonical != defaultClientId else { return base }
-        return base + "?clientId=" + encodeURIComponent(canonical)
+        let tenant = canonicalClientId(clientId)
+            ?? canonicalClientId(SfuJoinService.resolveClientId())
+            ?? defaultClientId
+        return "/" + encodeURIComponent(room) + "?clientId=" + encodeURIComponent(tenant)
     }
 
     static func url(roomCode: String, clientId: String?, origin: String = MeetingLinkBuilder.origin) -> String {

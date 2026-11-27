@@ -3,28 +3,22 @@ import {
   type SfuAuthenticatedUser,
 } from "@/lib/sfu-user-auth";
 import { resolveSfuSecret, resolveSfuUrl } from "@/lib/sfu-admin-auth";
+import { resolveSfuUrls } from "@/lib/sfu-url";
 import { readResponseError } from "@/app/lib/utils";
 import {
-  canonicalizeSfuClientId,
-  CONCLAVE_SFU_CLIENT_ID,
-} from "@/lib/sfu-client-id";
+  fetchPublicScheduledMeeting,
+  type PublicScheduledMeeting,
+} from "./scheduled-meeting-lookup";
+import type { RoomDestination } from "@/lib/meeting-links";
+import { CONCLAVE_SFU_CLIENT_ID, resolveServerSfuClientId } from "./sfu-client-id";
 
-export interface PublicScheduledMeeting {
-  id: string;
-  roomCode: string;
-  title: string;
-  hostName: string;
-  scheduledStartAt: number;
-  scheduledEndAt: number;
-  status: "scheduled" | "live" | "ended" | "cancelled";
-  startedAt: number | null;
-  endedAt: number | null;
-}
+export type { PublicScheduledMeeting };
 
-export const resolveScheduledMeetingsBase = (): string => {
-  const base = resolveSfuUrl().replace(/\/$/, "");
-  return `${base}/scheduled-meetings`;
-};
+const scheduledMeetingsBase = (sfuUrl: string): string =>
+  `${sfuUrl.replace(/\/$/, "")}/scheduled-meetings`;
+
+export const resolveScheduledMeetingsBase = (): string =>
+  scheduledMeetingsBase(resolveSfuUrl());
 
 export const buildScheduledMeetingHeaders = (
   user: SfuAuthenticatedUser,
@@ -35,42 +29,100 @@ export const readScheduledMeetingError = (
   response: Response,
 ): Promise<string> => readResponseError(response);
 
-export const lookupPublicScheduledMeetingByRoomCode = async (
-  clientId: string,
-  roomCode: string,
-): Promise<PublicScheduledMeeting | null> => {
-  try {
-    const resolvedClientId =
-      canonicalizeSfuClientId(clientId) || CONCLAVE_SFU_CLIENT_ID;
-    const base = resolveScheduledMeetingsBase();
-    const url = `${base}/public/by-room/${encodeURIComponent(roomCode)}?clientId=${encodeURIComponent(resolvedClientId)}`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        "x-sfu-secret": resolveSfuSecret(),
-        accept: "application/json",
-      },
-      cache: "no-store",
-    });
-    if (!response.ok) return null;
-    const data = (await response.json()) as {
-      scheduledMeeting?: PublicScheduledMeeting;
-    };
-    return data?.scheduledMeeting ?? null;
-  } catch {
-    return null;
-  }
+// A scheduled meeting lives on the SFU that answered for it, which is not
+// always the first one configured.
+export type FoundScheduledMeeting = {
+  kind: "scheduled";
+  sfuUrl: string;
+  clientId: string;
+  meeting: PublicScheduledMeeting;
 };
 
-export const lookupScheduledMeetingHostEmail = async (
-  clientId: string,
-  roomCode: string,
-): Promise<string | null> => {
+export type ScheduledMeetingLookup =
+  | FoundScheduledMeeting
+  | { kind: "unscheduled" }
+  // The SFU could not say. The code may well be a real meeting.
+  | { kind: "unknown" };
+
+// The link page waits for these lookups before it renders, so each has a
+// short deadline. An SFU that has not answered by then counts as failed.
+const LOOKUP_DEADLINE_MS = 2500;
+
+const lookupInTenant = async (
+  { roomCode, clientId }: RoomDestination,
+  deadline: AbortSignal,
+  mode: "scheduled" | "legacy-booking" = "scheduled",
+): Promise<ScheduledMeetingLookup> => {
+  const sfuUrls = resolveSfuUrls();
+  const results = await Promise.allSettled(
+    sfuUrls.map((sfuUrl) =>
+      fetchPublicScheduledMeeting(scheduledMeetingsBase(sfuUrl), resolveSfuSecret(), clientId, roomCode, deadline),
+    ),
+  );
+  const matches = results.flatMap((result, index): FoundScheduledMeeting[] =>
+    result.status === "fulfilled" && result.value
+      ? [{ kind: "scheduled", sfuUrl: sfuUrls[index], clientId, meeting: result.value }]
+      : []);
+  if (matches.length > 0) {
+    if (mode === "scheduled") return matches[0];
+    const [booking] = matches;
+    if (booking && matches.every(({ meeting }) => meeting.id === booking.meeting.id && meeting.bookingLink === true)) {
+      return booking;
+    }
+    return { kind: "unknown" };
+  }
+  return results.some((result) => result.status === "rejected")
+    ? { kind: "unknown" }
+    : { kind: "unscheduled" };
+};
+
+const noActiveRoom = async ({ roomCode, clientId }: RoomDestination, signal: AbortSignal): Promise<boolean> => {
+  const room = encodeURIComponent(roomCode);
+  const tenant = encodeURIComponent(clientId);
+  const init = {
+    headers: { "x-sfu-secret": resolveSfuSecret(), accept: "application/json" },
+    cache: "no-store",
+    signal,
+  } satisfies RequestInit;
+  const absentAt = async (url: string, ...fields: Array<"owner" | "placement" | "room">): Promise<boolean> => {
+    const response = await fetch(url, init);
+    if (!response.ok) return false;
+    const body = (await response.json()) as Partial<Record<(typeof fields)[number], unknown>> | null;
+    return fields.every((field) => body?.[field] === null);
+  };
+  // A live room can outlast its registry lease while Redis is down.
+  const results = await Promise.allSettled(resolveSfuUrls().flatMap((sfuUrl) => {
+    const base = sfuUrl.replace(/\/$/, "");
+    return [
+      absentAt(`${base}/routing/rooms/${tenant}/${room}`, "owner", "placement"),
+      absentAt(`${base}/rooms/${room}?clientId=${tenant}`, "room"),
+    ];
+  }));
+  return results.length > 0 && results.every((result) => result.status === "fulfilled" && result.value);
+};
+
+export const lookupScheduledMeetingForCode = async (
+  destination: RoomDestination,
+  { allowLegacyBooking = false }: { allowLegacyBooking?: boolean } = {},
+): Promise<ScheduledMeetingLookup> => {
+  const deadline = AbortSignal.timeout(LOOKUP_DEADLINE_MS);
+  const primary = await lookupInTenant(destination, deadline);
+  if (!allowLegacyBooking || primary.kind !== "unscheduled" ||
+      destination.clientId !== resolveServerSfuClientId() || destination.clientId === CONCLAVE_SFU_CLIENT_ID) {
+    return primary;
+  }
+  const legacy = await lookupInTenant({ ...destination, clientId: CONCLAVE_SFU_CLIENT_ID }, deadline, "legacy-booking");
+  return legacy.kind === "scheduled" &&
+    await noActiveRoom(destination, deadline) ? legacy : primary;
+};
+
+export const lookupScheduledMeetingHostEmail = async ({
+  sfuUrl,
+  clientId,
+  meeting,
+}: FoundScheduledMeeting): Promise<string | null> => {
   try {
-    const resolvedClientId =
-      canonicalizeSfuClientId(clientId) || CONCLAVE_SFU_CLIENT_ID;
-    const base = resolveScheduledMeetingsBase();
-    const url = `${base}/by-room/${encodeURIComponent(roomCode)}?clientId=${encodeURIComponent(resolvedClientId)}`;
+    const url = `${scheduledMeetingsBase(sfuUrl)}/by-room/${encodeURIComponent(meeting.roomCode)}?clientId=${encodeURIComponent(clientId)}`;
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -78,6 +130,7 @@ export const lookupScheduledMeetingHostEmail = async (
         accept: "application/json",
       },
       cache: "no-store",
+      signal: AbortSignal.timeout(LOOKUP_DEADLINE_MS),
     });
     if (!response.ok) return null;
     const data = (await response.json()) as {
@@ -88,6 +141,61 @@ export const lookupScheduledMeetingHostEmail = async (
   } catch {
     return null;
   }
+};
+
+// A person is waiting on these, so no SFU may hold one up.
+const REQUEST_DEADLINE_MS = 4000;
+
+// One SFU's whole answer, headers and body, or a throw if it did not finish
+// in time. Reading the body here keeps a reply that stalls halfway from
+// passing as an answer.
+const fetchWholeReply = async (
+  url: string,
+  init: RequestInit,
+  deadlineMs: number,
+): Promise<Response> => {
+  const response = await fetch(url, {
+    ...init,
+    signal: AbortSignal.timeout(deadlineMs),
+  });
+  const body = await response.text();
+  const contentType = response.headers.get("content-type");
+  return new Response(body || null, {
+    status: response.status,
+    headers: contentType ? { "content-type": contentType } : undefined,
+  });
+};
+
+// Sends a request about one scheduled meeting to the SFU that has it: each
+// in turn until one knows the meeting. Only that SFU acts on it. An SFU that
+// stalls, errors or answers 5xx is passed over for the next.
+export const fetchFromScheduledMeetingSfu = async (
+  path: string,
+  init: RequestInit,
+  deadlineMs: number = REQUEST_DEADLINE_MS,
+): Promise<Response> => {
+  let notFound: Response | null = null;
+  let unreachable: Error | null = null;
+  for (const sfuUrl of resolveSfuUrls()) {
+    try {
+      const response = await fetchWholeReply(
+        `${scheduledMeetingsBase(sfuUrl)}${path}`,
+        init,
+        deadlineMs,
+      );
+      if (response.status >= 500) {
+        throw new Error(`Answered ${response.status}`);
+      }
+      if (response.status !== 404) return response;
+      notFound = response;
+    } catch (error) {
+      unreachable = new Error(`Could not reach ${sfuUrl}`, { cause: error });
+    }
+  }
+  if (unreachable || !notFound) {
+    throw unreachable ?? new Error("No SFU is configured");
+  }
+  return notFound;
 };
 
 export const isMeetingJoinable = (

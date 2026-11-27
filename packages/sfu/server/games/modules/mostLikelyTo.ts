@@ -15,13 +15,6 @@ import {
 } from "../aiContent.js";
 import { payloadField, requirePlayerTarget } from "../validation.js";
 
-/**
- * Most Likely To: point the finger. Each round poses "who is most likely
- * to..." and everyone secretly votes a player. The reveal shows the tally and
- * crowns whoever the room picked. Built for groups, and it plays off real faces
- * on camera, so it scales to large rooms.
- */
-
 const VOTE_MS = 15_000;
 const ROUNDS_PER_GAME = 6;
 
@@ -130,12 +123,6 @@ const loop = createRoundLoop<MltState>({
   toResults: (state) => ({ ...state, phase: "results" }),
 });
 
-/**
- * Typed move contract. Decoded from the untrusted `GameMove` at the top of
- * `onMove`. The vote target stays `unknown` on the decoded move because it is
- * validated against the live roster by `requirePlayerTarget` (which needs ctx)
- * inside the case, preserving the "Invalid vote" message.
- */
 export type MostLikelyToMove =
   | { type: "start" }
   | { type: "vote"; target: unknown }
@@ -279,7 +266,6 @@ export const mostLikelyToModule: GameModule<MltState> = {
       prompt: state.phase === "lobby" ? null : (state.prompts[state.index] ?? null),
       players: ctx.players.map((player) => ({ id: player.id, name: player.name })),
       counts,
-      // Who has locked in a vote (never for whom), so tiles can show a check.
       votedPlayerIds:
         state.phase === "vote" || reveal ? Object.keys(state.votes) : [],
       answeredCount: Object.keys(state.votes).length,

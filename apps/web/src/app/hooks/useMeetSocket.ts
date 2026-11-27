@@ -1,6 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createCoalescedRunner } from "../lib/coalesced-run";
+import {
+  holdJoinInfo,
+  keepsJoinIdentity,
+  planJoinInfo,
+  type HeldJoinInfo,
+  type JoinGrant,
+} from "../lib/held-join-info";
+import { createProducerSlotOrder } from "../lib/producer-slot-order";
 import { toError } from "../lib/utils";
 import type { Socket } from "socket.io-client";
 import type { Device } from "mediasoup-client";
@@ -17,10 +26,35 @@ import {
   buildScreenShareAudioOpusCodecOptions,
 } from "../lib/constants";
 import { emitWithAckTimeout } from "../lib/socket-ack";
+import { retireSocket } from "../lib/retire-socket";
+import { beginJoinRequest } from "../lib/join-requests";
+import { JOIN_ROOM_ACK_TIMEOUT_MS } from "../lib/join-timeouts";
 import {
+  forgetJoinedRoom,
+  getJoinedRoom,
+  rememberJoinedRoom,
+  renewRoomRecoveryPass,
+} from "../lib/joined-room";
+import type { JoinInfoAnswer } from "../lib/join-info-request";
+import { joinAnswerReportsSenderPacketCounts } from "@conclave/meeting-core/sender-packet-counts";
+import {
+  USER_RETRY_REQUEST,
+  canReuseSocketAfterFailure,
+  classifyReconnectFailure,
+  freshReconnectAttemptState,
+  noteRoomUnavailable,
+  nextStepAfterScopedRebuild,
+  planMediaRebuildScope,
+  planReconnectSettlement,
+  planScopedRebuild,
   resolveInFlightReconnectRequest,
   resolveReconnectStartAttempts,
+  restartForUserRetry,
+  type ReconnectAttemptState,
+  type ReconnectFailureKind,
+  type PathProbeResult,
   type ReconnectRequest,
+  type ScopedRebuildOutcome,
 } from "../lib/reconnect-request-policy";
 import type {
   ActiveSpeakerChangedNotification,
@@ -75,7 +109,17 @@ import type {
   WebinarUpdateRequest,
 } from "../lib/types";
 import type { ParticipantAction } from "../lib/participant-reducer";
-import { createMeetError, isSystemUserId, normalizeDisplayName } from "../lib/utils";
+import {
+  qaListForConfig,
+  qaListFromSnapshot,
+  withQaChange,
+} from "../lib/webinarQaList";
+import {
+  createMeetError,
+  isSystemUserId,
+  MeetFailure,
+  normalizeDisplayName,
+} from "../lib/utils";
 import { normalizeChatMessage } from "../lib/chat-commands";
 import {
   type AssistantChatMessage,
@@ -86,6 +130,13 @@ import {
   completeAssistantTasks,
   mergeAssistantTask,
 } from "../lib/conclave-assistant";
+import { joinFailureReason } from "../lib/call-quality-metrics";
+import {
+  describeReconnectFailure,
+  reconnectErrorMessage,
+  reconnectFailureKind,
+} from "../lib/reconnect-failure";
+import { ServerError } from "../lib/server-error";
 import { telemetry } from "../lib/telemetry";
 import {
   applyAudioProducerNetworkProfile,
@@ -107,7 +158,10 @@ import {
   normalizeWebcamCodecPolicy,
   rememberProvenVp9EncoderIncompatibility,
 } from "../lib/webcam-codec-policy";
-import { setNoiseCancellationTrackEnabled } from "../lib/noise-cancellation";
+import {
+  setNoiseCancellationTrackEnabled,
+  stopNoiseCancellationForTrack,
+} from "../lib/noise-cancellation";
 import {
   getMostConstrainedWebcamProducerNetworkProfile,
   getScreenShareReceiveNetworkProfileForAvailableIncomingBitrate,
@@ -130,7 +184,88 @@ import {
   type ConsumerResumeRetryState,
 } from "../lib/consumer-resume-retry";
 import {
+  INITIAL_MEDIA_PATH_RECOVERY,
+  INITIAL_MEDIA_PATH_WATCH,
+  HEALTHY_MEDIA_PATHS,
+  MEDIA_PATH_FLOW_CHECK_MS,
+  advanceMediaPathRecovery,
+  blockedMediaDirections,
+  judgeReceiveRebuild,
+  planMediaPathFailure,
+  planSilentPathStep,
+  readMediaPathHealth,
+  describeConsumedStream,
+  receivePathExpectsMedia,
+  streamShouldFlow,
+  type ConsumedStream,
+  INITIAL_SCREEN_SHARE_WATCH,
+  advanceScreenShareWatch,
+  ownPacketCountsRequestFor,
+  readSenderPacketCounts,
+  senderPacketCountsRequestFor,
+  judgeDeliveryWindow,
+  checkPath,
+  pathCarriesWhatIsSent,
+  pathShowsLife,
+  rtpBytesMoved,
+  type PathEvidence,
+  type SendingProducer,
+  screenPacketsGoMissing,
+  screenVideoAwaitingSenderCheck,
+  type ScreenShareWatch,
+  type SenderPacketCounts,
+  resolveRebuildRelayOnly,
+  takeDeferredRebuilds,
+  type MediaPathHealth,
+  type MediaPathRecovery,
+  type MediaPathRecoveryEvent,
+  type DirectionRebuildResult,
+  type ProducerListResult,
+  MEDIA_PATH_STALL_MS,
+  MEDIA_PATH_VERIFY_MS,
+  advanceMediaPathWatch,
+  hasCarriedMedia,
+  sendPathExpectation,
+  type PublishedStream,
+  expectationAfterIceRestart,
+  judgeIceRestart,
+  type FailedPath,
+  type IceRestartVerdict,
+  type SenderPacketsReading,
+  readMediaPath,
+  type MediaPathReading,
+  type MediaPathWatch,
+} from "../lib/media-path-recovery";
+import { readProducerScore } from "../lib/adaptive-consumer-score";
+import {
+  buildReconnectRecoveryStatus,
+  buildStoppedRecoveryStatus,
+  describeReconnectGiveUp,
+} from "../lib/reconnect-recovery-status";
+import {
+  NO_RUNTIME_ICE_SERVERS,
+  applyJoinAnswerToIceServers,
+  getUsableTurnIceServers,
+  icePolicyForOffers,
+  normalizeIceServerUrls,
+  noteRelayCarryingMedia,
+  offerRelays,
+  offeredTurnServers,
+  planRelayRefresh,
+  relayRefreshDelayMs,
+  reconcileRelayPaths,
+  takeRelayRefreshTry,
+  type RelayRefreshBudget,
+  type RelayRefreshChain,
+  relayCarryingUrl,
+  type RelayOffer,
+  readRelayPairBytes,
+  relayProvenByMedia,
+  type RuntimeIceServers,
+} from "../lib/relay-credentials";
+import {
   advanceVideoFreezeRecovery,
+  isProducerGoneConsumeError,
   shouldRecreateProducerTransport,
   type VideoFreezeRecoveryState,
 } from "../lib/media-recovery-policy";
@@ -141,6 +276,7 @@ import {
   decideWebcamStartupResetVerification,
   enqueueWebcamStartupResetProducer,
   getConsumerMaximumSpatialLayer,
+  getHighestActiveSpatialLayer,
   getWebcamStartupResetQueueDelayMs,
   isCurrentConsumerGeneration,
   isProducerPauseSnapshotCurrent,
@@ -172,11 +308,28 @@ import type {
   RequestMediaPermissionsOptions,
   ScreenShareRepublishOptions,
 } from "./useMeetMedia";
+import { captureGeneration, releaseAllCaptures } from "../lib/media-captures";
+import { installProducer } from "../lib/producer-slot";
+import { publishIntent } from "../lib/device-intent";
+import { logCallError } from "../lib/call-error-capture";
+import {
+  RESUME_FAILURE,
+  type ResumeFailure,
+  type StaleConsumerReason,
+  type WebcamResetFailure,
+} from "../lib/telemetry-schema";
+import {
+  endedNotice,
+  joinRejectedUpdate,
+  removedNotice,
+  type SetupNotice,
+} from "../lib/setup-notice";
 
 type ConsumerTelemetryPayload = Omit<
   ConsumerTelemetrySnapshot,
   "receivedAt"
 >;
+
 
 type ConsumeProducerOptions = {
   replaceExisting?: boolean;
@@ -214,13 +367,10 @@ type WebcamStartupLatencyResetRuntime = {
   failureReason: string | null;
 };
 
-type JoinInfo = {
-  token: string;
-  sfuUrl: string;
-  iceServers?: RTCIceServer[];
-};
+type JoinInfo = JoinInfoAnswer;
 
 const MAX_JOIN_ROOM_REDIRECTS = 1;
+type ProducerSyncResult = ProducerListResult<ProducerInfo>;
 const DEFAULT_SERVER_RESTART_NOTICE =
   "Meeting server is restarting. You will be reconnected automatically.";
 const ADMIN_NOTICE_DURATION_MS = 60000;
@@ -234,8 +384,35 @@ const RESUME_CONSUMER_MAX_ATTEMPTS = 6;
 
 const getResumeConsumerRetryDelayMs = (attempt: number): number =>
   Math.min(8000, 400 * 2 ** attempt) + Math.floor(Math.random() * 250);
-const JOIN_ROOM_ACK_TIMEOUT_MS = 15000;
+const HELD_JOIN_INFO_TTL_MS = 30000;
 const RESTART_ICE_ACK_TIMEOUT_MS = 5000;
+const MEDIA_PATH_SAMPLE_INTERVAL_MS = 2500;
+const SENDER_PACKET_COUNT_TIMEOUT_MS = 2000;
+const MEDIA_PATH_PROOF_INTERVAL_MS = 1500;
+const MEDIA_PATH_STATS_DEADLINE_MS = 2000;
+const MEDIA_PATH_PROOF_SAMPLE_DEADLINE_MS = Math.max(
+  SENDER_PACKET_COUNT_TIMEOUT_MS,
+  MEDIA_PATH_STATS_DEADLINE_MS,
+);
+
+const withDeadline = <T,>(promise: Promise<T>, ms: number): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error("timed out")), ms);
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        window.clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
+
+const NOT_ASKED: SenderPacketsReading = { asked: false };
+const PATH_NOT_CARRYING: PathProbeResult = { probe: "not-carrying", evidence: null };
+type CarriedMediaReading = "carried" | "not-carried" | "unread";
 const PARTICIPANT_RECONNECTING_STATUS_FALLBACK_MS = 30000;
 const PARTICIPANT_RECONNECTING_STATUS_BUFFER_MS = 5000;
 const PARTICIPANT_RECONNECTED_STATUS_MS = 4500;
@@ -386,7 +563,6 @@ const readConsumerVideoFlowSnapshotWithin = (
   });
 
 const CLOSE_CONSUMER_RETRY_WINDOW_MS = 30000;
-const TURN_URL_PATTERN = /^turns?:/i;
 const TRANSPORT_CC_FEEDBACK_TYPE = "transport-cc";
 
 const getConnectionStatsNetworkProfile = (
@@ -428,35 +604,6 @@ const getTransportDisconnectGraceMs = (): number => {
 const isMeetingDocumentHidden = (): boolean =>
   typeof document !== "undefined" && document.visibilityState !== "visible";
 
-const getRawReconnectErrorMessage = (error: unknown): string => {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
-  return "";
-};
-
-const describeReconnectFailure = (error: unknown): string => {
-  const message = getRawReconnectErrorMessage(error).trim();
-  if (!message) {
-    return "The meeting server did not return an error reason.";
-  }
-  if (/timeout/i.test(message)) {
-    return "The meeting server did not respond before the timeout.";
-  }
-  if (/permission|notallowed/i.test(message)) {
-    return "Browser permission is blocking camera or microphone access.";
-  }
-  if (/missing live local media/i.test(message)) {
-    return "Local media was not ready yet. We will rejoin the room first and retry your devices.";
-  }
-  if (/missing room id/i.test(message)) {
-    return "The meeting room could not be found for reconnect.";
-  }
-  if (/xhr poll|websocket|transport|socket|network|fetch/i.test(message)) {
-    return "The browser could not reach the meeting server.";
-  }
-  return message;
-};
-
 const getResponseStatusFromError = (error: unknown): number | null => {
   if (!error || typeof error !== "object") return null;
   const status = (error as { responseStatus?: unknown; status?: unknown })
@@ -466,36 +613,14 @@ const getResponseStatusFromError = (error: unknown): number | null => {
   return typeof fallbackStatus === "number" ? fallbackStatus : null;
 };
 
-const isRecoverableJoinInfoStatus = (status: number): boolean =>
-  status >= 500 && status < 600;
+const getReconnectFailureKind = (error: unknown): ReconnectFailureKind =>
+  classifyReconnectFailure({
+    message: reconnectErrorMessage(error),
+    responseStatus: getResponseStatusFromError(error),
+  });
 
-const isRecoverableReconnectFailure = (error: unknown): boolean => {
-  const responseStatus = getResponseStatusFromError(error);
-  if (responseStatus !== null) {
-    return isRecoverableJoinInfoStatus(responseStatus);
-  }
-  const message = getRawReconnectErrorMessage(error).trim();
-  if (!message) return true;
-  return /timeout|xhr poll|websocket|transport|socket|network|fetch|load failed|connection/i.test(
-    message,
-  );
-};
-
-const buildReconnectRecoveryStatus = (
-  phase: ReconnectRecoveryStatus["phase"],
-  attempt: number,
-  message: string,
-  lastError: string | null = null,
-  retryAt: number | null = null,
-): ReconnectRecoveryStatus => ({
-  phase,
-  attempt,
-  maxAttempts: MAX_RECONNECT_ATTEMPTS,
-  message,
-  lastError,
-  retryAt,
-  updatedAt: Date.now(),
-});
+export const isRecoverableReconnectFailure = (error: unknown): boolean =>
+  getReconnectFailureKind(error) !== "final";
 
 type InitialConsumerPreferences = {
   preferredLayers?: {
@@ -652,6 +777,20 @@ const getUsableProducerTransport = (
   return transport;
 };
 
+const waitForTransportConnected = async (
+  transport: Transport,
+  timeoutMs: number,
+): Promise<boolean> => {
+  const deadline = Date.now() + timeoutMs;
+  while (!transport.closed && Date.now() < deadline) {
+    if (transport.connectionState === "connected") return true;
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 250);
+    });
+  }
+  return !transport.closed && transport.connectionState === "connected";
+};
+
 class JoinRoomRedirectError extends Error {
   readonly redirectUrl: string;
   readonly response: JoinRoomErrorResponse;
@@ -661,6 +800,18 @@ class JoinRoomRedirectError extends Error {
     this.name = "JoinRoomRedirectError";
     this.redirectUrl = redirectUrl;
     this.response = response;
+  }
+}
+
+/**
+ * The join token names another identity than the one this join was started
+ * as. The caller has been told (`adoptJoinIdentity`) and joins again from the
+ * render that knows the new identity, so this attempt stops without an error.
+ */
+class JoinIdentityChangedError extends Error {
+  constructor() {
+    super("The join token names another identity.");
+    this.name = "JoinIdentityChangedError";
   }
 }
 
@@ -680,49 +831,6 @@ const getJoinRoomRedirectError = (
 ): JoinRoomRedirectError | null => {
   const redirectUrl = normalizeJoinRedirectUrl(response.redirectUrl);
   return redirectUrl ? new JoinRoomRedirectError(response, redirectUrl) : null;
-};
-
-const buildIceServerWithUrls = (
-  iceServer: RTCIceServer,
-  urls: string[],
-): RTCIceServer => ({
-  ...iceServer,
-  urls: urls.length === 1 ? urls[0] : urls,
-});
-
-const splitIceServersByType = (
-  iceServers: RTCIceServer[] | null | undefined,
-): { stunIceServers: RTCIceServer[]; turnIceServers: RTCIceServer[] } => {
-  const stunIceServers: RTCIceServer[] = [];
-  const turnIceServers: RTCIceServer[] = [];
-
-  for (const iceServer of iceServers ?? []) {
-    const urls = normalizeIceServerUrls(iceServer.urls);
-    if (urls.length === 0) continue;
-
-    const turnUrls = urls.filter((url) => TURN_URL_PATTERN.test(url));
-    const stunUrls = urls.filter((url) => !TURN_URL_PATTERN.test(url));
-
-    if (stunUrls.length > 0) {
-      stunIceServers.push(buildIceServerWithUrls(iceServer, stunUrls));
-    }
-    if (turnUrls.length > 0) {
-      turnIceServers.push(buildIceServerWithUrls(iceServer, turnUrls));
-    }
-  }
-
-  return { stunIceServers, turnIceServers };
-};
-
-const normalizeIceServerUrls = (
-  urls: RTCIceServer["urls"] | undefined,
-): string[] => {
-  if (!urls) return [];
-  const normalizedUrls = (Array.isArray(urls) ? urls : [urls])
-    .map((value) => value.trim())
-    .filter(Boolean);
-
-  return Array.from(new Set(normalizedUrls));
 };
 
 const mergeIceServers = (
@@ -844,13 +952,25 @@ const isRoomEndedByLocalUser = (
   return localUserKey.length > 0 && normalizedEndedBy === localUserKey;
 };
 
-const resolveRoomEndedNoticeMessage = (message?: string): string => {
-  const trimmed = message?.trim() ?? "";
-  if (!trimmed || trimmed === "This meeting has been ended by the host.") {
-    return "The host ended this meeting. You are no longer connected.";
-  }
-  return trimmed;
+const DEFAULT_ROOM_ENDED_MESSAGE = "This meeting has been ended by the host.";
+const DEFAULT_KICK_REASON = "Removed by host";
+
+const customServerText = (
+  text: string | undefined,
+  fallback: string,
+): string | null => {
+  const trimmed = text?.trim() ?? "";
+  return trimmed && trimmed !== fallback ? trimmed : null;
 };
+
+const resolveRoomEndedNoticeMessage = (message?: string): string =>
+  customServerText(message, DEFAULT_ROOM_ENDED_MESSAGE) ??
+  "The host ended this meeting. You are no longer connected.";
+
+export interface RemoteCallEnding {
+  kind: "endedByHost" | "removed";
+  detail: string | null;
+}
 
 interface UseMeetSocketOptions {
   refs: MeetRefs;
@@ -860,6 +980,14 @@ interface UseMeetSocketOptions {
   setIsAdmin: (value: boolean) => void;
   user?: { id?: string; email?: string | null; name?: string | null };
   userId: string;
+  /**
+   * Takes this client's identity from the join token it is about to connect
+   * with. Returns true when that changes `userId`. The connection is then
+   * not made, and the caller joins `roomId` again from the render that knows
+   * the new identity. A socket is only ever opened as the identity its token
+   * names.
+   */
+  adoptJoinIdentity?: (token: string, roomId: string) => boolean;
   getJoinInfo: (
     roomId: string,
     sessionId: string,
@@ -867,6 +995,7 @@ interface UseMeetSocketOptions {
       user?: { id?: string; email?: string | null; name?: string | null };
       isHost?: boolean;
       joinMode?: JoinMode;
+      signal?: AbortSignal;
     },
   ) => Promise<JoinInfo>;
   joinMode?: JoinMode;
@@ -886,7 +1015,7 @@ interface UseMeetSocketOptions {
   setPendingUsers: React.Dispatch<React.SetStateAction<Map<string, string>>>;
   setConnectionState: (state: ConnectionState) => void;
   setMeetError: (error: MeetError | null) => void;
-  setMeetingEndedNotice?: (message: string | null) => void;
+  setSetupNotice?: (notice: SetupNotice | null) => void;
   setWaitingMessage: (message: string | null) => void;
   setHostUserId: (userId: string | null) => void;
   setHostUserIds: React.Dispatch<React.SetStateAction<string[]>>;
@@ -897,7 +1026,8 @@ interface UseMeetSocketOptions {
   >;
   setWebinarRole: (role: "attendee" | "participant" | "host" | null) => void;
   setWebinarSpeakerUserId: (userId: string | null) => void;
-  setWebinarQaEntries: React.Dispatch<React.SetStateAction<WebinarQaEntry[]>>;
+  setWebinarQaEntries: React.Dispatch<React.SetStateAction<WebinarQaEntry[] | null>>;
+  setWebinarQaListFromThisConnection: (fromThisConnection: boolean) => void;
   setWebinarHandQueue: React.Dispatch<
     React.SetStateAction<WebinarHandQueueEntry[]>
   >;
@@ -945,8 +1075,10 @@ interface UseMeetSocketOptions {
   ) => Promise<MediaStream | null>;
   requestAudioProducerRecovery: () => void;
   requestCameraProducerRecovery: () => void;
+  runCameraTrackOperation?: <T>(operation: () => Promise<T>) => Promise<T>;
   prepareAudioPublishTrack?: (
     track: MediaStreamTrack,
+    requestedIn: number,
   ) => Promise<MediaStreamTrack>;
   stopLocalTrack: (track?: MediaStreamTrack | null) => void;
   handleLocalTrackEnded: (
@@ -980,8 +1112,11 @@ interface UseMeetSocketOptions {
   };
   onSocketReady?: (socket: Socket | null) => void;
   onLocalRoomEnded?: () => void;
+  onCallEnded?: (ending: RemoteCallEnding) => boolean;
   bypassMediaPermissions?: boolean;
 }
+
+const runDirectly = <T,>(operation: () => Promise<T>): Promise<T> => operation();
 
 export function useMeetSocket({
   refs,
@@ -991,6 +1126,7 @@ export function useMeetSocket({
   setIsAdmin,
   user,
   userId,
+  adoptJoinIdentity,
   getJoinInfo,
   joinMode = "meeting",
   requestWebinarInviteCode,
@@ -1006,7 +1142,7 @@ export function useMeetSocket({
   setPendingUsers,
   setConnectionState,
   setMeetError,
-  setMeetingEndedNotice,
+  setSetupNotice,
   setWaitingMessage,
   setHostUserId,
   setHostUserIds,
@@ -1016,6 +1152,7 @@ export function useMeetSocket({
   setWebinarRole,
   setWebinarSpeakerUserId,
   setWebinarQaEntries,
+  setWebinarQaListFromThisConnection,
   setWebinarHandQueue,
   setIsWebinarHandRaised,
   setWebinarStageInvite,
@@ -1051,6 +1188,7 @@ export function useMeetSocket({
   requestMediaPermissions,
   requestAudioProducerRecovery,
   requestCameraProducerRecovery,
+  runCameraTrackOperation = runDirectly,
   prepareAudioPublishTrack,
   stopLocalTrack,
   handleLocalTrackEnded,
@@ -1063,25 +1201,83 @@ export function useMeetSocket({
   prewarm,
   onSocketReady,
   onLocalRoomEnded,
+  onCallEnded,
   bypassMediaPermissions = false,
 }: UseMeetSocketOptions) {
   const participantIdsRef = useRef<Set<string>>(new Set([userId]));
   const departedParticipantIdsRef = useRef<Set<string>>(new Set());
   const webinarJoinedParticipantIdsRef = useRef<Set<string>>(new Set());
   const webinarVisibleParticipantIdsRef = useRef<Set<string>>(new Set());
-  const isMutedRef = useRef(isMuted);
-  const isCameraOffRef = useRef(isCameraOff);
   const serverRoomIdRef = useRef<string | null>(null);
+  const socketRoomIdRef = useRef<string | null>(null);
+  const identityRestartRoomIdRef = useRef<string | null>(null);
+  const identityRestartMediaRef = useRef<{
+    roomId: string;
+    request: Promise<MediaStream | null>;
+  } | null>(null);
   const foregroundRecoveryTimeoutRef = useRef<number | null>(null);
-  const runtimeStunIceServersRef = useRef<RTCIceServer[] | null>(null);
-  const runtimeTurnIceServersRef = useRef<RTCIceServer[] | null>(null);
-  const useTurnFallbackRef = useRef(false);
+  const heldJoinInfoRef = useRef<HeldJoinInfo<JoinInfo> | null>(null);
+  const joinInfoRequestRef = useRef<AbortController | null>(null);
+  const lastJoinInfoSourceRef = useRef<"held" | "fresh">("fresh");
+  const runtimeIceServersRef = useRef<RuntimeIceServers>(NO_RUNTIME_ICE_SERVERS);
+  const relayOffersRef = useRef(new WeakMap<Transport, RelayOffer[]>());
+  const relayOnlyIceRef = useRef(false);
+  const relayRefreshRef = useRef<{
+    chain: RelayRefreshChain;
+    timeout: number | null;
+    inFlight: boolean;
+  }>({ chain: null, timeout: null, inFlight: false });
+  const refreshIceServersRef = useRef<
+    ((roomId: string) => Promise<void>) | null
+  >(null);
+  const transportsCarryingMediaRef = useRef(new WeakSet<Transport>());
+  const senderPacketCountSocketsRef = useRef(new WeakSet<Socket>());
+  const relayMoveDecisionRef = useRef({ running: false, rerun: false });
+  // Each direction's health, escalated transport, rebuild step and held
+  // rebuild live in one record, so they change together. Its health is the
+  // only source of the blocked warning and its Try again.
+  const mediaPathRecoveryRef = useRef<MediaPathRecovery>(
+    INITIAL_MEDIA_PATH_RECOVERY,
+  );
+  const [mediaPathHealth, setMediaPathHealth] =
+    useState<MediaPathHealth>(HEALTHY_MEDIA_PATHS);
+  const commitMediaPathRecovery = useCallback((next: MediaPathRecovery) => {
+    const previous = mediaPathRecoveryRef.current;
+    if (next === previous) return;
+    mediaPathRecoveryRef.current = next;
+    if (
+      next.producer.health !== previous.producer.health ||
+      next.consumer.health !== previous.consumer.health
+    ) {
+      setMediaPathHealth(readMediaPathHealth(next));
+    }
+  }, []);
+  const updateMediaPathRecovery = useCallback(
+    (event: MediaPathRecoveryEvent) => {
+      commitMediaPathRecovery(
+        advanceMediaPathRecovery(mediaPathRecoveryRef.current, event),
+      );
+    },
+    [commitMediaPathRecovery],
+  );
   const reconnectGenerationRef = useRef(0);
+  const carriesMediaNowRef = useRef<
+    (direction: "producer" | "consumer") => Promise<PathProbeResult>
+  >(async () => PATH_NOT_CARRYING);
+  const readCarriedMediaRef = useRef<
+    (
+      direction: "producer" | "consumer",
+      transport: Transport,
+    ) => Promise<CarriedMediaReading>
+  >(async () => "unread");
+  const cancelPathProbeRef = useRef<(() => void) | null>(null);
   const reconnectBackoffCancelRef = useRef<(() => void) | null>(null);
   const manualReconnectRetryRequestedRef = useRef(false);
+  const retryReconnectRef = useRef<() => Promise<void>>(async () => {});
   const reconnectPhaseRef =
     useRef<ReconnectRecoveryStatus["phase"] | "idle">("idle");
   const serverRestartNoticeRef = useRef<string | null>(null);
+  const newestJoinRequestRef = useRef(0);
   const adminNoticeTimeoutRef = useRef<number | null>(null);
   const consumeRetryAttemptsRef = useRef<Map<string, number>>(new Map());
   const consumerConsumeInFlightRef = useRef<Map<string, symbol>>(new Map());
@@ -1153,19 +1349,19 @@ export function useMeetSocket({
   audioOnlyModeRef.current = audioOnlyMode;
   const pendingScreenProducerCloseIdsRef = useRef<Set<string>>(new Set());
   const screenShareRepublishPromiseRef = useRef<Promise<boolean> | null>(null);
-  const producerAnnounceOrderRef = useRef<{
-    slotById: Map<string, string>;
-    latestBySlot: Map<string, string>;
-  }>({
-    slotById: new Map(),
-    latestBySlot: new Map(),
-  });
+  const [producerSlotOrder] = useState(createProducerSlotOrder);
+  const [coalesceProducerSync] = useState(() =>
+    createCoalescedRunner<ProducerSyncResult>(),
+  );
   const consumeProducerRef = useRef<
     (producerInfo: ProducerInfo, options?: ConsumeProducerOptions) => Promise<void>
   >(async () => {});
   const recoverStaleConsumerRef = useRef<
-    (producerInfo: ProducerInfo, reason: string) => Promise<void>
+    (producerInfo: ProducerInfo, reason: StaleConsumerReason) => Promise<void>
   >(async () => {});
+  const syncProducersRef = useRef<() => Promise<ProducerSyncResult>>(
+    async () => ({ listed: false, reason: "not in a room" }),
+  );
   const resumeConsumerReliablyRef = useRef<
     (
       producerId: string,
@@ -1177,12 +1373,7 @@ export function useMeetSocket({
     null,
   );
   const pendingCameraCodecTransportResetEpochRef = useRef<number | null>(null);
-  const iceRestartPromiseRef = useRef<
-    Record<"producer" | "consumer", Promise<boolean> | null>
-  >({
-    producer: null,
-    consumer: null,
-  });
+  const iceRestartsRef = useRef(new WeakMap<Transport, Promise<boolean>>());
   const intentionallyClosedTransportsRef = useRef<WeakSet<Transport>>(
     new WeakSet<Transport>(),
   );
@@ -1214,15 +1405,16 @@ export function useMeetSocket({
     currentRoomIdRef,
     handleRedirectRef,
     handleReconnectRef,
+    connectSocketRef,
     shouldAutoJoinRef,
     joinOptionsRef,
     localStreamRef,
-    prejoinMediaIntentRef,
+    deviceIntents,
+    skipMutedMicWarmupRef,
     sessionIdRef,
     producerTransportDisconnectTimeoutRef,
     consumerTransportDisconnectTimeoutRef,
     pendingProducerRetryTimeoutRef,
-    iceRestartInFlightRef,
     producerSyncIntervalRef,
   } = refs;
 
@@ -1262,7 +1454,7 @@ export function useMeetSocket({
     (
       state: WebcamStartupLatencyResetRuntime,
       status: "completed" | "failed" | "cancelled",
-      failureReason: string | null,
+      failureReason: WebcamResetFailure | null,
     ) => {
       if (
         state.status === "completed" ||
@@ -1290,6 +1482,13 @@ export function useMeetSocket({
 
   const [reconnectRecoveryStatus, setReconnectRecoveryStatus] =
     useState<ReconnectRecoveryStatus | null>(null);
+  // performance.now() when the server let this user in: joinApproved, or a
+  // joinRoom reply that did not say waiting. Call metrics end the wait at the
+  // first of these, before media is set up.
+  const [admittedAt, setAdmittedAt] = useState<number | null>(null);
+  // The ref also serializes path probes. Call metrics start only when a
+  // transport rebuild or room rejoin actually begins.
+  const [reconnectInFlight, setReconnectInFlight] = useState(false);
   const updateReconnectRecoveryStatus = useCallback(
     (
       next:
@@ -1413,54 +1612,23 @@ export function useMeetSocket({
     [userId],
   );
 
-  const getProducerSlotKey = (
-    info: Pick<ProducerInfo, "producerUserId" | "kind" | "type">,
-  ): string => `${info.producerUserId}:${info.kind}:${info.type}`;
+  const isSupersededProducer = producerSlotOrder.isSuperseded;
 
-  const noteAnnouncedProducer = useCallback((info: ProducerInfo) => {
-    const state = producerAnnounceOrderRef.current;
-    if (state.slotById.has(info.producerId)) return;
-    const slotKey = getProducerSlotKey(info);
-    state.slotById.set(info.producerId, slotKey);
-    state.latestBySlot.set(slotKey, info.producerId);
-  }, []);
-
-  const isSupersededProducer = useCallback(
-    (info: Pick<
-      ProducerInfo,
-      "producerId" | "producerUserId" | "kind" | "type"
-    >): boolean => {
-      const state = producerAnnounceOrderRef.current;
-      const slotKey =
-        state.slotById.get(info.producerId) ?? getProducerSlotKey(info);
-      const latest = state.latestBySlot.get(slotKey);
-      return latest !== undefined && latest !== info.producerId;
+  const noteRemoteProducerList = useCallback(
+    (producers: readonly ProducerInfo[], requestedAt: number) => {
+      producerSlotOrder.noteServerList(
+        producers.filter((producer) => producer.producerUserId !== userId),
+        requestedAt,
+      );
     },
-    [],
+    [producerSlotOrder, userId],
   );
 
-  const forgetAnnouncedProducer = useCallback((producerId: string) => {
-    const state = producerAnnounceOrderRef.current;
-    const slotKey = state.slotById.get(producerId);
-    state.slotById.delete(producerId);
-    if (slotKey && state.latestBySlot.get(slotKey) === producerId) {
-      state.latestBySlot.delete(slotKey);
+  useEffect(() => deviceIntents.subscribe(() => {
+    if (!deviceIntents.get().video.chosen) {
+      updateMediaPathRecovery({ type: "send-stream-disabled", stream: "camera" });
     }
-  }, []);
-
-  const resetAnnouncedProducers = useCallback(() => {
-    const state = producerAnnounceOrderRef.current;
-    state.slotById.clear();
-    state.latestBySlot.clear();
-  }, []);
-
-  useEffect(() => {
-    isMutedRef.current = isMuted;
-  }, [isMuted]);
-
-  useEffect(() => {
-    isCameraOffRef.current = isCameraOff;
-  }, [isCameraOff]);
+  }), [deviceIntents, updateMediaPathRecovery]);
 
   const shouldPlayJoinLeaveSound = useCallback(
     (type: "join" | "leave", targetUserId: string) => {
@@ -1482,33 +1650,247 @@ export function useMeetSocket({
     isTtsDisabledRef.current = isTtsDisabled;
   }, [isTtsDisabled]);
 
-  const enableTurnFallback = useCallback((reason: string): boolean => {
-    if (useTurnFallbackRef.current) return false;
+  const escalateMediaPathFailure = useCallback(
+    (
+      transportKind: "producer" | "consumer",
+      transport: Transport,
+      failure: Omit<FailedPath, "transportId">,
+    ) => {
+      const currentTransport =
+        transportKind === "producer"
+          ? producerTransportRef.current
+          : consumerTransportRef.current;
+      // A check that ends after its transport was replaced on purpose says
+      // nothing about the path in use now.
+      if (transport !== currentTransport || transport.closed) return;
+      const { reason } = failure;
+      const before = mediaPathRecoveryRef.current;
+      const { step, recovery } = planMediaPathFailure(before, {
+        ...failure,
+        direction: transportKind,
+        transportId: transport.id,
+        relayOnly: relayOnlyIceRef.current,
+        reconnectInFlight: reconnectInFlightRef.current,
+      });
+      commitMediaPathRecovery(recovery);
+      if (step === "already-escalated" || step === "wait-for-reconnect") {
+        return;
+      }
+      if (step === "report-blocked") {
+        const health = readMediaPathHealth(before);
+        if (health[transportKind] === "blocked") return;
+        console.warn(`[Meets] ${reason}. Media cannot get through this network.`);
+        if (blockedMediaDirections(health).length > 0) return;
+        telemetry.capture("meet_media_path_blocked", {
+          transport: transportKind,
+          relayOnly: relayOnlyIceRef.current,
+          silentWhileConnected: failure.silentWhileConnected,
+        });
+        return;
+      }
 
-    const turnIceServers = runtimeTurnIceServersRef.current ?? [];
-    if (turnIceServers.length === 0) return false;
+      console.warn(`[Meets] ${reason}. Rebuilding the ${transportKind} transport.`);
+      void handleReconnectRef.current({
+        refreshIceServers: true,
+        failedPath: {
+          direction: transportKind,
+          transportId: transport.id,
+          generation: reconnectGenerationRef.current,
+          ownsEscalation: true,
+        },
+        ...(step === "reconnect-relay-only" ? { relayOnly: { reason } } : {}),
+      });
+    },
+    [
+      consumerTransportRef,
+      currentRoomIdRef,
+      handleReconnectRef,
+      producerTransportRef,
+      reconnectInFlightRef,
+      commitMediaPathRecovery,
+    ],
+  );
 
-    useTurnFallbackRef.current = true;
-    console.warn(`[Meets] ${reason}. Retrying with TURN fallback.`);
-    telemetry.capture("meet_turn_relay_activated", {
-      reason,
-      roomId: currentRoomIdRef.current ?? undefined,
-    });
-    return true;
-  }, [currentRoomIdRef]);
+  const noteMediaPathConnected = useCallback(
+    (transportKind: "producer" | "consumer", transport: Transport) => {
+      updateMediaPathRecovery({
+        type: "transport-connected",
+        direction: transportKind,
+        transportId: transport.id,
+      });
+    },
+    [updateMediaPathRecovery],
+  );
 
-  const resolveIceServers = useCallback((): RTCIceServer[] | undefined => {
-    const stunIceServers =
-      runtimeStunIceServersRef.current && runtimeStunIceServersRef.current.length > 0
-        ? runtimeStunIceServersRef.current
-        : MEETS_ICE_SERVERS;
+  // TURN servers are offered from the first attempt, so a network that blocks
+  // the direct path connects through the relay without a failed attempt first.
+  const resolveIceServers = useCallback(
+    (offers: RelayOffer[]): RTCIceServer[] | undefined =>
+      mergeIceServers(
+        runtimeIceServersRef.current.stun ?? MEETS_ICE_SERVERS,
+        offeredTurnServers(offers),
+      ),
+    [],
+  );
 
-    const turnIceServers = useTurnFallbackRef.current
-      ? runtimeTurnIceServersRef.current
-      : undefined;
-
-    return mergeIceServers(stunIceServers, turnIceServers);
+  const stopRelayRefresh = useCallback(() => {
+    const { timeout } = relayRefreshRef.current;
+    if (timeout !== null) window.clearTimeout(timeout);
+    relayRefreshRef.current = { chain: null, timeout: null, inFlight: false };
   }, []);
+
+  const relayUsableNow = useCallback(
+    () =>
+      getUsableTurnIceServers(runtimeIceServersRef.current, Date.now()) !==
+      null,
+    [],
+  );
+
+  const reconcileRelayPathsNow = useCallback(
+    (budget: RelayRefreshBudget = "keep") => {
+      const transportOf = (direction: "producer" | "consumer") =>
+        direction === "producer"
+          ? producerTransportRef.current
+          : consumerTransportRef.current;
+      const readState = () => {
+        const refresh = relayRefreshRef.current;
+        const health = readMediaPathHealth(mediaPathRecoveryRef.current);
+        return {
+          wanted: relayOnlyIceRef.current,
+          servers: runtimeIceServersRef.current,
+          now: Date.now(),
+          busy:
+            reconnectInFlightRef.current || intentionalDisconnectRef.current,
+          transports: (["producer", "consumer"] as const).flatMap(
+            (direction) => {
+              const transport = transportOf(direction);
+              if (!transport || transport.closed) return [];
+              return [
+                {
+                  direction,
+                  offers: relayOffersRef.current.get(transport) ?? [],
+                  carriedMedia:
+                    transportsCarryingMediaRef.current.has(transport),
+                  failed:
+                    transport.connectionState === "failed" ||
+                    health[direction] === "blocked",
+                },
+              ];
+            },
+          ),
+          chain: refresh.chain,
+          timerArmed: refresh.timeout !== null,
+          requestInFlight: refresh.inFlight,
+        };
+      };
+      const confirmMoves = async (directions: Array<"producer" | "consumer">) => {
+        const decision = relayMoveDecisionRef.current;
+        if (decision.running) {
+          decision.rerun = true;
+          return;
+        }
+        decision.running = true;
+        const generation = reconnectGenerationRef.current;
+        try {
+          const sampled = new Map<"producer" | "consumer", Transport>();
+          for (const direction of directions) {
+            const transport = transportOf(direction);
+            if (!transport || transport.closed) continue;
+            const reading = await readCarriedMediaRef.current(direction, transport);
+            if (reading !== "unread") sampled.set(direction, transport);
+          }
+          if (generation !== reconnectGenerationRef.current) return;
+          const moves = reconcileRelayPaths(readState(), "keep").moveOntoRelay.flatMap(
+            (direction) => {
+              const transport = sampled.get(direction);
+              return transport !== undefined && transport === transportOf(direction)
+                ? [{ direction, transportId: transport.id, generation }]
+                : [];
+            },
+          );
+          if (moves.length === 0) return;
+          console.warn(
+            `[Meets] TURN credentials are back; moving the ${moves.map(({ direction }) => direction).join(" and ")} transport onto the relay.`,
+          );
+          void handleReconnectRef.current?.({
+            refreshIceServers: false,
+            failedPath: moves.length === 1 ? moves[0] : undefined,
+            relayOnly: { reason: "relay credentials are back" },
+          });
+        } finally {
+          decision.running = false;
+          if (decision.rerun) {
+            decision.rerun = false;
+            reconcile("keep");
+          }
+        }
+      };
+      const reconcile = (nextBudget: RelayRefreshBudget) => {
+        const state = relayRefreshRef.current;
+        const plan = reconcileRelayPaths(readState(), nextBudget);
+        state.chain = plan.chain;
+        if (plan.cancelTimer && state.timeout !== null) {
+          window.clearTimeout(state.timeout);
+          state.timeout = null;
+        }
+        if (plan.armRefresh && plan.chain) {
+          const generation = reconnectGenerationRef.current;
+          state.timeout = window.setTimeout(() => {
+            state.timeout = null;
+            const roomId = currentRoomIdRef.current;
+            const refresh = refreshIceServersRef.current;
+            if (
+              relayRefreshRef.current !== state ||
+              generation !== reconnectGenerationRef.current ||
+              intentionalDisconnectRef.current ||
+              !roomId ||
+              !refresh
+            ) {
+              return;
+            }
+            state.chain = takeRelayRefreshTry(
+              planRelayRefresh(state.chain, {
+                wanted: relayOnlyIceRef.current,
+                relayUsable: relayUsableNow(),
+                budget: "keep",
+              }),
+            );
+            if (!state.chain) return;
+            state.inFlight = true;
+            const settle = () => {
+              state.inFlight = false;
+              if (relayRefreshRef.current === state) reconcile("keep");
+            };
+            void refresh(roomId).then(settle, settle);
+          }, relayRefreshDelayMs(plan.chain));
+        }
+        if (plan.moveOntoRelay.length > 0) void confirmMoves(plan.moveOntoRelay);
+      };
+      reconcile(budget);
+    },
+    [
+      consumerTransportRef,
+      currentRoomIdRef,
+      handleReconnectRef,
+      intentionalDisconnectRef,
+      producerTransportRef,
+      reconnectInFlightRef,
+      relayUsableNow,
+    ],
+  );
+
+  const resolveIceTransportPolicy = useCallback(
+    (offers: RelayOffer[]): RTCIceTransportPolicy => {
+      const policy = icePolicyForOffers(relayOnlyIceRef.current, offers);
+      if (relayOnlyIceRef.current && policy === "all") {
+        console.warn(
+          "[Meets] No usable TURN credentials; building the transport with every candidate.",
+        );
+      }
+      return policy;
+    },
+    [],
+  );
 
   const stopScreenShareCapture = useCallback(() => {
     const screenStream = screenShareStreamRef.current;
@@ -1799,6 +2181,80 @@ export function useMeetSocket({
     [republishScreenShareOnce],
   );
 
+  // Everything kept for receiving: consumers, their timers and retries, and
+  // what is known about remote producers. A rejoin and a rebuild of the
+  // receive transport both start from here.
+  const resetReceiveState = useCallback(() => {
+    if (pendingProducerRetryTimeoutRef.current) {
+      window.clearTimeout(pendingProducerRetryTimeoutRef.current);
+      pendingProducerRetryTimeoutRef.current = null;
+    }
+
+    consumersRef.current.forEach((consumer, producerId) => {
+      if (consumer.kind === "video") {
+        adaptiveVideoReceiverLifecycleRef.current({
+          type: "removing",
+          producerId,
+          consumer,
+        });
+      }
+      try {
+        consumer.close();
+      } catch {}
+    });
+    consumersRef.current.clear();
+    for (const timeoutId of videoStallRecoveryTimeoutsRef.current.values()) {
+      window.clearTimeout(timeoutId);
+    }
+    videoStallRecoveryTimeoutsRef.current.clear();
+    for (const entry of consumerResumeRetryStateRef.current.values()) {
+      if (entry.timeoutId != null) {
+        window.clearTimeout(entry.timeoutId);
+      }
+    }
+    consumerResumeRetryStateRef.current.clear();
+    producerSlotOrder.reset();
+    for (const timeoutId of staleConsumerRecoveryTimeoutsRef.current.values()) {
+      window.clearTimeout(timeoutId);
+    }
+    staleConsumerRecoveryTimeoutsRef.current.clear();
+    for (const timeoutId of webcamStartupLatencyResetTimeoutsRef.current.values()) {
+      window.clearTimeout(timeoutId);
+    }
+    webcamStartupLatencyResetTimeoutsRef.current.clear();
+    webcamStartupLatencyResetStateRef.current.clear();
+    webcamStartupLatencyResetQueueRef.current = [];
+    webcamStartupLatencyResetActiveRef.current = null;
+    webcamStartupLatencyResetLastFinishedAtRef.current = 0;
+    webcamStartupLatencyResetEpochRef.current += 1;
+    if (webcamStartupLatencyResetDrainTimeoutRef.current != null) {
+      window.clearTimeout(webcamStartupLatencyResetDrainTimeoutRef.current);
+      webcamStartupLatencyResetDrainTimeoutRef.current = null;
+    }
+    consumerGenerationResetDebugRef.current = [];
+    for (const timeoutId of staleReplacementCleanupTimeoutsRef.current.values()) {
+      window.clearTimeout(timeoutId);
+    }
+    staleReplacementCleanupTimeoutsRef.current.clear();
+    mutedConsumerSinceRef.current.clear();
+    producerPausedStateRef.current.clear();
+    producerPausedStateRevisionRef.current.clear();
+    videoFreezeStatsRef.current.clear();
+    consumerRecoveryInFlightRef.current.clear();
+    consumerConsumeInFlightRef.current.clear();
+    announcedRemoteProducersRef.current.clear();
+    suppressedVideoProducersRef.current.clear();
+    consumerTelemetryRef.current.clear();
+    pendingConsumerTelemetryByIdRef.current.clear();
+    producerMapRef.current.clear();
+    pendingProducersRef.current.clear();
+    consumeRetryAttemptsRef.current.clear();
+  }, [
+    adaptiveVideoReceiverLifecycleRef,
+    consumersRef,
+    producerSlotOrder,
+  ]);
+
   const cleanupRoomResources = useCallback(
     (options?: { resetRoomId?: boolean; preserveMeetingState?: boolean }) => {
       const resetRoomId = options?.resetRoomId !== false;
@@ -1808,35 +2264,7 @@ export function useMeetSocket({
         window.clearInterval(producerSyncIntervalRef.current);
         producerSyncIntervalRef.current = null;
       }
-      if (pendingProducerRetryTimeoutRef.current) {
-        window.clearTimeout(pendingProducerRetryTimeoutRef.current);
-        pendingProducerRetryTimeoutRef.current = null;
-      }
-
-      consumersRef.current.forEach((consumer, producerId) => {
-        if (consumer.kind === "video") {
-          adaptiveVideoReceiverLifecycleRef.current({
-            type: "removing",
-            producerId,
-            consumer,
-          });
-        }
-        try {
-          consumer.close();
-        } catch {}
-      });
-      consumersRef.current.clear();
-      for (const timeoutId of videoStallRecoveryTimeoutsRef.current.values()) {
-        window.clearTimeout(timeoutId);
-      }
-      videoStallRecoveryTimeoutsRef.current.clear();
-      for (const entry of consumerResumeRetryStateRef.current.values()) {
-        if (entry.timeoutId != null) {
-          window.clearTimeout(entry.timeoutId);
-        }
-      }
-      consumerResumeRetryStateRef.current.clear();
-      resetAnnouncedProducers();
+      resetReceiveState();
       if (!preserveMeetingState) {
         const statusTimeouts =
           participantConnectionStatusTimeoutsRef.current.values();
@@ -1847,28 +2275,6 @@ export function useMeetSocket({
         participantConnectionStatusExpiresAtRef.current.clear();
         visibleParticipantReconnectingIdsRef.current.clear();
       }
-      for (const timeoutId of staleConsumerRecoveryTimeoutsRef.current.values()) {
-        window.clearTimeout(timeoutId);
-      }
-      staleConsumerRecoveryTimeoutsRef.current.clear();
-      for (const timeoutId of webcamStartupLatencyResetTimeoutsRef.current.values()) {
-        window.clearTimeout(timeoutId);
-      }
-      webcamStartupLatencyResetTimeoutsRef.current.clear();
-      webcamStartupLatencyResetStateRef.current.clear();
-      webcamStartupLatencyResetQueueRef.current = [];
-      webcamStartupLatencyResetActiveRef.current = null;
-      webcamStartupLatencyResetLastFinishedAtRef.current = 0;
-      webcamStartupLatencyResetEpochRef.current += 1;
-      if (webcamStartupLatencyResetDrainTimeoutRef.current != null) {
-        window.clearTimeout(webcamStartupLatencyResetDrainTimeoutRef.current);
-        webcamStartupLatencyResetDrainTimeoutRef.current = null;
-      }
-      consumerGenerationResetDebugRef.current = [];
-      for (const timeoutId of staleReplacementCleanupTimeoutsRef.current.values()) {
-        window.clearTimeout(timeoutId);
-      }
-      staleReplacementCleanupTimeoutsRef.current.clear();
       if (!preserveMeetingState) {
         for (const timeoutId of closeConsumerRetryTimeoutsRef.current.values()) {
           window.clearTimeout(timeoutId);
@@ -1879,24 +2285,12 @@ export function useMeetSocket({
         }
         closeConsumerOperationsRef.current.clear();
       }
-      mutedConsumerSinceRef.current.clear();
-      producerPausedStateRef.current.clear();
-      producerPausedStateRevisionRef.current.clear();
-      videoFreezeStatsRef.current.clear();
-      consumerRecoveryInFlightRef.current.clear();
-      consumerConsumeInFlightRef.current.clear();
-      announcedRemoteProducersRef.current.clear();
-      suppressedVideoProducersRef.current.clear();
-      consumerTelemetryRef.current.clear();
-      pendingConsumerTelemetryByIdRef.current.clear();
-      producerMapRef.current.clear();
-      pendingProducersRef.current.clear();
       intentionalLocalProducerCloseIdsRef.current.clear();
-      consumeRetryAttemptsRef.current.clear();
       leaveTimeoutsRef.current.forEach((timeoutId) => {
         window.clearTimeout(timeoutId);
       });
       leaveTimeoutsRef.current.clear();
+      setWebinarQaListFromThisConnection(false);
       if (!preserveMeetingState) {
         clearReactions();
         setPendingUsers(new Map());
@@ -1914,6 +2308,10 @@ export function useMeetSocket({
         webinarJoinedParticipantIdsRef.current.clear();
         webinarVisibleParticipantIdsRef.current.clear();
         serverRoomIdRef.current = null;
+      } else {
+        // The old events' Q&A list was this connection's. The next one is
+        // sent its own.
+        setWebinarQaEntries(null);
       }
       webinarJoinedParticipantIdsRef.current.clear();
       webinarVisibleParticipantIdsRef.current.clear();
@@ -1974,7 +2372,7 @@ export function useMeetSocket({
       consumerTransportRef.current = null;
       producerTransportCreatePromiseRef.current = null;
       pendingCameraCodecTransportResetEpochRef.current = null;
-      prejoinMediaIntentRef.current = null;
+      skipMutedMicWarmupRef.current = false;
       if (producerTransportDisconnectTimeoutRef.current) {
         window.clearTimeout(producerTransportDisconnectTimeoutRef.current);
         producerTransportDisconnectTimeoutRef.current = null;
@@ -2007,12 +2405,14 @@ export function useMeetSocket({
       }
       if (resetRoomId) {
         currentRoomIdRef.current = null;
-        runtimeStunIceServersRef.current = null;
-        runtimeTurnIceServersRef.current = null;
-        useTurnFallbackRef.current = false;
+        runtimeIceServersRef.current = NO_RUNTIME_ICE_SERVERS;
+        relayOnlyIceRef.current = false;
+        stopRelayRefresh();
+        updateMediaPathRecovery({ type: "reset" });
       }
     },
     [
+      resetReceiveState,
       audioProducerRef,
       adaptiveVideoReceiverLifecycleRef,
       consumerTransportRef,
@@ -2042,6 +2442,7 @@ export function useMeetSocket({
       setWebinarRole,
       setWebinarSpeakerUserId,
       setWebinarQaEntries,
+      setWebinarQaListFromThisConnection,
       setWebinarHandQueue,
       setIsWebinarHandRaised,
       setWebinarStageInvite,
@@ -2054,13 +2455,10 @@ export function useMeetSocket({
       clearReactions,
       videoProducerRef,
       userId,
-      runtimeStunIceServersRef,
-      runtimeTurnIceServersRef,
-      useTurnFallbackRef,
+      relayOnlyIceRef,
       producerTransportDisconnectTimeoutRef,
       consumerTransportDisconnectTimeoutRef,
       pendingProducerRetryTimeoutRef,
-      prejoinMediaIntentRef,
       producerSyncIntervalRef,
       consumeRetryAttemptsRef,
       videoStallRecoveryTimeoutsRef,
@@ -2070,16 +2468,18 @@ export function useMeetSocket({
       mutedConsumerSinceRef,
       producerPausedStateRef,
       consumerRecoveryInFlightRef,
+      skipMutedMicWarmupRef,
       stopScreenShareCapture,
     ],
   );
 
-  const cleanup = useCallback(() => {
+  const closeConnection = useCallback(() => {
     console.info("[Meets] Running full cleanup...");
 
     intentionalDisconnectRef.current = true;
     reconnectGenerationRef.current += 1;
     reconnectInFlightRef.current = false;
+    setReconnectInFlight(false);
     cleanupRoomResources();
     if (producerSyncIntervalRef.current) {
       window.clearInterval(producerSyncIntervalRef.current);
@@ -2091,18 +2491,18 @@ export function useMeetSocket({
       ...(localStream?.getTracks() ?? []),
     ]);
     localStreamRef.current = null;
-    localTracks.forEach(stopLocalTrack);
+    localTracks.forEach((track) => stopLocalTrack(track));
 
-    socketRef.current?.disconnect();
-    socketRef.current = null;
-    onSocketReady?.(null);
+    retireSocket(socketRef, onSocketReady);
+    joinInfoRequestRef.current?.abort();
+    joinInfoRequestRef.current = null;
+    heldJoinInfoRef.current = null;
     deviceRef.current = null;
     webcamCodecPolicyRef.current = { ...BASELINE_WEBCAM_CODEC_POLICY };
 
     setConnectionState("disconnected");
     setLocalStream(null);
-    setIsMuted(true);
-    setIsCameraOff(true);
+    deviceIntents.dispatch({ type: "release" });
     setWaitingMessage(null);
     serverRestartNoticeRef.current = null;
     setServerRestartNotice(null);
@@ -2118,14 +2518,13 @@ export function useMeetSocket({
     reconnectAttemptsRef.current = 0;
   }, [
     cleanupRoomResources,
+    deviceIntents,
     intentionalDisconnectRef,
     reconnectInFlightRef,
     localStream,
     localStreamRef,
     reconnectAttemptsRef,
     setConnectionState,
-    setIsCameraOff,
-    setIsMuted,
     setLocalStream,
     setAdminNotice,
     setServerRestartNotice,
@@ -2139,11 +2538,47 @@ export function useMeetSocket({
     onSocketReady,
   ]);
 
+  const cleanup = useCallback(() => {
+    closeConnection();
+    releaseAllCaptures();
+  }, [closeConnection]);
+
+  const releaseLocalMedia = useCallback(() => {
+    const localTracks = new Set([
+      ...(localStreamRef.current?.getTracks() ?? []),
+      ...(localStream?.getTracks() ?? []),
+    ]);
+    localStreamRef.current = null;
+    localTracks.forEach((track) => stopLocalTrack(track));
+    setLocalStream(null);
+    deviceIntents.dispatch({ type: "release" });
+    stopScreenShareCapture();
+    releaseAllCaptures();
+  }, [
+    deviceIntents,
+    localStream,
+    localStreamRef,
+    setLocalStream,
+    stopLocalTrack,
+    stopScreenShareCapture,
+  ]);
+
+  const refuseEntry = useCallback(
+    (error: MeetError | null, status?: ReconnectRecoveryStatus) => {
+      releaseLocalMedia();
+      if (status) updateReconnectRecoveryStatus(status);
+      if (error) setMeetError(error);
+      setConnectionState("error");
+    },
+    [releaseLocalMedia, setConnectionState, setMeetError, updateReconnectRecoveryStatus],
+  );
+
   const finishLocalRoomEnded = useCallback(() => {
     if (localRoomEndedHandledRef.current) return;
     localRoomEndedHandledRef.current = true;
+    forgetJoinedRoom();
     setMeetError(null);
-    setMeetingEndedNotice?.(null);
+    setSetupNotice?.(null);
     setWaitingMessage(null);
     cleanup();
     onLocalRoomEnded?.();
@@ -2151,45 +2586,27 @@ export function useMeetSocket({
     cleanup,
     onLocalRoomEnded,
     setMeetError,
-    setMeetingEndedNotice,
+    setSetupNotice,
     setWaitingMessage,
   ]);
 
   const resolveMediaPublishIntent = useCallback(
-    (stream: MediaStream | null | undefined) => {
-      const prejoinIntent = prejoinMediaIntentRef.current;
-      const streamTrackIds = new Set(
-        stream?.getTracks().map((track) => track.id) ?? [],
-      );
-      const matchesPrejoinIntent = Boolean(
-        prejoinIntent &&
-          ((prejoinIntent.streamId === null && streamTrackIds.size === 0) ||
-            prejoinIntent.streamId === stream?.id ||
-            Array.from(streamTrackIds).some((trackId) =>
-              prejoinIntent.trackIds.has(trackId),
-            )),
-      );
-
-      return {
-        isMicOn: prejoinIntent ? prejoinIntent.isMicOn : !isMuted,
-        isCameraOn: prejoinIntent ? prejoinIntent.isCameraOn : !isCameraOff,
-        matchesPrejoinIntent,
-      };
-    },
-    [isCameraOff, isMuted, prejoinMediaIntentRef],
+    () => publishIntent(deviceIntents.get()),
+    [deviceIntents],
   );
 
   const getJoinMediaNeeds = useCallback(
-    (stream: MediaStream | null | undefined) => {
-      const mediaIntent = resolveMediaPublishIntent(stream);
+    () => {
+      const mediaIntent = resolveMediaPublishIntent();
       return {
-        needsAudio: true,
+        needsAudio:
+          mediaIntent.isMicOn || !skipMutedMicWarmupRef.current,
         needsVideo: mediaIntent.isCameraOn,
         requiredAudio: mediaIntent.isMicOn,
         requiredVideo: mediaIntent.isCameraOn,
       };
     },
-    [resolveMediaPublishIntent],
+    [resolveMediaPublishIntent, skipMutedMicWarmupRef],
   );
 
   const dropVideoTracksForCameraOff = useCallback(
@@ -2233,7 +2650,7 @@ export function useMeetSocket({
       joinOptions: { isRecorder?: boolean; joinMode: JoinMode },
       reason: string,
     ) => {
-      const mediaNeeds = getJoinMediaNeeds(candidateStream);
+      const mediaNeeds = getJoinMediaNeeds();
       const shouldRequestMedia =
         !joinOptions.isRecorder &&
         joinOptions.joinMode !== "webinar_attendee" &&
@@ -2280,13 +2697,25 @@ export function useMeetSocket({
       }
 
       const previousTracks = candidateStream?.getTracks() ?? [];
-      const refreshedTrackIds = new Set(
-        refreshedStream.getTracks().map((track) => track.id),
+      const committedMeanwhile = (localStreamRef.current?.getTracks() ?? []).filter(
+        (track) => track.readyState === "live" && !previousTracks.includes(track),
       );
-      localStreamRef.current = refreshedStream;
-      setLocalStream(refreshedStream);
+      const joinTracks = refreshedStream.getTracks().filter((track) => {
+        if (committedMeanwhile.some((committed) => committed.kind === track.kind)) {
+          stopLocalTrack(track);
+          return false;
+        }
+        return true;
+      });
+      const joinStream =
+        committedMeanwhile.length === 0
+          ? refreshedStream
+          : new MediaStream([...committedMeanwhile, ...joinTracks]);
+      const joinTrackIds = new Set(joinStream.getTracks().map((track) => track.id));
+      localStreamRef.current = joinStream;
+      setLocalStream(joinStream);
       previousTracks.forEach((track) => {
-        if (!refreshedTrackIds.has(track.id)) {
+        if (!joinTrackIds.has(track.id)) {
           stopLocalTrack(track);
         }
       });
@@ -2294,10 +2723,10 @@ export function useMeetSocket({
       console.info("[Meets] Refreshed local media before join:", {
         reason,
         previousStream: summarizeStreamForLog(candidateStream),
-        refreshedStream: summarizeStreamForLog(refreshedStream),
+        refreshedStream: summarizeStreamForLog(joinStream),
       });
 
-      return refreshedStream;
+      return joinStream;
     },
     [
       isCameraOff,
@@ -2505,19 +2934,19 @@ export function useMeetSocket({
         if (producerTransportRef.current === transport) {
           producerTransportRef.current = null;
         }
-        if (!isMutedRef.current) requestAudioProducerRecovery();
+        if (deviceIntents.get().audio.chosen) requestAudioProducerRecovery();
       };
 
       const producer = videoProducerRef.current;
       if (!producer || producer.closed) {
         pendingCameraCodecTransportResetEpochRef.current = next.epoch;
-        if (!isCameraOffRef.current) {
+        if (deviceIntents.get().video.chosen) {
           requestCameraProducerRecovery();
         }
         return;
       }
 
-      if (isCameraOffRef.current) {
+      if (!deviceIntents.get().video.chosen) {
         pendingCameraCodecTransportResetEpochRef.current = next.epoch;
         if (producer && !producer.closed) {
           intentionalLocalProducerCloseIdsRef.current.add(producer.id);
@@ -2714,7 +3143,7 @@ export function useMeetSocket({
         };
       };
 
-      const scheduleRetry = (reason: string) => {
+      const scheduleRetry = (reason: ResumeFailure) => {
         if (!ownsCurrentResumeState()) return;
         const nextAttempt = effectiveAttempt + 1;
         if (nextAttempt >= RESUME_CONSUMER_MAX_ATTEMPTS) {
@@ -2731,7 +3160,7 @@ export function useMeetSocket({
           if (producerInfo) {
             void recoverStaleConsumerRef.current(
               producerInfo,
-              `resume retries exhausted (${reason})`,
+              "resume_retries_exhausted",
             );
           }
           return;
@@ -2761,7 +3190,7 @@ export function useMeetSocket({
 
       const settleResume = startSocketAckTimeout(
         "resumeConsumer",
-        () => scheduleRetry("ack timeout"),
+        () => scheduleRetry("ack_timeout"),
         RESUME_CONSUMER_ACK_TIMEOUT_MS,
       );
       socket.emit(
@@ -2791,12 +3220,13 @@ export function useMeetSocket({
               if (producerInfo) {
                 void recoverStaleConsumerRef.current(
                   producerInfo,
-                  "server lost consumer on resume",
+                  "server_lost_consumer",
                 );
               }
               return;
             }
-            scheduleRetry(code ?? error);
+            const failure = RESUME_FAILURE.safeParse(code);
+            scheduleRetry(failure.success ? failure.data : "server_error");
             return;
           }
           clearConsumerResumeRetry(producerId, consumerId);
@@ -2978,7 +3408,7 @@ export function useMeetSocket({
         webcamStartupLatencyResetQueueRef.current.filter(
           (queuedProducerId) => queuedProducerId !== producerId,
         );
-      forgetAnnouncedProducer(producerId);
+      producerSlotOrder.forget(producerId);
       mutedConsumerSinceRef.current.delete(producerId);
       producerPausedStateRef.current.delete(producerId);
       suppressedVideoProducersRef.current.delete(producerId);
@@ -3156,7 +3586,7 @@ export function useMeetSocket({
       consumerTelemetryRef,
       clearConsumerResumeRetry,
       clearStaleConsumerRecoveryTimeout,
-      forgetAnnouncedProducer,
+      producerSlotOrder,
       mutedConsumerSinceRef,
       producerPausedStateRef,
       consumerRecoveryInFlightRef,
@@ -3554,23 +3984,23 @@ export function useMeetSocket({
   );
 
   const attemptIceRestart = useCallback(
-    async (transportKind: "producer" | "consumer"): Promise<boolean> => {
-      const existingRestart = iceRestartPromiseRef.current[transportKind];
+    async (
+      transportKind: "producer" | "consumer",
+      transport: Transport,
+    ): Promise<boolean> => {
+      const isCurrent = () =>
+        !transport.closed &&
+        transport ===
+          (transportKind === "producer"
+            ? producerTransportRef.current
+            : consumerTransportRef.current);
+      if (!isCurrent()) return false;
+
+      const existingRestart = iceRestartsRef.current.get(transport);
       if (existingRestart) return existingRestart;
 
       const socket = socketRef.current;
       if (!socket || !socket.connected) return false;
-
-      const transport =
-        transportKind === "producer"
-          ? producerTransportRef.current
-          : consumerTransportRef.current;
-
-      if (!transport) return false;
-
-      const inFlight = iceRestartInFlightRef.current;
-      if (inFlight[transportKind]) return false;
-      inFlight[transportKind] = true;
 
       const restartPromise: Promise<boolean> = (async () => {
         try {
@@ -3590,7 +4020,7 @@ export function useMeetSocket({
                   settled = true;
                   window.clearTimeout(timeoutId);
                   if ("error" in res) {
-                    reject(new Error(res.error));
+                    reject(new ServerError(res.error));
                   } else {
                     resolve(res);
                   }
@@ -3599,32 +4029,44 @@ export function useMeetSocket({
             },
           );
 
-          await transport.restartIce({ iceParameters: response.iceParameters });
-          console.info(
-            `[Meets] ${transportKind} transport ICE restart succeeded.`,
+          if (!isCurrent()) return false;
+          await withDeadline(
+            transport.restartIce({ iceParameters: response.iceParameters }),
+            MEDIA_PATH_VERIFY_MS,
           );
-          return true;
+          // The acknowledgement only means new credentials were exchanged.
+          // The restart worked if the transport is connected again.
+          const connected = await waitForTransportConnected(
+            transport,
+            MEDIA_PATH_VERIFY_MS,
+          );
+          if (connected) {
+            console.info(
+              `[Meets] ${transportKind} transport ICE restart succeeded.`,
+            );
+          } else {
+            console.warn(
+              `[Meets] ${transportKind} transport did not reconnect after an ICE restart.`,
+            );
+          }
+          return connected;
         } catch (err) {
-          console.error(
-            `[Meets] ${transportKind} transport ICE restart failed:`,
+          logCallError(
+            transportKind === "producer"
+              ? "[Meets] Producer transport ICE restart failed"
+              : "[Meets] Consumer transport ICE restart failed",
             err,
           );
           return false;
         } finally {
-          inFlight[transportKind] = false;
-          iceRestartPromiseRef.current[transportKind] = null;
+          iceRestartsRef.current.delete(transport);
         }
       })();
 
-      iceRestartPromiseRef.current[transportKind] = restartPromise;
+      iceRestartsRef.current.set(transport, restartPromise);
       return restartPromise;
     },
-    [
-      socketRef,
-      producerTransportRef,
-      consumerTransportRef,
-      iceRestartInFlightRef,
-    ],
+    [socketRef, producerTransportRef, consumerTransportRef],
   );
 
   const createProducerTransport = useCallback(
@@ -3639,14 +4081,20 @@ export function useMeetSocket({
           (response: TransportResponse | { error: string }) => {
             if (!settleCreateTransport()) return;
             if ("error" in response) {
-              reject(new Error(response.error));
+              reject(new ServerError(response.error));
               return;
             }
 
+            const relayOffers = offerRelays(
+              runtimeIceServersRef.current,
+              Date.now(),
+            );
             const transport = device.createSendTransport({
               ...response,
-              iceServers: resolveIceServers(),
+              iceServers: resolveIceServers(relayOffers),
+              iceTransportPolicy: resolveIceTransportPolicy(relayOffers),
             });
+            relayOffersRef.current.set(transport, relayOffers);
 
             transport.on(
               "connect",
@@ -3664,7 +4112,7 @@ export function useMeetSocket({
                   { transportId: transport.id, dtlsParameters },
                   (res: { success: boolean } | { error: string }) => {
                     if (!settleConnectTransport()) return;
-                    if ("error" in res) errback(new Error(res.error));
+                    if ("error" in res) errback(new ServerError(res.error));
                     else callback();
                   },
                 );
@@ -3695,7 +4143,7 @@ export function useMeetSocket({
                   { transportId: transport.id, kind, rtpParameters, appData },
                   (res: { producerId: string } | { error: string }) => {
                     if (!settleProduce()) return;
-                    if ("error" in res) errback(new Error(res.error));
+                    if ("error" in res) errback(new ServerError(res.error));
                     else callback({ id: res.producerId });
                   },
                 );
@@ -3717,6 +4165,7 @@ export function useMeetSocket({
                   );
                   producerTransportDisconnectTimeoutRef.current = null;
                 }
+                noteMediaPathConnected("producer", transport);
                 return;
               }
 
@@ -3732,21 +4181,12 @@ export function useMeetSocket({
                         !intentionalDisconnectRef.current &&
                         transport.connectionState === "disconnected"
                       ) {
-                        void attemptIceRestart("producer").then((restarted) => {
+                        void attemptIceRestart("producer", transport).then((restarted) => {
                           if (!restarted) {
-                            const enabledTurnFallback = enableTurnFallback(
-                              "Producer transport could not recover with STUN-only ICE",
-                            );
-                            if (enabledTurnFallback) {
-                              void handleReconnectRef.current?.();
-                              return;
-                            }
-                            setMeetError({
-                              code: "TRANSPORT_ERROR",
-                              message: "Producer transport interrupted",
-                              recoverable: true,
+                            escalateMediaPathFailure("producer", transport, {
+                              reason: "Producer transport interrupted",
+                              silentWhileConnected: false,
                             });
-                            void handleReconnectRef.current?.();
                           }
                         });
                       }
@@ -3764,21 +4204,12 @@ export function useMeetSocket({
 
               if (state === "failed") {
                 if (!intentionalDisconnectRef.current) {
-                  void attemptIceRestart("producer").then((restarted) => {
+                  void attemptIceRestart("producer", transport).then((restarted) => {
                     if (!restarted) {
-                      const enabledTurnFallback = enableTurnFallback(
-                        "Producer transport failed with STUN-only ICE",
-                      );
-                      if (enabledTurnFallback) {
-                        void handleReconnectRef.current?.();
-                        return;
-                      }
-                      setMeetError({
-                        code: "TRANSPORT_ERROR",
-                        message: "Producer transport failed",
-                        recoverable: true,
+                      escalateMediaPathFailure("producer", transport, {
+                        reason: "Producer transport failed",
+                        silentWhileConnected: false,
                       });
-                      void handleReconnectRef.current?.();
                     }
                   });
                 }
@@ -3807,7 +4238,9 @@ export function useMeetSocket({
       intentionalDisconnectRef,
       producerTransportDisconnectTimeoutRef,
       attemptIceRestart,
-      enableTurnFallback,
+      escalateMediaPathFailure,
+      noteMediaPathConnected,
+      resolveIceTransportPolicy,
       resolveIceServers,
     ],
   );
@@ -3895,7 +4328,7 @@ export function useMeetSocket({
           }
           return ready;
         } catch (err) {
-          console.error("[Meets] Failed to create producer transport:", err);
+          logCallError("[Meets] Failed to create producer transport", err);
           return false;
         } finally {
           producerTransportCreatePromiseRef.current = null;
@@ -3927,14 +4360,20 @@ export function useMeetSocket({
           (response: TransportResponse | { error: string }) => {
             if (!settleCreateTransport()) return;
             if ("error" in response) {
-              reject(new Error(response.error));
+              reject(new ServerError(response.error));
               return;
             }
 
+            const relayOffers = offerRelays(
+              runtimeIceServersRef.current,
+              Date.now(),
+            );
             const transport = device.createRecvTransport({
               ...response,
-              iceServers: resolveIceServers(),
+              iceServers: resolveIceServers(relayOffers),
+              iceTransportPolicy: resolveIceTransportPolicy(relayOffers),
             });
+            relayOffersRef.current.set(transport, relayOffers);
 
             transport.on(
               "connect",
@@ -3952,7 +4391,7 @@ export function useMeetSocket({
                   { transportId: transport.id, dtlsParameters },
                   (res: { success: boolean } | { error: string }) => {
                     if (!settleConnectTransport()) return;
-                    if ("error" in res) errback(new Error(res.error));
+                    if ("error" in res) errback(new ServerError(res.error));
                     else callback();
                   },
                 );
@@ -3974,6 +4413,7 @@ export function useMeetSocket({
                   );
                   consumerTransportDisconnectTimeoutRef.current = null;
                 }
+                noteMediaPathConnected("consumer", transport);
                 return;
               }
 
@@ -3989,16 +4429,12 @@ export function useMeetSocket({
                         !intentionalDisconnectRef.current &&
                         transport.connectionState === "disconnected"
                       ) {
-                        void attemptIceRestart("consumer").then((restarted) => {
+                        void attemptIceRestart("consumer", transport).then((restarted) => {
                           if (!restarted) {
-                            const enabledTurnFallback = enableTurnFallback(
-                              "Consumer transport could not recover with STUN-only ICE",
-                            );
-                            if (enabledTurnFallback) {
-                              void handleReconnectRef.current?.();
-                              return;
-                            }
-                            void handleReconnectRef.current?.();
+                            escalateMediaPathFailure("consumer", transport, {
+                              reason: "Consumer transport interrupted",
+                              silentWhileConnected: false,
+                            });
                           }
                         });
                       }
@@ -4016,16 +4452,12 @@ export function useMeetSocket({
 
               if (state === "failed") {
                 if (!intentionalDisconnectRef.current) {
-                  void attemptIceRestart("consumer").then((restarted) => {
+                  void attemptIceRestart("consumer", transport).then((restarted) => {
                     if (!restarted) {
-                      const enabledTurnFallback = enableTurnFallback(
-                        "Consumer transport failed with STUN-only ICE",
-                      );
-                      if (enabledTurnFallback) {
-                        void handleReconnectRef.current?.();
-                        return;
-                      }
-                      void handleReconnectRef.current?.();
+                      escalateMediaPathFailure("consumer", transport, {
+                        reason: "Consumer transport failed",
+                        silentWhileConnected: false,
+                      });
                     }
                   });
                 }
@@ -4049,7 +4481,9 @@ export function useMeetSocket({
       intentionalDisconnectRef,
       consumerTransportDisconnectTimeoutRef,
       attemptIceRestart,
-      enableTurnFallback,
+      escalateMediaPathFailure,
+      noteMediaPathConnected,
+      resolveIceTransportPolicy,
       resolveIceServers,
     ],
   );
@@ -4064,41 +4498,63 @@ export function useMeetSocket({
     ): Promise<void> => {
       const transport = producerTransportRef.current;
       if (!transport) return;
+      const generation = captureGeneration();
+      const committedStream = () => localStreamRef.current ?? stream;
+      const committedMic = () => getFirstLiveTrack(committedStream().getAudioTracks());
       const publicationWarnings: string[] = [];
-      const mediaIntent = resolveMediaPublishIntent(stream);
+      const mediaIntent = resolveMediaPublishIntent();
+      const pauseAudioNow = () =>
+        !deviceIntents.get().audio.chosen || !participantMediaPermissions.unmuteAllowed;
+      const intentsAtStart = deviceIntents.get();
+      const requestAtStart = (device: "audio" | "video") =>
+        intentsAtStart[device].capturing ? -1 : intentsAtStart[device].request;
+      const micRequest = requestAtStart("audio");
+      const cameraRequest = requestAtStart("video");
+      const ownsMic = () =>
+        deviceIntents.get().audio.request === micRequest && generation === captureGeneration();
+      const ownsCamera = () =>
+        deviceIntents.get().video.request === cameraRequest && generation === captureGeneration();
+      const cameraWantedNow = () =>
+        ownsCamera() && deviceIntents.get().video.chosen && participantMediaPermissions.videoAllowed;
+      const discardJoinProducer = (producer: Producer) => {
+        socketRef.current?.emit("closeProducer", { producerId: producer.id }, () => {});
+        try {
+          producer.close();
+        } catch {}
+      };
+      const closeJoinVideoProducer = (producer: Producer, joinStream: MediaStream) => {
+        discardJoinProducer(producer);
+        dropVideoTracksForCameraOff(joinStream, "camera turned off while joining");
+      };
       const shouldPauseAudio =
         !mediaIntent.isMicOn || !participantMediaPermissions.unmuteAllowed;
       const shouldPauseVideo =
         !mediaIntent.isCameraOn || !participantMediaPermissions.videoAllowed;
 
       if (mediaIntent.isMicOn && shouldPauseAudio) {
-        isMutedRef.current = true;
         setIsMuted(true);
       }
 
-      let audioTrack = getFirstLiveTrack(stream.getAudioTracks());
+      let audioTrack = committedMic();
       if (audioTrack) {
         try {
           const rawAudioTrack = audioTrack;
-          audioTrack =
-            (await prepareAudioPublishTrack?.(audioTrack)) ?? audioTrack;
-          if (audioTrack.id !== rawAudioTrack.id) {
-            const nextStream = new MediaStream([
-              ...stream.getTracks().filter((track) => track.kind !== "audio"),
-              audioTrack,
-            ]);
-            if (
-              localStreamRef.current === stream ||
-              localStreamRef.current?.id === stream.id
-            ) {
+          const preparedTrack =
+            (await prepareAudioPublishTrack?.(audioTrack, generation)) ?? audioTrack;
+          if (preparedTrack.id !== rawAudioTrack.id) {
+            if (committedMic() === rawAudioTrack) {
+              const nextStream = new MediaStream([
+                ...committedStream().getTracks().filter((track) => track.kind !== "audio"),
+                preparedTrack,
+              ]);
               localStreamRef.current = nextStream;
+              setLocalStream(nextStream);
+            } else {
+              stopNoiseCancellationForTrack(preparedTrack, { stopOutput: true, stopSource: false });
             }
-            setLocalStream((current) =>
-              current === stream || current?.id === stream.id
-                ? nextStream
-                : current,
-            );
           }
+          audioTrack = committedMic();
+          if (!audioTrack) throw new Error("The microphone was replaced while joining");
           if ("contentHint" in audioTrack) {
             audioTrack.contentHint = "speech";
           }
@@ -4115,233 +4571,254 @@ export function useMeetSocket({
             },
           });
 
-          if (shouldPauseAudio) {
+          const pausedNow = pauseAudioNow();
+          setNoiseCancellationTrackEnabled(audioTrack, !pausedNow);
+          if (pausedNow) {
             audioProducer.pause();
           }
+          if (pausedNow !== shouldPauseAudio) {
+            socketRef.current?.emit(
+              "toggleMute",
+              { producerId: audioProducer.id, paused: pausedNow },
+              () => {},
+            );
+          }
 
-          audioProducerRef.current = audioProducer;
-          const audioProducerId = audioProducer.id;
-
-          audioProducer.on("transportclose", () => {
-            if (audioProducerRef.current?.id === audioProducerId) {
-              audioProducerRef.current = null;
-              if (!shouldPauseAudio) {
-                requestAudioProducerRecovery();
+          if (generation !== captureGeneration()) {
+            discardJoinProducer(audioProducer);
+          } else if (installProducer(audioProducerRef, null, audioProducer, discardJoinProducer)) {
+            const audioProducerId = audioProducer.id;
+            audioProducer.on("transportclose", () => {
+              if (audioProducerRef.current?.id === audioProducerId) {
+                audioProducerRef.current = null;
+                if (deviceIntents.get().audio.chosen) {
+                  requestAudioProducerRecovery();
+                }
               }
-            }
-          });
+            });
+          }
         } catch (err) {
-          console.error("[Meets] Failed to produce audio:", err);
-          if (mediaIntent.isMicOn && !shouldPauseAudio) {
-            if (audioTrack.readyState === "live") {
+          logCallError("[Meets] Failed to produce audio", err);
+          const liveMic = committedMic();
+          if (mediaIntent.isMicOn && ownsMic() && !pauseAudioNow()) {
+            if (liveMic) {
               publicationWarnings.push("microphone publish retry scheduled");
-              setNoiseCancellationTrackEnabled(audioTrack, true);
-              isMutedRef.current = false;
+              setNoiseCancellationTrackEnabled(liveMic, true);
               setIsMuted(false);
               requestAudioProducerRecovery();
             } else {
               publicationWarnings.push("microphone publish failed");
-              isMutedRef.current = true;
               setIsMuted(true);
             }
           }
         }
-      } else if (mediaIntent.isMicOn) {
-        const endedAudioTracks = stream
+      } else if (mediaIntent.isMicOn && ownsMic()) {
+        const endedAudioTracks = committedStream()
           .getAudioTracks()
           .filter((track) => track.readyState !== "live");
         if (endedAudioTracks.length > 0) {
           console.warn("[Meets] Skipping ended microphone track(s):", {
-            stream: summarizeStreamForLog(stream),
+            stream: summarizeStreamForLog(committedStream()),
             endedAudioTracks: endedAudioTracks.map(summarizeTrackForLog),
           });
           publicationWarnings.push("microphone track ended");
         } else {
           publicationWarnings.push("microphone track missing");
         }
-        isMutedRef.current = true;
         setIsMuted(true);
       }
 
-      if (shouldPauseVideo) {
-        dropVideoTracksForCameraOff(
-          stream,
-          mediaIntent.isCameraOn
-            ? "host-disabled camera publish intent"
-            : "camera-off publish intent",
-        );
-        if (mediaIntent.isCameraOn) {
+      await runCameraTrackOperation(async () => {
+        if (!ownsCamera()) {
+          if (publicationWarnings.length > 0) {
+            console.warn(
+              `[Meets] Continuing join without some local media: ${publicationWarnings.join(", ")}`
+            );
+          }
+          return;
+        }
+
+        if (shouldPauseVideo) {
+          dropVideoTracksForCameraOff(
+            committedStream(),
+            mediaIntent.isCameraOn
+              ? "host-disabled camera publish intent"
+              : "camera-off publish intent",
+          );
+          if (mediaIntent.isCameraOn) {
+            setIsCameraOff(true);
+          }
+          if (publicationWarnings.length > 0) {
+            console.warn(
+              `[Meets] Continuing join without some local media: ${publicationWarnings.join(", ")}`
+            );
+          }
+          return;
+        }
+
+        const requestedVideoTrack = getVideoPublishTrack?.(committedStream()) ?? null;
+        let videoTrack =
+          requestedVideoTrack?.readyState === "live" ? requestedVideoTrack : null;
+        if (requestedVideoTrack && requestedVideoTrack.readyState !== "live") {
+          console.warn("[Meets] Ignoring ended requested video publish track:", {
+            requestedVideoTrack: summarizeTrackForLog(requestedVideoTrack),
+            stream: summarizeStreamForLog(committedStream()),
+          });
+          if (refs.processedVideoTrackRef.current?.id === requestedVideoTrack.id) {
+            refs.processedVideoTrackRef.current = null;
+          }
+        }
+        if (!videoTrack) {
+          videoTrack = getFirstLiveTrack(committedStream().getVideoTracks());
+        }
+        if (videoTrack) {
+          const quality = videoQualityRef.current;
+          const cameraPublishSettings = resolveEffectiveCameraPublishSettings(
+            mediaQualitySettingsRef.current.camera,
+            activeVideoEffectsCount > 0,
+          );
+          if ("contentHint" in videoTrack) {
+            videoTrack.contentHint = cameraPublishSettings.contentHint;
+          }
+          const preferredWebcamCodec = getPreferredWebcamCodec(
+            deviceRef.current,
+            webcamCodecPolicyRef.current,
+          );
+          try {
+            const videoProducer = await produceWebcamTrack({
+              transport,
+              track: videoTrack,
+              quality,
+              networkProfile: getPublishNetworkProfile(),
+              paused: shouldPauseVideo,
+              preferredCodec: preferredWebcamCodec,
+              codecPolicy: webcamCodecPolicyRef.current,
+              publishSettings: cameraPublishSettings,
+            });
+
+            if (!cameraWantedNow()) {
+              closeJoinVideoProducer(videoProducer, committedStream());
+              return;
+            }
+
+            if (!installProducer(videoProducerRef, null, videoProducer, discardJoinProducer)) return;
+            const videoProducerId = videoProducer.id;
+
+            videoProducer.on("transportclose", () => {
+              if (videoProducerRef.current?.id === videoProducerId) {
+                videoProducerRef.current = null;
+                if (!shouldPauseVideo) {
+                  requestCameraProducerRecovery();
+                }
+              }
+            });
+          } catch (err) {
+            const rawFallbackTrack =
+              requestedVideoTrack && videoTrack.id === requestedVideoTrack.id
+                ? getFirstLiveTrack(
+                    committedStream()
+                      .getVideoTracks()
+                      .filter((track) => track.id !== requestedVideoTrack.id),
+                  )
+                : null;
+
+            if (rawFallbackTrack) {
+              if ("contentHint" in rawFallbackTrack) {
+                rawFallbackTrack.contentHint = cameraPublishSettings.contentHint;
+              }
+              console.warn(
+                "[Meets] Processed camera publish failed; retrying raw camera:",
+                {
+                  error:
+                    err instanceof Error
+                      ? {
+                          name: err.name,
+                          message: err.message,
+                          stack: err.stack,
+                        }
+                      : err,
+                  processedTrack: summarizeTrackForLog(videoTrack),
+                  rawFallbackTrack: summarizeTrackForLog(rawFallbackTrack),
+                },
+              );
+              onPreferredVideoPublishTrackRejected?.(
+                videoTrack,
+                "join-raw-produce-fallback",
+              );
+              try {
+                const fallbackVideoProducer = await produceWebcamTrack({
+                  transport,
+                  track: rawFallbackTrack,
+                  quality,
+                  networkProfile: getPublishNetworkProfile(),
+                  paused: shouldPauseVideo,
+                  preferredCodec: preferredWebcamCodec,
+                  codecPolicy: webcamCodecPolicyRef.current,
+                  publishSettings: cameraPublishSettings,
+                });
+
+                if (!cameraWantedNow()) {
+                  closeJoinVideoProducer(fallbackVideoProducer, committedStream());
+                  return;
+                }
+
+                if (!installProducer(videoProducerRef, null, fallbackVideoProducer, discardJoinProducer)) return;
+                const fallbackVideoProducerId = fallbackVideoProducer.id;
+
+                fallbackVideoProducer.on("transportclose", () => {
+                  if (videoProducerRef.current?.id === fallbackVideoProducerId) {
+                    videoProducerRef.current = null;
+                    if (!shouldPauseVideo) {
+                      requestCameraProducerRecovery();
+                    }
+                  }
+                });
+                return;
+              } catch (fallbackErr) {
+                logCallError(
+                  "[Meets] Failed to produce raw fallback video",
+                  fallbackErr,
+                );
+                reportCurrentWebcamCodecFailure(fallbackErr);
+              }
+            } else {
+              logCallError("[Meets] Failed to produce video", err);
+              reportCurrentWebcamCodecFailure(err);
+            }
+
+            if (mediaIntent.isCameraOn && ownsCamera()) {
+              const liveVideoTrack = getFirstLiveTrack(committedStream().getVideoTracks());
+              if (liveVideoTrack && cameraWantedNow()) {
+                publicationWarnings.push("camera publish retry scheduled");
+                requestCameraProducerRecovery();
+              } else {
+                publicationWarnings.push("camera publish failed");
+                setIsCameraOff(true);
+              }
+            }
+          }
+        } else if (mediaIntent.isCameraOn) {
+          const endedVideoTracks = committedStream()
+            .getVideoTracks()
+            .filter((track) => track.readyState !== "live");
+          if (endedVideoTracks.length > 0) {
+            console.warn("[Meets] Skipping ended camera track(s):", {
+              stream: summarizeStreamForLog(committedStream()),
+              endedVideoTracks: endedVideoTracks.map(summarizeTrackForLog),
+            });
+            publicationWarnings.push("camera track ended");
+          } else {
+            publicationWarnings.push("camera track missing");
+          }
           setIsCameraOff(true);
         }
+
         if (publicationWarnings.length > 0) {
           console.warn(
             `[Meets] Continuing join without some local media: ${publicationWarnings.join(", ")}`
           );
         }
-        return;
-      }
-
-      const requestedVideoTrack = getVideoPublishTrack?.(stream) ?? null;
-      let videoTrack =
-        requestedVideoTrack?.readyState === "live" ? requestedVideoTrack : null;
-      if (requestedVideoTrack && requestedVideoTrack.readyState !== "live") {
-        console.warn("[Meets] Ignoring ended requested video publish track:", {
-          requestedVideoTrack: summarizeTrackForLog(requestedVideoTrack),
-          stream: summarizeStreamForLog(stream),
-        });
-        if (refs.processedVideoTrackRef.current?.id === requestedVideoTrack.id) {
-          refs.processedVideoTrackRef.current = null;
-        }
-      }
-      if (!videoTrack) {
-        videoTrack = getFirstLiveTrack(stream.getVideoTracks());
-      }
-      if (videoTrack) {
-        const quality = videoQualityRef.current;
-        const cameraPublishSettings = resolveEffectiveCameraPublishSettings(
-          mediaQualitySettingsRef.current.camera,
-          activeVideoEffectsCount > 0,
-        );
-        if ("contentHint" in videoTrack) {
-          videoTrack.contentHint = cameraPublishSettings.contentHint;
-        }
-        const preferredWebcamCodec = getPreferredWebcamCodec(
-          deviceRef.current,
-          webcamCodecPolicyRef.current,
-        );
-        try {
-          const videoProducer = await produceWebcamTrack({
-            transport,
-            track: videoTrack,
-            quality,
-            networkProfile: getPublishNetworkProfile(),
-            paused: shouldPauseVideo,
-            preferredCodec: preferredWebcamCodec,
-            codecPolicy: webcamCodecPolicyRef.current,
-            publishSettings: cameraPublishSettings,
-          });
-
-          if (shouldPauseVideo) {
-            videoProducer.pause();
-          }
-
-          videoProducerRef.current = videoProducer;
-          const videoProducerId = videoProducer.id;
-
-          videoProducer.on("transportclose", () => {
-            if (videoProducerRef.current?.id === videoProducerId) {
-              videoProducerRef.current = null;
-              if (!shouldPauseVideo) {
-                requestCameraProducerRecovery();
-              }
-            }
-          });
-        } catch (err) {
-          const rawFallbackTrack =
-            requestedVideoTrack && videoTrack.id === requestedVideoTrack.id
-              ? getFirstLiveTrack(
-                  stream
-                    .getVideoTracks()
-                    .filter((track) => track.id !== requestedVideoTrack.id),
-                )
-              : null;
-
-          if (rawFallbackTrack) {
-            if ("contentHint" in rawFallbackTrack) {
-              rawFallbackTrack.contentHint = cameraPublishSettings.contentHint;
-            }
-            console.warn(
-              "[Meets] Processed camera publish failed; retrying raw camera:",
-              {
-                error:
-                  err instanceof Error
-                    ? {
-                        name: err.name,
-                        message: err.message,
-                        stack: err.stack,
-                      }
-                    : err,
-                processedTrack: summarizeTrackForLog(videoTrack),
-                rawFallbackTrack: summarizeTrackForLog(rawFallbackTrack),
-              },
-            );
-            onPreferredVideoPublishTrackRejected?.(
-              videoTrack,
-              "join-raw-produce-fallback",
-            );
-            try {
-              const fallbackVideoProducer = await produceWebcamTrack({
-                transport,
-                track: rawFallbackTrack,
-                quality,
-                networkProfile: getPublishNetworkProfile(),
-                paused: shouldPauseVideo,
-                preferredCodec: preferredWebcamCodec,
-                codecPolicy: webcamCodecPolicyRef.current,
-                publishSettings: cameraPublishSettings,
-              });
-
-              if (shouldPauseVideo) {
-                fallbackVideoProducer.pause();
-              }
-
-              videoProducerRef.current = fallbackVideoProducer;
-              const fallbackVideoProducerId = fallbackVideoProducer.id;
-
-              fallbackVideoProducer.on("transportclose", () => {
-                if (videoProducerRef.current?.id === fallbackVideoProducerId) {
-                  videoProducerRef.current = null;
-                  if (!shouldPauseVideo) {
-                    requestCameraProducerRecovery();
-                  }
-                }
-              });
-              return;
-            } catch (fallbackErr) {
-              console.error(
-                "[Meets] Failed to produce raw fallback video:",
-                fallbackErr,
-              );
-              reportCurrentWebcamCodecFailure(fallbackErr);
-            }
-          } else {
-            console.error("[Meets] Failed to produce video:", err);
-            reportCurrentWebcamCodecFailure(err);
-          }
-
-          if (mediaIntent.isCameraOn) {
-            const liveVideoTrack = getFirstLiveTrack(stream.getVideoTracks());
-            if (liveVideoTrack) {
-              publicationWarnings.push("camera publish retry scheduled");
-              setIsCameraOff(false);
-              requestCameraProducerRecovery();
-            } else {
-              publicationWarnings.push("camera publish failed");
-              setIsCameraOff(true);
-            }
-          }
-        }
-      } else if (mediaIntent.isCameraOn) {
-        const endedVideoTracks = stream
-          .getVideoTracks()
-          .filter((track) => track.readyState !== "live");
-        if (endedVideoTracks.length > 0) {
-          console.warn("[Meets] Skipping ended camera track(s):", {
-            stream: summarizeStreamForLog(stream),
-            endedVideoTracks: endedVideoTracks.map(summarizeTrackForLog),
-          });
-          publicationWarnings.push("camera track ended");
-        } else {
-          publicationWarnings.push("camera track missing");
-        }
-        setIsCameraOff(true);
-      }
-
-      if (publicationWarnings.length > 0) {
-        console.warn(
-          `[Meets] Continuing join without some local media: ${publicationWarnings.join(", ")}`
-        );
-      }
+      });
     },
     [
       producerTransportRef,
@@ -4367,6 +4844,7 @@ export function useMeetSocket({
       requestAudioProducerRecovery,
       requestCameraProducerRecovery,
       reportCurrentWebcamCodecFailure,
+      runCameraTrackOperation,
       webcamCodecPolicyRef,
     ],
   );
@@ -4495,7 +4973,9 @@ export function useMeetSocket({
               screenShareVideoActive: knownScreenShareVideoActive,
             }),
           },
-          async (response: ConsumeResponse | { error: string }) => {
+          async (
+            response: ConsumeResponse | { error: string; code?: string },
+          ) => {
             if (!settleConsume()) {
               if (!("error" in response)) {
                 pendingConsumerTelemetryByIdRef.current.delete(response.id);
@@ -4513,8 +4993,14 @@ export function useMeetSocket({
             }
 
             if ("error" in response) {
-              console.error("[Meets] Consume error:", response.error);
-              queueFailureRetry(300);
+              logCallError("[Meets] Consume error", response.error);
+              if (isProducerGoneConsumeError(response)) {
+                producerSlotOrder.noteClosed(producerInfo.producerId);
+                handleProducerClosed(producerInfo.producerId);
+                void syncProducersRef.current();
+              } else {
+                queueFailureRetry(300);
+              }
               resolve();
               return;
             }
@@ -4790,7 +5276,7 @@ export function useMeetSocket({
                   }
                   void recoverStaleConsumerRef.current(
                     producerInfo,
-                    `${response.kind} consumer stayed muted`,
+                    "consumer_stayed_muted",
                   );
                 }, getStaleConsumerRecoveryDelayMs(producerInfo));
                 staleConsumerRecoveryTimeoutsRef.current.set(
@@ -5214,7 +5700,7 @@ export function useMeetSocket({
               } else {
                 void closeServerConsumer(response.id);
               }
-              console.error("[Meets] Failed to create consumer:", err);
+              logCallError("[Meets] Failed to create consumer", err);
               queueFailureRetry(350);
               resolve();
             }
@@ -5353,9 +5839,9 @@ export function useMeetSocket({
       }
 
       const consumer = consumersRef.current.get(producerId);
+      const consumerTelemetry = consumerTelemetryRef.current.get(producerId);
       const observedSpatialLayer =
-        consumerTelemetryRef.current.get(producerId)?.currentLayers
-          ?.spatialLayer ?? null;
+        consumerTelemetry?.currentLayers?.spatialLayer ?? null;
       state.observedSpatialLayer = observedSpatialLayer;
       const decision = decideWebcamStartupResetPoll({
         now: Date.now(),
@@ -5373,6 +5859,10 @@ export function useMeetSocket({
           adaptivelyPausedConsumerProducerIdsRef.current.has(producerId),
         observedSpatialLayer,
         maximumSpatialLayer: state.maximumSpatialLayer,
+        highestActiveSpatialLayer: getHighestActiveSpatialLayer(
+          consumerTelemetry?.score,
+          state.maximumSpatialLayer,
+        ),
       });
 
       if (decision.action === "queue") {
@@ -5516,9 +6006,9 @@ export function useMeetSocket({
         }
 
         const preflightConsumer = consumersRef.current.get(producerId);
+        const consumerTelemetry = consumerTelemetryRef.current.get(producerId);
         const observedSpatialLayer =
-          consumerTelemetryRef.current.get(producerId)?.currentLayers
-            ?.spatialLayer ?? null;
+          consumerTelemetry?.currentLayers?.spatialLayer ?? null;
         state.observedSpatialLayer = observedSpatialLayer;
         const preflight = decideWebcamStartupResetPoll({
           now: Date.now(),
@@ -5536,6 +6026,10 @@ export function useMeetSocket({
             adaptivelyPausedConsumerProducerIdsRef.current.has(producerId),
           observedSpatialLayer,
           maximumSpatialLayer: state.maximumSpatialLayer,
+          highestActiveSpatialLayer: getHighestActiveSpatialLayer(
+            consumerTelemetry?.score,
+            state.maximumSpatialLayer,
+          ),
         });
         if (
           preflight.action === "queue" ||
@@ -5737,8 +6231,9 @@ export function useMeetSocket({
           state.epoch === webcamStartupLatencyResetEpochRef.current &&
           webcamStartupLatencyResetStateRef.current.get(producerId) === state
         ) {
-          console.error(
-            `[Meets] Planned webcam consumer generation reset failed for ${producerId}:`,
+          logCallError(
+            "[Meets] Planned webcam consumer generation reset failed",
+            producerId,
             error,
           );
           if (state.attempt < WEBCAM_STARTUP_RESET_MAX_ATTEMPTS) {
@@ -5844,7 +6339,7 @@ export function useMeetSocket({
     scheduleWebcamStartupLatencyReset;
 
   const recoverStaleConsumer = useCallback(
-    async (producerInfo: ProducerInfo, reason: string) => {
+    async (producerInfo: ProducerInfo, reason: StaleConsumerReason) => {
       if (consumerRecoveryInFlightRef.current.has(producerInfo.producerId)) {
         return;
       }
@@ -5897,8 +6392,9 @@ export function useMeetSocket({
           });
         }
       } catch (error) {
-        console.error(
-          `[Meets] Failed to recover stale consumer ${producerInfo.producerId}:`,
+        logCallError(
+          "[Meets] Failed to recover stale consumer",
+          producerInfo.producerId,
           error,
         );
         telemetry.capture("meet_stale_consumer_recovery_failed", {
@@ -6020,7 +6516,7 @@ export function useMeetSocket({
                   type: info.type,
                   paused: false,
                 },
-                "decoder remained frozen after bounded keyframe requests",
+                "decoder_frozen",
               );
               return;
             }
@@ -6048,31 +6544,672 @@ export function useMeetSocket({
     videoFreezeStatsRef,
   ]);
 
-  const syncProducers = useCallback(async () => {
-    const socket = socketRef.current;
-    const device = deviceRef.current;
-    if (!socket || !socket.connected || !device) return;
-    if (!currentRoomIdRef.current) return;
+  // A transport can sit in "connecting", or stay connected while no media
+  // moves, without ever reporting a failure. Sample both transports and start
+  // the recovery a reported failure would get.
+  useEffect(() => {
+    // A direction's watch lasts as long as its transport, with the relay its
+    // last sample had selected. The note that its silence was logged as the
+    // senders' doing also clears once media moves.
+    const watched: Record<
+      "producer" | "consumer",
+      {
+        transport: Transport | null;
+        watch: MediaPathWatch;
+        relayBytes: Record<string, number> | null;
+        reportedRemoteSilence: boolean;
+        screen: ScreenShareWatch;
+      }
+    > = {
+      producer: {
+        transport: null,
+        watch: INITIAL_MEDIA_PATH_WATCH,
+        relayBytes: null,
+        reportedRemoteSilence: false,
+        screen: INITIAL_SCREEN_SHARE_WATCH,
+      },
+      consumer: {
+        transport: null,
+        watch: INITIAL_MEDIA_PATH_WATCH,
+        relayBytes: null,
+        reportedRemoteSilence: false,
+        screen: INITIAL_SCREEN_SHARE_WATCH,
+      },
+    };
+    // Transports seen carrying media. Connecting alone does not count: a path
+    // can pass ICE checks and drop every media packet.
+    const carriedMediaOnce = transportsCarryingMediaRef.current;
+    const noteDeliveryProof = (
+      kind: "producer" | "consumer",
+      transport: Transport,
+      evidence: PathEvidence,
+    ): boolean => {
+      const proven = pathCarriesWhatIsSent(
+        evidence,
+        mediaPathRecoveryRef.current[kind].failingStreams,
+      );
+      if (proven) carriedMediaOnce.add(transport);
+      return proven;
+    };
+    const sampling = { producer: false, consumer: false };
 
-    try {
-      const producers = await new Promise<ProducerInfo[]>((resolve, reject) => {
-        socket.emit(
-          "getProducers",
-          (response: { producers: ProducerInfo[] } | { error: string }) => {
-            if ("error" in response) {
-              reject(new Error(response.error));
-            } else {
-              resolve(response.producers || []);
-            }
-          },
+    const isSending = (producer: Producer | null): boolean =>
+      Boolean(
+        producer &&
+          !producer.closed &&
+          !producer.paused &&
+          producer.track?.readyState === "live" &&
+          producer.track.enabled &&
+          !producer.track.muted,
+      );
+    const consumedStreams = (): Array<{
+      producerId: string;
+      consumerId: string;
+      stream: ConsumedStream;
+    }> => {
+      const streams: Array<{
+        producerId: string;
+        consumerId: string;
+        stream: ConsumedStream;
+      }> = [];
+      for (const [producerId, consumer] of consumersRef.current) {
+        if (consumer.closed) continue;
+        streams.push({
+          producerId,
+          consumerId: consumer.id,
+          stream: describeConsumedStream({
+            kind: consumer.kind,
+            source:
+              producerMapRef.current.get(producerId)?.type === "screen"
+                ? "screen"
+                : "webcam",
+            consumerPaused: consumer.paused,
+            adaptivelyPaused:
+              adaptivelyPausedConsumerProducerIdsRef.current.has(producerId),
+            producerPausedHere:
+              producerPausedStateRef.current.get(producerId) === true,
+            server: consumerTelemetryRef.current.get(producerId),
+          }),
+        });
+      }
+      return streams;
+    };
+    const published = (): PublishedStream[] =>
+      (
+        [
+          ["audio", "webcam", audioProducerRef.current],
+          ["video", "webcam", videoProducerRef.current],
+          ["video", "screen", screenProducerRef.current],
+          ["audio", "screen", screenAudioProducerRef.current],
+        ] as const
+      ).map(([kind, source, producer]) => ({
+        kind,
+        source,
+        live: Boolean(producer && !producer.closed),
+        sending: isSending(producer),
+      }));
+    const sendingProducers = (): SendingProducer[] =>
+      (
+        [
+          ["mic", audioProducerRef.current],
+          ["camera", videoProducerRef.current],
+          ["screen", screenProducerRef.current],
+          ["screen-audio", screenAudioProducerRef.current],
+        ] as const
+      ).flatMap(([stream, producer]) =>
+        producer && isSending(producer)
+          ? [{ stream, producerId: producer.id, mid: producer.rtpParameters.mid ?? null }]
+          : [],
+      );
+    const expectation = (
+      kind: "producer" | "consumer",
+      connected: boolean,
+    ): { expectsMedia: boolean; framesOptional: boolean } =>
+      kind === "producer"
+        ? sendPathExpectation(published(), connected)
+        : {
+            expectsMedia:
+              receivePathExpectsMedia(
+                consumedStreams().map(({ stream }) => stream),
+                connected,
+              ) ||
+              (connected && screenPacketsGoMissing(watched.consumer.screen)),
+            framesOptional: false,
+          };
+
+    const screenSenderPackets = async (): Promise<SenderPacketsReading> => {
+      const request = senderPacketCountsRequestFor(
+        screenVideoAwaitingSenderCheck(consumedStreams(), true),
+      );
+      const socket = socketRef.current;
+      if (
+        !request ||
+        !socket?.connected ||
+        !senderPacketCountSocketsRef.current.has(socket)
+      ) {
+        return NOT_ASKED;
+      }
+      return new Promise<SenderPacketsReading>((resolve) => {
+        const reply = (sent: SenderPacketCounts | null) =>
+          resolve({ asked: true, ids: request.consumerIds, sent });
+        emitWithAckTimeout(
+          socket,
+          SENDER_PACKET_COUNT_TIMEOUT_MS,
+          () => reply(null),
+          "getSenderPacketCounts",
+          request,
+          (answer: unknown) => reply(readSenderPacketCounts(answer)),
         );
       });
+    };
+    const sentIn = (reading: SenderPacketsReading): SenderPacketCounts | null =>
+      reading.asked ? reading.sent : null;
+
+    const sfuReportsPackets = (): boolean => {
+      const socket = socketRef.current;
+      return Boolean(socket && senderPacketCountSocketsRef.current.has(socket));
+    };
+
+    const ownPackets = async (
+      producers: SendingProducer[] = sendingProducers(),
+    ): Promise<SenderPacketsReading> => {
+      const request = ownPacketCountsRequestFor(
+        producers.map(({ producerId }) => producerId),
+      );
+      const socket = socketRef.current;
+      if (
+        !request ||
+        !socket?.connected ||
+        !senderPacketCountSocketsRef.current.has(socket)
+      ) {
+        return NOT_ASKED;
+      }
+      return new Promise<SenderPacketsReading>((resolve) => {
+        const reply = (sent: SenderPacketCounts | null) =>
+          resolve({ asked: true, ids: request.producerIds, sent });
+        emitWithAckTimeout(
+          socket,
+          SENDER_PACKET_COUNT_TIMEOUT_MS,
+          () => reply(null),
+          "getOwnPacketCounts",
+          request,
+          (answer: unknown) => reply(readSenderPacketCounts(answer)),
+        );
+      });
+    };
+
+    const readPath = async (
+      kind: "producer" | "consumer",
+      transport: Transport,
+    ) => {
+      const stats = [
+        ...(await withDeadline(transport.getStats(), MEDIA_PATH_STATS_DEADLINE_MS)).values(),
+      ];
+      return {
+        stats,
+        reading: readMediaPath(stats, kind === "producer" ? "send" : "recv"),
+      };
+    };
+
+    const expectedConsumerProducerScores = (): Array<number | null> =>
+      consumedStreams()
+        .filter(({ stream }) => streamShouldFlow(stream))
+        .map(({ producerId }) =>
+          readProducerScore(consumerTelemetryRef.current.get(producerId)?.score),
+        );
+
+    // Restarts ICE on a path that says connected but carries nothing, and
+    // reports whether media moved again within the check window. A path that
+    // never carried media is not restarted; it goes straight to a rebuild.
+    const restartIceAndCheckMedia = async (
+      kind: "producer" | "consumer",
+      transport: Transport,
+    ): Promise<{ verdict: IceRestartVerdict; evidence: PathEvidence | null }> => {
+      const notRecovered = { verdict: "not-recovered", evidence: null } as const;
+      if (!carriedMediaOnce.has(transport)) return notRecovered;
+      try {
+        const before = (await readPath(kind, transport)).reading;
+        if (!(await attemptIceRestart(kind, transport))) return notRecovered;
+        const halfWindow = () =>
+          new Promise<void>((resolve) =>
+            window.setTimeout(resolve, MEDIA_PATH_FLOW_CHECK_MS / 2),
+          );
+        await halfWindow();
+        const sentBefore =
+          kind === "consumer" && !transport.closed
+            ? await screenSenderPackets()
+            : NOT_ASKED;
+        const ownBefore =
+          kind === "producer" && !transport.closed ? await ownPackets() : NOT_ASKED;
+        const midway =
+          kind === "producer" && !transport.closed
+            ? (await readPath(kind, transport)).reading
+            : null;
+        await halfWindow();
+        const current =
+          kind === "producer"
+            ? producerTransportRef.current
+            : consumerTransportRef.current;
+        const replaced = transport.closed || current !== transport;
+        const now = replaced
+          ? null
+          : expectation(kind, transport.connectionState === "connected");
+        const sentAfter =
+          now !== null && kind === "consumer"
+            ? await screenSenderPackets()
+            : NOT_ASKED;
+        const ownAfter =
+          now !== null && kind === "producer" ? await ownPackets() : NOT_ASKED;
+        const after = now !== null ? (await readPath(kind, transport)).reading : null;
+        const evidence: PathEvidence | null =
+          now === null || after === null
+            ? null
+            : kind === "consumer"
+              ? { received: rtpBytesMoved(before, after) > 0 }
+              : {
+                  sent:
+                    midway !== null
+                      ? judgeDeliveryWindow({
+                          start: midway,
+                          end: after,
+                          producers: sendingProducers(),
+                          sfuStart: sentIn(ownBefore),
+                          sfuEnd: sentIn(ownAfter),
+                          sfuReports: sfuReportsPackets(),
+                        })
+                      : {},
+                };
+        if (evidence) noteDeliveryProof(kind, transport, evidence);
+        const check =
+          evidence === null || now === null || after === null
+            ? "fails"
+            : checkPath({
+                evidence,
+                knownFailing: mediaPathRecoveryRef.current[kind].failingStreams,
+                showsLife: pathShowsLife(before, after, now.framesOptional),
+                carriedMedia: carriedMediaOnce.has(transport),
+              });
+        return {
+          verdict: judgeIceRestart({
+            replaced,
+            expectation:
+              check === "sends-nothing"
+                ? "not-expected"
+                : expectationAfterIceRestart({
+                    expectsMedia: now?.expectsMedia ?? false,
+                    senderBefore: sentBefore,
+                    senderAfter: sentAfter,
+                  }),
+            mediaReached: check === "carries",
+          }),
+          evidence,
+        };
+      } catch {
+        return notRecovered;
+      }
+    };
+
+    const sample = async (kind: "producer" | "consumer") => {
+      const transport =
+        kind === "producer"
+          ? producerTransportRef.current
+          : consumerTransportRef.current;
+      const entry = watched[kind];
+      if (
+        !transport ||
+        transport.closed ||
+        intentionalDisconnectRef.current ||
+        mediaPathRecoveryRef.current[kind].escalation !== null
+      ) {
+        entry.transport = transport ?? null;
+        entry.watch = INITIAL_MEDIA_PATH_WATCH;
+        entry.relayBytes = null;
+        entry.screen = INITIAL_SCREEN_SHARE_WATCH;
+        return;
+      }
+      // A new transport starts a fresh watch, and this sample already counts
+      // as its baseline, so media is verified one interval after a rebuild.
+      if (entry.transport !== transport) {
+        entry.transport = transport;
+        entry.watch = INITIAL_MEDIA_PATH_WATCH;
+        entry.reportedRemoteSilence = false;
+        entry.relayBytes = null;
+        entry.screen = INITIAL_SCREEN_SHARE_WATCH;
+      }
+
+      const generation = reconnectGenerationRef.current;
+      const sampled = () =>
+        entry.transport === transport &&
+        !transport.closed &&
+        transport ===
+          (kind === "producer"
+            ? producerTransportRef.current
+            : consumerTransportRef.current) &&
+        generation === reconnectGenerationRef.current &&
+        !intentionalDisconnectRef.current;
+      const connectedNow = transport.connectionState === "connected";
+      const sender =
+        kind === "consumer" && connectedNow ? await screenSenderPackets() : NOT_ASKED;
+      const own = kind === "producer" && connectedNow ? await ownPackets() : NOT_ASKED;
+      if (!sampled()) return;
+      let reading: MediaPathReading;
+      let relayBytes: Record<string, number>;
+      try {
+        const read = await readPath(kind, transport);
+        reading = read.reading;
+        relayBytes = readRelayPairBytes(read.stats, reading.direction);
+      } catch {
+        return;
+      }
+      if (!sampled()) return;
+      entry.screen =
+        transport.connectionState === "connected" && sender.asked
+          ? advanceScreenShareWatch(entry.screen, {
+              ...sender,
+              received: rtpBytesMoved(entry.watch.lastReading, reading) > 0,
+            })
+          : INITIAL_SCREEN_SHARE_WATCH;
+
+      const result = advanceMediaPathWatch(entry.watch, {
+        ...reading,
+        ...expectation(kind, transport.connectionState === "connected"),
+        at: Date.now(),
+        connectionState: transport.connectionState,
+        sending:
+          kind === "producer"
+            ? {
+                producers: sendingProducers(),
+                sfuCounts: sentIn(own),
+                sfuReports: sfuReportsPackets(),
+              }
+            : undefined,
+        knownFailing: mediaPathRecoveryRef.current[kind].failingStreams,
+      });
+      entry.watch = result.watch;
+      updateMediaPathRecovery({
+        type: "path-sampled",
+        direction: kind,
+        evidence: result.evidence,
+      });
+      const provenRelayUrl = relayProvenByMedia({
+        mediaBytes: result.rtpBytesMoved,
+        relayBytes,
+        previousRelayBytes: entry.relayBytes,
+      });
+      entry.relayBytes = relayBytes;
+      if (noteDeliveryProof(kind, transport, result.evidence)) {
+        entry.reportedRemoteSilence = false;
+        // Only a relay seen carrying media replaces the one that worked
+        // before; a newer relay that merely connected stays on probation.
+        const carrier = provenRelayUrl
+          ? relayCarryingUrl(
+              relayOffersRef.current.get(transport) ?? [],
+              provenRelayUrl,
+            )
+          : null;
+        if (carrier) {
+          runtimeIceServersRef.current = noteRelayCarryingMedia(
+            runtimeIceServersRef.current,
+            carrier,
+            Date.now(),
+          );
+        }
+      }
+      reconcileRelayPathsNow();
+      if (result.stalledForMs < MEDIA_PATH_STALL_MS || reconnectInFlightRef.current) return;
+
+      entry.watch = INITIAL_MEDIA_PATH_WATCH;
+      entry.screen = INITIAL_SCREEN_SHARE_WATCH;
+      const isSilentWhileConnected =
+        result.condition === "connected-without-media";
+      if (isSilentWhileConnected && kind === "consumer") {
+        void syncProducersRef.current();
+      }
+      const stalledSeconds = Math.round(result.stalledForMs / 1000);
+      if (
+        isSilentWhileConnected &&
+        planSilentPathStep({
+          direction: kind,
+          expectedProducerScores:
+            kind === "consumer" ? expectedConsumerProducerScores() : [],
+        }) === "remote-not-sending"
+      ) {
+        if (!entry.reportedRemoteSilence) {
+          entry.reportedRemoteSilence = true;
+          console.warn(
+            `[Meets] ${kind} transport has carried no media for ${stalledSeconds}s, and its senders report sending nothing.`,
+          );
+        }
+        return;
+      }
+      console.warn(
+        `[Meets] ${kind} transport has carried no media for ${stalledSeconds}s (${result.condition}).`,
+      );
+      telemetry.capture("meet_media_path_stalled", {
+        transport: kind,
+        condition: result.condition,
+      });
+      updateMediaPathRecovery({ type: "trouble", direction: kind });
+      if (isSilentWhileConnected) {
+        // ICE says connected but nothing arrives, so treat it as a failed
+        // path: restart ICE, and rebuild if media still does not move.
+        const { verdict, evidence } = await restartIceAndCheckMedia(kind, transport);
+        if (!sampled()) return;
+        if (evidence) {
+          updateMediaPathRecovery({ type: "path-sampled", direction: kind, evidence });
+        }
+        if (verdict !== "not-recovered") return;
+        escalateMediaPathFailure(kind, transport, {
+          reason:
+            kind === "producer"
+              ? "Producer transport carried no media"
+              : "Consumer transport carried no media",
+          silentWhileConnected: true,
+        });
+        return;
+      }
+      // An ICE restart can revive a path that carried media before. One that
+      // never did needs different candidates, so go straight to a rebuild.
+      const restarted =
+        carriedMediaOnce.has(transport) && (await attemptIceRestart(kind, transport));
+      if (restarted) {
+        if (kind === "consumer") void syncProducersRef.current();
+        return;
+      }
+      if (!sampled()) return;
+      escalateMediaPathFailure(kind, transport, {
+        reason:
+          kind === "producer"
+            ? "Producer transport could not connect"
+            : "Consumer transport could not connect",
+        silentWhileConnected: false,
+      });
+    };
+
+    carriesMediaNowRef.current = async (kind) => {
+      const transport =
+        kind === "producer" ? producerTransportRef.current : consumerTransportRef.current;
+      if (!transport || transport.closed || transport.connectionState !== "connected") {
+        return PATH_NOT_CARRYING;
+      }
+      const stillOn = () =>
+        !transport.closed &&
+        transport.connectionState === "connected" &&
+        transport ===
+          (kind === "producer" ? producerTransportRef.current : consumerTransportRef.current);
+      const probe = async (): Promise<PathProbeResult> => {
+        const sfuReports = kind === "producer" && sfuReportsPackets();
+        const [ownStart, start] = await Promise.all([
+          kind === "producer" ? ownPackets() : Promise.resolve(NOT_ASKED),
+          readPath(kind, transport).then(({ reading }) => reading),
+        ]);
+        if (sfuReports && sentIn(ownStart) === null) return PATH_NOT_CARRYING;
+        await new Promise<void>((resolve) =>
+          window.setTimeout(resolve, MEDIA_PATH_PROOF_INTERVAL_MS),
+        );
+        if (!stillOn()) return PATH_NOT_CARRYING;
+        const [ownEnd, end] = await Promise.all([
+          kind === "producer" ? ownPackets() : Promise.resolve(NOT_ASKED),
+          readPath(kind, transport).then(({ reading }) => reading),
+        ]);
+        if (!stillOn()) return PATH_NOT_CARRYING;
+        const evidence: PathEvidence =
+          kind === "consumer"
+            ? { received: rtpBytesMoved(start, end) > 0 }
+            : {
+                sent: judgeDeliveryWindow({
+                  start,
+                  end,
+                  producers: sendingProducers(),
+                  sfuStart: sentIn(ownStart),
+                  sfuEnd: sentIn(ownEnd),
+                  sfuReports,
+                }),
+              };
+        noteDeliveryProof(kind, transport, evidence);
+        const check = checkPath({
+          evidence,
+          knownFailing: mediaPathRecoveryRef.current[kind].failingStreams,
+          showsLife: pathShowsLife(start, end, expectation(kind, true).framesOptional),
+          carriedMedia: carriedMediaOnce.has(transport),
+        });
+        return {
+          probe:
+            check === "carries"
+              ? "carrying"
+              : check === "sends-nothing"
+                ? "sending-nothing"
+                : "not-carrying",
+          evidence,
+        };
+      };
+      let cancel = () => {};
+      const cancelled = new Promise<PathProbeResult>((resolve) => {
+        cancel = () => resolve({ probe: "cancelled", evidence: null });
+      });
+      cancelPathProbeRef.current = cancel;
+      try {
+        const deadline = MEDIA_PATH_PROOF_INTERVAL_MS + 2 * MEDIA_PATH_PROOF_SAMPLE_DEADLINE_MS;
+        return await Promise.race([
+          withDeadline(probe(), deadline).catch(() => PATH_NOT_CARRYING),
+          cancelled,
+        ]);
+      } finally {
+        if (cancelPathProbeRef.current === cancel) cancelPathProbeRef.current = null;
+      }
+    };
+
+    readCarriedMediaRef.current = async (kind, transport) => {
+      if (carriedMediaOnce.has(transport)) return "carried";
+      try {
+        const producers = kind === "producer" ? sendingProducers() : [];
+        const sfuReports = kind === "producer" && sfuReportsPackets();
+        const [own, { reading }] = await Promise.all([
+          kind === "producer" ? ownPackets(producers) : Promise.resolve(NOT_ASKED),
+          readPath(kind, transport),
+        ]);
+        const sfuCounts = sentIn(own);
+        if (
+          sfuReports &&
+          producers.some(({ producerId }) => sfuCounts?.[producerId] === undefined)
+        ) {
+          return "unread";
+        }
+        if (
+          !hasCarriedMedia(
+            reading,
+            { producers, sfuCounts, sfuReports },
+            mediaPathRecoveryRef.current[kind].failingStreams,
+          )
+        ) {
+          return "not-carried";
+        }
+        carriedMediaOnce.add(transport);
+        return "carried";
+      } catch {
+        return "unread";
+      }
+    };
+
+    const interval = window.setInterval(() => {
+      for (const kind of ["producer", "consumer"] as const) {
+        if (sampling[kind]) continue;
+        sampling[kind] = true;
+        void sample(kind).finally(() => {
+          sampling[kind] = false;
+        });
+      }
+    }, MEDIA_PATH_SAMPLE_INTERVAL_MS);
+
+    return () => window.clearInterval(interval);
+  }, [
+    attemptIceRestart,
+    reconcileRelayPathsNow,
+    audioProducerRef,
+    consumerTelemetryRef,
+    consumerTransportRef,
+    consumersRef,
+    updateMediaPathRecovery,
+    currentRoomIdRef,
+    escalateMediaPathFailure,
+    intentionalDisconnectRef,
+    producerPausedStateRef,
+    producerTransportRef,
+    reconnectInFlightRef,
+    screenAudioProducerRef,
+    screenProducerRef,
+    socketRef,
+    videoProducerRef,
+  ]);
+
+  const runProducerSync = useCallback(async (): Promise<ProducerSyncResult> => {
+    const socket = socketRef.current;
+    const device = deviceRef.current;
+    if (!socket || !socket.connected || !device) {
+      return { listed: false, reason: "signaling is not connected" };
+    }
+    if (!currentRoomIdRef.current) {
+      return { listed: false, reason: "not in a room" };
+    }
+
+    try {
+      const listRequestedAt = producerSlotOrder.markListRequested();
+      const producers = await new Promise<ProducerInfo[] | null>(
+        (resolve, reject) => {
+          emitWithAckTimeout(
+            socket,
+            ACK_REQUEST_TIMEOUT_MS,
+            () => resolve(null),
+            "getProducers",
+            (response: { producers: ProducerInfo[] } | { error: string }) => {
+              if ("error" in response) {
+                reject(new ServerError(response.error));
+              } else {
+                const listedProducers = response.producers || [];
+                noteRemoteProducerList(listedProducers, listRequestedAt);
+                resolve(listedProducers);
+              }
+            },
+          );
+        },
+      );
+      if (!producers) {
+        return {
+          listed: false,
+          reason: "signaling dropped before the producer list arrived",
+        };
+      }
 
       const serverProducerIds = new Set(
         producers.map((producer) => producer.producerId),
       );
+      // The list may predate a producer announced while it was in flight, so
+      // leaving that producer out says nothing about it.
+      const isGoneFromServer = (producerId: string): boolean =>
+        !serverProducerIds.has(producerId) &&
+        !producerSlotOrder.wasAnnouncedAfter(producerId, listRequestedAt);
       for (const producerId of announcedRemoteProducersRef.current.keys()) {
-        if (!serverProducerIds.has(producerId)) {
+        if (isGoneFromServer(producerId)) {
           announcedRemoteProducersRef.current.delete(producerId);
         }
       }
@@ -6102,14 +7239,15 @@ export function useMeetSocket({
             continue;
           }
         }
-        if (producerInfo.producerUserId !== userId) {
-          noteAnnouncedProducer(producerInfo);
-        }
         setProducerPausedState(
           producerInfo.producerId,
           Boolean(producerInfo.paused),
         );
-        if (producerInfo.type !== "webcam") continue;
+        // Only the producer that owns the slot speaks for the participant: a
+        // stale list can still carry the paused producer it replaced.
+        if (producerInfo.type !== "webcam" || isSupersededProducer(producerInfo)) {
+          continue;
+        }
         if (producerInfo.kind === "audio") {
           dispatchParticipants({
             type: "UPDATE_MUTED",
@@ -6126,7 +7264,7 @@ export function useMeetSocket({
       }
 
       for (const producerId of producerMapRef.current.keys()) {
-        if (!serverProducerIds.has(producerId)) {
+        if (isGoneFromServer(producerId)) {
           handleProducerClosed(producerId);
         }
       }
@@ -6165,7 +7303,7 @@ export function useMeetSocket({
             ) {
               void recoverStaleConsumerRef.current(
                 producerInfo,
-                "producer sync observed muted live track",
+                "muted_live_track",
               );
             }
             continue;
@@ -6205,17 +7343,20 @@ export function useMeetSocket({
           producersToConsume,
           countWebcamVideoProducerEntries(producerMapRef.current),
         );
-        await Promise.all(
-          producersToConsume.map((producerInfo) =>
-            consumeProducer(producerInfo, {
-              knownScreenShareVideoActive: snapshotHasScreenShareVideo,
-              webcamVideoStartupRank: webcamVideoStartupRanks.get(
-                producerInfo.producerId,
-              ),
-            }),
-          ),
-        );
+        // Syncs are serialized, so they must not wait on negotiation: a
+        // consume cut off by its transport closing never settles.
+        for (const producerInfo of producersToConsume) {
+          consumeProducer(producerInfo, {
+            knownScreenShareVideoActive: snapshotHasScreenShareVideo,
+            webcamVideoStartupRank: webcamVideoStartupRanks.get(
+              producerInfo.producerId,
+            ),
+          }).catch((err) => {
+            logCallError("[Meets] Failed to sync producers", err);
+          });
+        }
       }
+      return { listed: true, producers };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err ?? "");
       if (/not in a room/i.test(message)) {
@@ -6224,9 +7365,10 @@ export function useMeetSocket({
           socketConnected: socketRef.current?.connected ?? false,
           error: message,
         });
-        return;
+        return { listed: false, reason: message };
       }
-      console.error("[Meets] Failed to sync producers:", err);
+      logCallError("[Meets] Failed to sync producers", err);
+      return { listed: false, reason: message || "producer sync failed" };
     }
   }, [
     socketRef,
@@ -6240,7 +7382,8 @@ export function useMeetSocket({
     dropDepartedProducer,
     handleProducerClosed,
     joinMode,
-    noteAnnouncedProducer,
+    noteRemoteProducerList,
+    producerSlotOrder,
     restoreWebinarFeedParticipant,
     resumeConsumerReliably,
     setProducerPausedState,
@@ -6252,6 +7395,11 @@ export function useMeetSocket({
     videoFreezeStatsRef,
     announcedRemoteProducersRef,
   ]);
+  const syncProducers = useCallback(
+    () => coalesceProducerSync(runProducerSync),
+    [coalesceProducerSync, runProducerSync],
+  );
+  syncProducersRef.current = syncProducers;
 
   const applyDisplayNameSnapshot = useCallback(
     (users: DisplayNameSnapshotEntry[] = []) => {
@@ -6366,6 +7514,9 @@ export function useMeetSocket({
         }
         return !isDeparted;
       });
+      for (const producer of activeProducers) {
+        producerSlotOrder.noteAnnounced(producer);
+      }
       const serverProducerIds = new Set(
         activeProducers.map((producer) => producer.producerId),
       );
@@ -6405,6 +7556,7 @@ export function useMeetSocket({
       handleProducerClosed,
       pendingProducersRef,
       producerMapRef,
+      producerSlotOrder,
       restoreWebinarFeedParticipant,
       shouldIgnoreDepartedParticipant,
     ],
@@ -6473,11 +7625,28 @@ export function useMeetSocket({
         console.info(`[Meets] ${reason} recovery restarting ICE.`, {
           transports: disconnectedTransportKinds,
         });
+        const currentTransport = (kind: "producer" | "consumer") =>
+          kind === "producer"
+            ? producerTransportRef.current
+            : consumerTransportRef.current;
+        const generation = reconnectGenerationRef.current;
+        const restartedTransports = disconnectedTransportKinds.flatMap((direction) => {
+          const transport = currentTransport(direction);
+          return transport ? [{ direction, transport }] : [];
+        });
         void Promise.all(
-          disconnectedTransportKinds.map((kind) => attemptIceRestart(kind)),
+          restartedTransports.map(({ direction, transport }) => attemptIceRestart(direction, transport)),
         ).then((results) => {
-          if (intentionalDisconnectRef.current) return;
-          if (results.every(Boolean)) {
+          if (intentionalDisconnectRef.current || generation !== reconnectGenerationRef.current) return;
+          // A transport replaced on purpose while its restart was checked
+          // says nothing about the path in use now.
+          const failedPaths = restartedTransports.flatMap(
+            ({ direction, transport }, index) =>
+              !results[index] && transport === currentTransport(direction) && !transport.closed
+                ? [{ direction, transportId: transport.id, generation }]
+                : [],
+          );
+          if (failedPaths.length === 0) {
             void syncProducers()
               .then(() => flushPendingProducers())
               .catch((error) => {
@@ -6488,7 +7657,10 @@ export function useMeetSocket({
               });
             return;
           }
-          void handleReconnectRef.current?.();
+          void handleReconnectRef.current?.({
+            refreshIceServers: true,
+            failedPath: failedPaths.length === 1 ? failedPaths[0] : undefined,
+          });
         });
         return;
       }
@@ -6505,7 +7677,6 @@ export function useMeetSocket({
       flushPendingProducers,
       handleReconnectRef,
       attemptIceRestart,
-      iceRestartInFlightRef,
       intentionalDisconnectRef,
       producerTransportRef,
       socketRef,
@@ -6576,14 +7747,18 @@ export function useMeetSocket({
         webinarInviteCode?: string;
         meetingInviteCode?: string;
       },
-    ): Promise<"joined" | "waiting"> => {
+    ): Promise<"joined" | "waiting" | "overtaken"> => {
       const socket = socketRef.current;
       if (!socket) throw new Error("Socket not connected");
+      // A newer join this tab begins while this one waits makes this one
+      // settle as "overtaken": its answer and its setup never apply.
+      const request = beginJoinRequest(newestJoinRequestRef);
       const assertJoinCurrent = () => {
         if (
           intentionalDisconnectRef.current ||
           socketRef.current !== socket ||
-          !socket.connected
+          !socket.connected ||
+          !request.isNewest()
         ) {
           throw new Error("Meeting join was cancelled");
         }
@@ -6602,11 +7777,14 @@ export function useMeetSocket({
         },
       );
 
+      if (!request.isNewest()) return "overtaken";
       assertJoinCurrent();
       setWaitingMessage(null);
       setConnectionState("joining");
 
-      return new Promise<"joined" | "waiting">((resolve, reject) => {
+      const joinRequestedAt = producerSlotOrder.markListRequested();
+      return new Promise<"joined" | "waiting" | "overtaken">((settle, fail) => {
+        const { resolve, reject } = request.settleWith<"joined" | "waiting">(settle, fail);
         const settleJoinRoom = startSocketAckTimeout(
           "joinRoom",
           reject,
@@ -6621,6 +7799,8 @@ export function useMeetSocket({
             webinarInviteCode: joinOptions.webinarInviteCode,
             meetingInviteCode: joinOptions.meetingInviteCode,
             mediaCapabilities,
+            roomRecoveryPass:
+              getJoinedRoom(targetRoomId)?.recoveryPass ?? undefined,
           },
           async (response: JoinRoomResponse | JoinRoomErrorResponse) => {
             if (!settleJoinRoom()) return;
@@ -6631,11 +7811,16 @@ export function useMeetSocket({
               return;
             }
             if ("error" in response) {
-              reject(getJoinRoomRedirectError(response) ?? new Error(response.error));
+              reject(getJoinRoomRedirectError(response) ?? new ServerError(response.error));
               return;
             }
 
             departedParticipantIdsRef.current.clear();
+            if (joinAnswerReportsSenderPacketCounts(response)) {
+              senderPacketCountSocketsRef.current.add(socket);
+            } else {
+              senderPacketCountSocketsRef.current.delete(socket);
+            }
 
             webcamCodecPolicyRef.current =
               normalizeWebcamCodecPolicy(response.webcamCodecPolicy) ?? {
@@ -6701,10 +7886,22 @@ export function useMeetSocket({
 
             try {
               const joinedTime = performance.now();
+              setAdmittedAt(joinedTime);
               console.info(
                 "[Meets] Joined room, existing producers:",
                 response.existingProducers,
               );
+              // The snapshot is ordered against live producer events by when
+              // it arrived, so note it before anything here awaits.
+              noteRemoteProducerList(
+                response.existingProducers,
+                joinRequestedAt,
+              );
+              // Only being let into a meeting counts: a tab that was left
+              // knocking must not reopen the room or skip the knock later.
+              if (joinOptions.joinMode === "meeting") {
+                rememberJoinedRoom(targetRoomId, response.roomRecoveryPass);
+              }
               currentRoomIdRef.current = targetRoomId;
               serverRoomIdRef.current = response.roomId ?? targetRoomId;
               setIsRoomLocked(response.isLocked ?? false);
@@ -6851,11 +8048,6 @@ export function useMeetSocket({
                     })
                   : Promise.resolve();
 
-              for (const producer of response.existingProducers) {
-                if (producer.producerUserId !== userId) {
-                  noteAnnouncedProducer(producer);
-                }
-              }
               const snapshotHasScreenShareVideo =
                 response.existingProducers.some(
                   (producer) =>
@@ -6897,6 +8089,7 @@ export function useMeetSocket({
               assertJoinCurrent();
 
               setConnectionState("joined");
+              skipMutedMicWarmupRef.current = false;
               setHostUserId(response.hostUserId ?? null);
               setHostUserIds(
                 response.hostUserIds ??
@@ -6917,6 +8110,7 @@ export function useMeetSocket({
       socketRef,
       intentionalDisconnectRef,
       sessionIdRef,
+      skipMutedMicWarmupRef,
       applyWebcamCodecPolicyNotification,
       setWaitingMessage,
       setConnectionState,
@@ -6953,10 +8147,83 @@ export function useMeetSocket({
     ],
   );
 
+  const applyJoinAnswerIceServers = useCallback((answer: JoinInfo) => {
+    if (!Array.isArray(answer.iceServers)) return;
+    runtimeIceServersRef.current = applyJoinAnswerToIceServers(
+      runtimeIceServersRef.current,
+      answer,
+      Date.now(),
+    );
+  }, []);
+
+  // Fetches a fresh join answer for its ICE servers while the socket stays
+  // connected, so the user keeps their place in the room instead of going
+  // back through the room's entry checks.
+  const refreshIceServersOnOpenSocket = useCallback(
+    async (roomId: string) => {
+      const generation = reconnectGenerationRef.current;
+      const request = new AbortController();
+      joinInfoRequestRef.current = request;
+      try {
+        const joinInfo = await getJoinInfo(roomId, sessionIdRef.current, {
+          user,
+          isHost: isAdmin,
+          joinMode,
+          signal: request.signal,
+        });
+        if (
+          generation !== reconnectGenerationRef.current ||
+          intentionalDisconnectRef.current
+        ) {
+          return;
+        }
+        if (keepsJoinIdentity(heldJoinInfoRef.current, joinInfo)) {
+          heldJoinInfoRef.current = holdJoinInfo(joinInfo, {
+            roomId,
+            grant: { joinMode, userId: user?.id ?? "", isHost: isAdmin },
+            receivedAt: Date.now(),
+          });
+        } else {
+          console.warn(
+            "[Meets] A credential refresh answered for another identity; reconnects keep the seat's join answer.",
+          );
+        }
+        applyJoinAnswerIceServers(joinInfo);
+      } catch (error) {
+        console.warn(
+          "[Meets] Could not refresh ICE servers; keeping the current ones:",
+          error,
+        );
+      }
+    },
+    [
+      applyJoinAnswerIceServers,
+      getJoinInfo,
+      intentionalDisconnectRef,
+      isAdmin,
+      joinMode,
+      sessionIdRef,
+      user,
+    ],
+  );
+
+  useEffect(() => {
+    refreshIceServersRef.current = refreshIceServersOnOpenSocket;
+  }, [refreshIceServersOnOpenSocket]);
+
+  const identityRestartJoinInfoRef = useRef<{
+    roomId: string;
+    joinInfo: JoinInfo;
+    fetchedAt: number;
+  } | null>(null);
   const connectSocket = useCallback(
     (
       targetRoomId: string,
-      options?: { sfuUrlOverride?: string },
+      options?: {
+        sfuUrlOverride?: string;
+        /** Set by a reconnect. The first join always asks the join route. */
+        reconnectJoinInfo?: "held-first" | "fresh-first";
+      },
     ): Promise<Socket> => {
       const connectionGeneration = reconnectGenerationRef.current;
       return new Promise((resolve, reject) => {
@@ -6965,20 +8232,23 @@ export function useMeetSocket({
             const sfuUrlOverride = normalizeJoinRedirectUrl(
               options?.sfuUrlOverride,
             );
-            if (socketRef.current?.connected && !sfuUrlOverride) {
+            const roomIdForJoin =
+              targetRoomId || currentRoomIdRef.current || "";
+            // A live socket is reused only for the room its token was issued
+            // for. Another room needs another token, and with it the identity
+            // that token names.
+            if (
+              socketRef.current?.connected &&
+              !sfuUrlOverride &&
+              (!roomIdForJoin || socketRoomIdRef.current === roomIdForJoin)
+            ) {
               resolve(socketRef.current);
               return;
             }
-            if (socketRef.current) {
-              socketRef.current.disconnect();
-              socketRef.current = null;
-              onSocketReady?.(null);
-            }
+            if (socketRef.current) retireSocket(socketRef, onSocketReady);
 
             setConnectionState("connecting");
 
-            const roomIdForJoin =
-              targetRoomId || currentRoomIdRef.current || "";
             if (!roomIdForJoin) {
               throw new Error("Missing room ID");
             }
@@ -6989,36 +8259,93 @@ export function useMeetSocket({
               ? Promise.resolve({ io: prewarm.io })
               : import("socket.io-client");
 
-            const cachedToken = prewarm?.getCachedToken?.(roomIdForJoin);
+            const identityRestart = identityRestartJoinInfoRef.current;
+            identityRestartJoinInfoRef.current = null;
+            const cachedToken = options?.reconnectJoinInfo
+              ? null
+              : identityRestart?.roomId === roomIdForJoin &&
+                  Date.now() - identityRestart.fetchedAt < HELD_JOIN_INFO_TTL_MS
+                ? identityRestart.joinInfo
+                : prewarm?.getCachedToken?.(roomIdForJoin);
+            const joinInfoGrant: JoinGrant = {
+              joinMode,
+              userId: user?.id ?? "",
+              isHost: isAdmin,
+            };
+            const joinInfoPlan = planJoinInfo({
+              held: options?.reconnectJoinInfo ? heldJoinInfoRef.current : null,
+              roomId: roomIdForJoin,
+              grant: joinInfoGrant,
+              now: Date.now(),
+              isFirstReconnectAttempt:
+                options?.reconnectJoinInfo === "held-first",
+            });
+            lastJoinInfoSourceRef.current =
+              !cachedToken && joinInfoPlan.source === "held" ? "held" : "fresh";
+            // A leave aborts this request; see cleanup().
+            const joinInfoRequest = new AbortController();
+            joinInfoRequestRef.current = joinInfoRequest;
             const tokenPromise = cachedToken
               ? Promise.resolve(cachedToken)
+              : joinInfoPlan.source === "held"
+                ? Promise.resolve(joinInfoPlan.joinInfo)
                 : getJoinInfo(roomIdForJoin, sessionIdRef.current, {
                     user,
                     isHost: isAdmin,
                     joinMode,
+                    signal: joinInfoRequest.signal,
+                  }).catch((error: unknown) => {
+                    if (
+                      !joinInfoPlan.fallback ||
+                      getReconnectFailureKind(error) !== "transient"
+                    ) {
+                      throw error;
+                    }
+                    console.warn(
+                      "[Meets] Join route unreachable; reconnecting with the held SFU token:",
+                      error,
+                    );
+                    lastJoinInfoSourceRef.current = "held";
+                    return joinInfoPlan.fallback;
                   });
 
-            const [{ token, sfuUrl, iceServers }, { io }] = await Promise.all([
+            const [joinInfo, { io }] = await Promise.all([
               tokenPromise,
               socketIoPromise,
             ]);
+            const { token, sfuUrl } = joinInfo;
+            // An answer that arrives after a leave or a newer join belongs to
+            // a connection nobody wants now, so it must not touch any state.
             if (
               connectionGeneration !== reconnectGenerationRef.current ||
               intentionalDisconnectRef.current
             ) {
               throw new Error("Meeting connection was cancelled");
             }
+            // Only a fresh answer is held, so reusing one never extends its
+            // lifetime or relabels what it was issued for.
+            if (lastJoinInfoSourceRef.current === "fresh") {
+              heldJoinInfoRef.current = holdJoinInfo(joinInfo, {
+                roomId: roomIdForJoin,
+                grant: joinInfoGrant,
+                receivedAt: Date.now(),
+              });
+            }
             const socketUrl = sfuUrlOverride ?? sfuUrl;
 
-            if (Array.isArray(iceServers)) {
-              const { stunIceServers, turnIceServers } =
-                splitIceServersByType(iceServers);
-              runtimeStunIceServersRef.current =
-                stunIceServers.length > 0 ? stunIceServers : null;
-              runtimeTurnIceServersRef.current =
-                turnIceServers.length > 0 ? turnIceServers : null;
+            applyJoinAnswerIceServers(joinInfo);
+
+            if (adoptJoinIdentity?.(token, roomIdForJoin)) {
+              identityRestartJoinInfoRef.current = {
+                roomId: roomIdForJoin,
+                joinInfo,
+                fetchedAt: Date.now(),
+              };
+              identityRestartRoomIdRef.current = roomIdForJoin;
+              throw new JoinIdentityChangedError();
             }
 
+            socketRoomIdRef.current = roomIdForJoin;
             const socket = io(socketUrl, {
               transports: ["websocket", "polling"],
               tryAllTransports: true,
@@ -7029,8 +8356,20 @@ export function useMeetSocket({
 
             const connectionTimeout = setTimeout(() => {
               socket.disconnect();
-              reject(new Error("Connection timeout"));
+              reject(new MeetFailure("Connection timeout", "timeout"));
             }, SOCKET_CONNECT_TIMEOUT_MS);
+            type SocketListener = Parameters<typeof socket.on>[1];
+            const onLive = ((event: Parameters<typeof socket.on>[0], handler: SocketListener) =>
+              socket.on(event, (...args: unknown[]) => {
+                if (socketRef.current !== socket || intentionalDisconnectRef.current) return;
+                handler.apply(socket, args);
+              })) as typeof socket.on;
+            const takeWebinarQaList = (
+              update: React.SetStateAction<WebinarQaEntry[] | null>,
+            ) => {
+              setWebinarQaEntries(update);
+              setWebinarQaListFromThisConnection(true);
+            };
 
             socket.on("connect", () => {
               clearTimeout(connectionTimeout);
@@ -7049,7 +8388,6 @@ export function useMeetSocket({
               setMeetError(null);
               serverRestartNoticeRef.current = null;
               setServerRestartNotice(null);
-              reconnectAttemptsRef.current = 0;
               intentionalDisconnectRef.current = false;
               resolve(socket);
             });
@@ -7057,6 +8395,9 @@ export function useMeetSocket({
             socket.on("disconnect", (reason) => {
               console.info("[Meets] Disconnected:", reason);
               if (socketRef.current !== socket) return;
+              cancelPathProbeRef.current?.();
+              setWebinarQaEntries(null);
+              setWebinarQaListFromThisConnection(false);
               if (intentionalDisconnectRef.current) {
                 setConnectionState("disconnected");
                 return;
@@ -7082,8 +8423,9 @@ export function useMeetSocket({
               }
             });
 
-            socket.on("roomClosed", ({ reason }: { reason: string }) => {
+            onLive("roomClosed", ({ reason }: { reason: string }) => {
               console.info("[Meets] Room closed:", reason);
+              forgetJoinedRoom();
               setMeetError({
                 code: "UNKNOWN",
                 message: `Room closed: ${reason}`,
@@ -7093,7 +8435,7 @@ export function useMeetSocket({
               cleanup();
             });
 
-            socket.on(
+            onLive(
               "roomEnded",
               ({
                 message,
@@ -7108,10 +8450,17 @@ export function useMeetSocket({
                   return;
                 }
 
+                forgetJoinedRoom();
                 setMeetError(null);
-                setMeetingEndedNotice?.(resolveRoomEndedNoticeMessage(message));
                 setWaitingMessage(null);
                 cleanup();
+                const shownAsEndScreen = onCallEnded?.({
+                  kind: "endedByHost",
+                  detail: customServerText(message, DEFAULT_ROOM_ENDED_MESSAGE),
+                });
+                if (!shownAsEndScreen) {
+                  setSetupNotice?.(endedNotice(resolveRoomEndedNoticeMessage(message)));
+                }
               },
             );
 
@@ -7124,7 +8473,7 @@ export function useMeetSocket({
                 reject(err);
                 return;
               }
-              console.error("[Meets] Connection error:", err);
+              logCallError("[Meets] Connection error", err);
               const reconnectFailure = describeReconnectFailure(err);
               setMeetError({
                 code: "CONNECTION_FAILED",
@@ -7135,7 +8484,7 @@ export function useMeetSocket({
               reject(err);
             });
 
-            socket.on(
+            onLive(
               "hostAssigned",
               ({
                 roomId: eventRoomId,
@@ -7156,7 +8505,24 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
+              "hostRemoved",
+              ({
+                roomId: eventRoomId,
+                hostUserId,
+              }: {
+                roomId?: string;
+                hostUserId?: string | null;
+              }) => {
+                if (!isRoomEvent(eventRoomId)) return;
+                setIsAdmin(false);
+                setHostUserId(hostUserId ?? null);
+                setHostUserIds((prev) => prev.filter((id) => id !== userId));
+                setPendingUsers(new Map());
+              },
+            );
+
+            onLive(
               "serverRestarting",
               (notification: ServerRestartNotification) => {
                 if (!isRoomEvent(notification?.roomId)) return;
@@ -7167,7 +8533,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on("adminNotice", (notification: AdminNoticeNotification) => {
+            onLive("adminNotice", (notification: AdminNoticeNotification) => {
               if (!isRoomEvent(notification?.roomId)) return;
               const message = notification?.message?.trim();
               if (!message) return;
@@ -7192,12 +8558,11 @@ export function useMeetSocket({
               }, ADMIN_NOTICE_DURATION_MS);
 
               telemetry.capture("meet_admin_notice_received", {
-                roomId: notification.roomId,
                 level,
               });
             });
 
-            socket.on(
+            onLive(
               "consumerTelemetry",
               (notification: ConsumerTelemetryPayload) => {
                 if (!isRoomEvent(notification?.roomId)) return;
@@ -7261,7 +8626,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "consumerAutoResumed",
               (notification: {
                 roomId?: string;
@@ -7286,7 +8651,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "hostChanged",
               ({
                 roomId: eventRoomId,
@@ -7300,7 +8665,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "adminUsersChanged",
               ({
                 roomId: eventRoomId,
@@ -7310,11 +8675,13 @@ export function useMeetSocket({
                 hostUserIds?: string[];
               }) => {
                 if (!isRoomEvent(eventRoomId)) return;
-                setHostUserIds(Array.isArray(hostUserIds) ? hostUserIds : []);
+                const nextHostUserIds = Array.isArray(hostUserIds) ? hostUserIds : [];
+                setHostUserIds(nextHostUserIds);
+                if (!nextHostUserIds.includes(userId)) setIsAdmin(false);
               },
             );
 
-            socket.on(
+            onLive(
               "activeSpeakerChanged",
               (notification: ActiveSpeakerChangedNotification) => {
                 if (!isRoomEvent(notification?.roomId)) return;
@@ -7334,7 +8701,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "webcamCodecPolicyChanged",
               (
                 policy: WebcamCodecPolicy & { roomId?: string },
@@ -7343,7 +8710,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on("newProducer", async (data: ProducerInfo) => {
+            onLive("newProducer", async (data: ProducerInfo) => {
               console.info("[Meets] New producer:", data);
               if (shouldIgnoreDepartedParticipant(data.producerUserId)) {
                 dropDepartedProducer(data);
@@ -7353,7 +8720,7 @@ export function useMeetSocket({
               if (data.producerUserId === userId) {
                 return;
               }
-              noteAnnouncedProducer(data);
+              producerSlotOrder.noteAnnounced(data);
               if (joinMode === "webinar_attendee") {
                 void syncProducers();
                 return;
@@ -7362,7 +8729,7 @@ export function useMeetSocket({
               await consumeProducer(data);
             });
 
-            socket.on(
+            onLive(
               "producerClosed",
               ({
                 producerId,
@@ -7446,12 +8813,11 @@ export function useMeetSocket({
                     const liveAudioTrack = getFirstLiveTrack(
                       localStreamRef.current?.getAudioTracks() ?? [],
                     );
-                    const shouldRecoverAudio = !isMutedRef.current;
+                    const shouldRecoverAudio = deviceIntents.get().audio.chosen;
                     if (shouldRecoverAudio) {
                       if (liveAudioTrack) {
                         setNoiseCancellationTrackEnabled(liveAudioTrack, true);
                       }
-                      isMutedRef.current = false;
                       setIsMuted(false);
                       requestAudioProducerRecovery();
                       return;
@@ -7459,7 +8825,6 @@ export function useMeetSocket({
                     localStreamRef.current?.getAudioTracks().forEach((track) => {
                       setNoiseCancellationTrackEnabled(track, false);
                     });
-                    isMutedRef.current = true;
                     setIsMuted(true);
                     return;
                   }
@@ -7481,17 +8846,15 @@ export function useMeetSocket({
                             currentStream?.getVideoTracks() ?? [],
                           );
                     const shouldRecoverCamera =
-                      !isCameraOffRef.current;
+                      deviceIntents.get().video.chosen;
                     if (shouldRecoverCamera) {
                       if (liveVideoTrack) {
                         liveVideoTrack.enabled = true;
                       }
-                      isCameraOffRef.current = false;
                       setIsCameraOff(false);
                       requestCameraProducerRecovery();
                       return;
                     }
-                    isCameraOffRef.current = true;
                     setIsCameraOff(true);
                     return;
                   }
@@ -7533,11 +8896,12 @@ export function useMeetSocket({
                   }
                 }
 
+                producerSlotOrder.noteClosed(producerId);
                 handleProducerClosed(producerId);
               },
             );
 
-            socket.on(
+            onLive(
               "userJoined",
               ({
                 userId: joinedUserId,
@@ -7578,7 +8942,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "userLeft",
               ({ userId: leftUserId }: { userId: string }) => {
                 console.info("[Meets] User left:", leftUserId);
@@ -7631,7 +8995,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "participantConnectionState",
               (payload: {
                 userId?: string;
@@ -7672,16 +9036,13 @@ export function useMeetSocket({
                 });
 
                 telemetry.capture("meet_participant_connection_state", {
-                  roomId: payload.roomId,
-                  userId: targetUserId,
                   state,
-                  reason: payload.reason,
                   downtimeMs: payload.downtimeMs,
                 });
               },
             );
 
-            socket.on(
+            onLive(
               "displayNameSnapshot",
               ({
                 users,
@@ -7695,7 +9056,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "handRaisedSnapshot",
               ({ users, roomId: eventRoomId }: HandRaisedSnapshot) => {
                 if (!isRoomEvent(eventRoomId)) return;
@@ -7714,7 +9075,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "chatHistorySnapshot",
               ({ messages, roomId: eventRoomId }: ChatHistorySnapshot) => {
                 if (!isRoomEvent(eventRoomId)) return;
@@ -7747,7 +9108,10 @@ export function useMeetSocket({
                   for (const message of visible) {
                     if (seen.has(message.id)) continue;
                     seen.add(message.id);
-                    seeded.push(normalizeChatMessage(message).message);
+                    seeded.push({
+                      ...normalizeChatMessage(message).message,
+                      isHistory: true,
+                    });
                   }
                   seeded.sort((a, b) => a.timestamp - b.timestamp);
                   return seeded;
@@ -7755,7 +9119,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "displayNameUpdated",
               ({
                 userId: updatedUserId,
@@ -7775,7 +9139,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "participantMuted",
               ({
                 userId: mutedUserId,
@@ -7801,7 +9165,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "participantCameraOff",
               ({
                 userId: camUserId,
@@ -7827,7 +9191,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "admin:mediaEnforced",
               (payload: {
                 roomId?: string;
@@ -7935,7 +9299,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "admin:bulkMediaEnforced",
               (payload: {
                 roomId?: string;
@@ -7954,7 +9318,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "setVideoQuality",
               async ({ quality }: { quality: VideoQuality }) => {
                 console.info(`[Meets] Setting video quality to: ${quality}`);
@@ -7971,7 +9335,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on("chatMessage", (message: ChatMessage) => {
+            onLive("chatMessage", (message: ChatMessage) => {
               console.info("[Meets] Chat message received:", message);
               const { message: normalized, ttsText } =
                 normalizeChatMessage(message);
@@ -7998,7 +9362,7 @@ export function useMeetSocket({
               }
             });
 
-            socket.on(
+            onLive(
               "conclaveMessage",
               (payload: {
                 id?: string;
@@ -8088,7 +9452,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on("reaction", (reaction: ReactionNotification) => {
+            onLive("reaction", (reaction: ReactionNotification) => {
               if (reaction.kind && reaction.value) {
                 addReaction({
                   userId: reaction.userId,
@@ -8110,7 +9474,7 @@ export function useMeetSocket({
               }
             });
 
-            socket.on(
+            onLive(
               "chat:reactionChanged",
               ({
                 messageId,
@@ -8133,7 +9497,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "handRaised",
               ({ userId: raisedUserId, raised }: HandRaisedNotification) => {
                 if (raisedUserId === userId) {
@@ -8149,16 +9513,34 @@ export function useMeetSocket({
               },
             );
 
-            socket.on("kicked", () => {
+            onLive(
+              "roomRecoveryPass",
+              (renewal: { roomId?: string; roomRecoveryPass?: string }) => {
+                const joinedRoomId = currentRoomIdRef.current;
+                if (
+                  !joinedRoomId ||
+                  !isRoomEvent(renewal.roomId) ||
+                  typeof renewal.roomRecoveryPass !== "string"
+                ) {
+                  return;
+                }
+                renewRoomRecoveryPass(joinedRoomId, renewal.roomRecoveryPass);
+              },
+            );
+
+            onLive("kicked", (payload?: { reason?: string }) => {
+              forgetJoinedRoom();
+              setMeetError(null);
+              setWaitingMessage(null);
               cleanup();
-              setMeetError({
-                code: "UNKNOWN",
-                message: "You have been kicked from the meeting.",
-                recoverable: false,
+              const shownAsEndScreen = onCallEnded?.({
+                kind: "removed",
+                detail: customServerText(payload?.reason, DEFAULT_KICK_REASON),
               });
+              if (!shownAsEndScreen) setSetupNotice?.(removedNotice());
             });
 
-            socket.on(
+            onLive(
               "redirect",
               async ({ newRoomId }: { newRoomId: string }) => {
                 console.info(
@@ -8168,7 +9550,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "userRequestedJoin",
               ({
                 userId,
@@ -8190,7 +9572,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "pendingUsersSnapshot",
               ({
                 users,
@@ -8210,7 +9592,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "userAdmitted",
               ({
                 userId,
@@ -8228,7 +9610,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "userRejected",
               ({
                 userId,
@@ -8246,7 +9628,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "pendingUserLeft",
               ({
                 userId,
@@ -8264,13 +9646,23 @@ export function useMeetSocket({
               },
             );
 
-            socket.on("joinApproved", async () => {
-              if (intentionalDisconnectRef.current || socketRef.current !== socket) return;
+            let approvedJoin: Promise<void> | null = null;
+            onLive("joinApproved", () => {
+              if (approvedJoin) {
+                console.info("[Meets] Join already approved; ignoring a repeated approval.");
+                return;
+              }
+              approvedJoin = joinAfterApproval().finally(() => {
+                approvedJoin = null;
+              });
+            });
+            const joinAfterApproval = async (): Promise<void> => {
+              setAdmittedAt(performance.now());
               const approvalGeneration = reconnectGenerationRef.current;
               console.info("[Meets] Join approved! Re-attempting join...");
               const joinOptions = joinOptionsRef.current;
               let stream = localStreamRef.current;
-              const mediaNeeds = getJoinMediaNeeds(stream);
+              const mediaNeeds = getJoinMediaNeeds();
               const shouldRequestMedia =
                 !joinOptions.isRecorder &&
                 joinOptions.joinMode !== "webinar_attendee" &&
@@ -8298,28 +9690,47 @@ export function useMeetSocket({
                   bypassMediaPermissions ||
                   joinOptions.joinMode === "webinar_attendee")
               ) {
-                joinRoomInternal(
-                  currentRoomIdRef.current,
-                  stream,
-                  joinOptions,
-                )
-                  .then((joinResult) => {
-                    if (joinResult === "joined") {
-                      prejoinMediaIntentRef.current = null;
-                    }
-                  })
-                  .catch((joinError: unknown) => {
+                const approvedRoomId = currentRoomIdRef.current;
+                const stale = () =>
+                  approvalGeneration !== reconnectGenerationRef.current ||
+                  intentionalDisconnectRef.current;
+                let rerouted = false;
+                try {
+                  try {
+                    await joinRoomInternal(approvedRoomId, stream, joinOptions);
+                  } catch (joinError) {
+                    const connectToRoutedSfu = connectSocketRef.current;
                     if (
-                      approvalGeneration !== reconnectGenerationRef.current ||
-                      intentionalDisconnectRef.current ||
+                      !(joinError instanceof JoinRoomRedirectError) ||
+                      !connectToRoutedSfu ||
+                      stale() ||
                       socketRef.current !== socket
-                    ) return;
-                    console.error("[Meets] Join after approval failed:", joinError);
-                    setMeetError(createMeetError(joinError));
-                    setConnectionState("error");
-                  });
+                    ) {
+                      throw joinError;
+                    }
+                    console.info(
+                      `[Meets] Reconnecting to routed SFU ${joinError.redirectUrl}`,
+                      {
+                        roomId: approvedRoomId,
+                        redirectInstanceId: joinError.response.redirectInstanceId,
+                      },
+                    );
+                    rerouted = true;
+                    cleanupRoomResources({ resetRoomId: false });
+                    retireSocket(socketRef, onSocketReady);
+                    await connectToRoutedSfu(approvedRoomId, {
+                      sfuUrlOverride: joinError.redirectUrl,
+                    });
+                    if (stale()) return;
+                    await joinRoomInternal(approvedRoomId, stream, joinOptions);
+                  }
+                } catch (joinError) {
+                  if (stale() || (!rerouted && socketRef.current !== socket)) return;
+                  logCallError("[Meets] Join after approval failed", joinError);
+                  refuseEntry(createMeetError(joinError));
+                }
               } else {
-                console.error(
+                logCallError(
                   "[Meets] Cannot re-join: missing room ID or local stream",
                   {
                     roomId: currentRoomIdRef.current,
@@ -8327,23 +9738,21 @@ export function useMeetSocket({
                     bypassMediaPermissions,
                   },
                 );
-                setConnectionState("error");
+                refuseEntry(null);
               }
-            });
+            };
 
-            socket.on("joinRejected", () => {
+            onLive("joinRejected", () => {
               console.info("[Meets] Join rejected.");
-              setMeetError({
-                code: "PERMISSION_DENIED",
-                message: "The host has denied your request to join.",
-                recoverable: false,
-              });
-              setConnectionState("error");
-              setWaitingMessage(null);
+              const rejected = joinRejectedUpdate();
+              setMeetError(rejected.meetError);
+              setSetupNotice?.(rejected.setupNotice);
+              setConnectionState(rejected.connectionState);
+              setWaitingMessage(rejected.waitingMessage);
               cleanup();
             });
 
-            socket.on(
+            onLive(
               "waitingRoomStatus",
               ({
                 message,
@@ -8357,7 +9766,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "roomLockChanged",
               ({
                 locked,
@@ -8372,7 +9781,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "ttsDisabledChanged",
               ({
                 disabled,
@@ -8387,7 +9796,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "dmStateChanged",
               ({
                 enabled,
@@ -8402,7 +9811,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "imageAttachmentsStateChanged",
               ({
                 enabled,
@@ -8416,7 +9825,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "reactionsDisabledChanged",
               ({
                 disabled,
@@ -8431,7 +9840,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "participantMediaPermissionsChanged",
               ({
                 unmuteAllowed,
@@ -8448,7 +9857,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "noGuestsChanged",
               ({
                 noGuests,
@@ -8463,7 +9872,7 @@ export function useMeetSocket({
               }
             );
 
-            socket.on(
+            onLive(
               "chatLockChanged",
               ({
                 locked,
@@ -8478,7 +9887,7 @@ export function useMeetSocket({
               }
             );
 
-            socket.on(
+            onLive(
               "meeting:configChanged",
               (nextConfig: MeetingConfigSnapshot) => {
                 setMeetingRequiresInviteCode(
@@ -8487,14 +9896,17 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "webinar:configChanged",
               (nextConfig: WebinarConfigSnapshot) => {
                 setWebinarConfig(nextConfig);
+                takeWebinarQaList((previous) =>
+                  qaListForConfig(previous, nextConfig),
+                );
               },
             );
 
-            socket.on(
+            onLive(
               "webinar:attendeeCountChanged",
               ({
                 attendeeCount,
@@ -8521,7 +9933,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "webinar:participantJoined",
               (notification: WebinarParticipantJoinedNotification) => {
                 if (joinMode !== "webinar_attendee") return;
@@ -8549,50 +9961,25 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "webinar:qaSnapshot",
               (snapshot: WebinarQaSnapshot) => {
                 if (!isRoomEvent(snapshot.roomId)) return;
-                setWebinarQaEntries(
-                  [...(snapshot.entries ?? [])].sort(
-                    (a, b) => a.askedAt - b.askedAt,
-                  ),
+                takeWebinarQaList(qaListFromSnapshot(snapshot));
+              },
+            );
+
+            onLive(
+              "webinar:qaChanged",
+              (notification: WebinarQaChangedNotification) => {
+                if (!isRoomEvent(notification.roomId)) return;
+                takeWebinarQaList((previous) =>
+                  withQaChange(previous, notification),
                 );
               },
             );
 
-            socket.on(
-              "webinar:qaChanged",
-              (notification: WebinarQaChangedNotification) => {
-                if (!isRoomEvent(notification.roomId)) return;
-                setWebinarQaEntries((previous) => {
-                  if (notification.removedId) {
-                    return previous.filter(
-                      (entry) => entry.id !== notification.removedId,
-                    );
-                  }
-                  const entry = notification.entry;
-                  if (!entry) return previous;
-                  const existingIndex = previous.findIndex(
-                    (candidate) => candidate.id === entry.id,
-                  );
-                  if (existingIndex === -1) {
-                    return [...previous, entry].sort(
-                      (a, b) => a.askedAt - b.askedAt,
-                    );
-                  }
-                  const next = previous.slice();
-                  next[existingIndex] = {
-                    ...entry,
-                    hasUpvoted:
-                      entry.hasUpvoted ?? previous[existingIndex].hasUpvoted,
-                  };
-                  return next;
-                });
-              },
-            );
-
-            socket.on(
+            onLive(
               "webinar:handQueueChanged",
               (notification: WebinarHandQueueChangedNotification) => {
                 if (!isRoomEvent(notification.roomId)) return;
@@ -8600,7 +9987,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "webinar:promoted",
               (notification: WebinarPromotedNotification) => {
                 if (joinMode !== "webinar_attendee") return;
@@ -8612,7 +9999,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "webinar:demoted",
               (notification: WebinarDemotedNotification) => {
                 if (joinMode === "webinar_attendee") return;
@@ -8621,7 +10008,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "webinar:feedChanged",
               (notification: WebinarFeedChangedNotification) => {
                 if (joinMode !== "webinar_attendee") return;
@@ -8669,13 +10056,19 @@ export function useMeetSocket({
               reject(toError(err));
               return;
             }
+            // Adopting the identity the token names is the expected way in:
+            // the join starts over from the render that knows it, and only a
+            // failure of that join is an error.
+            if (err instanceof JoinIdentityChangedError) {
+              reject(err);
+              return;
+            }
             console.error("Failed to get join info:", err);
             const reconnectFailure = describeReconnectFailure(err);
-            const isRecoverable = isRecoverableReconnectFailure(err);
             setMeetError({
               code: "CONNECTION_FAILED",
               message: reconnectFailure,
-              recoverable: isRecoverable,
+              recoverable: getReconnectFailureKind(err) !== "final",
             });
             setConnectionState("error");
             reject(toError(err));
@@ -8687,6 +10080,7 @@ export function useMeetSocket({
       addReaction,
       audioProducerRef,
       cleanup,
+      refuseEntry,
       consumeProducer,
       currentRoomIdRef,
       deviceRef,
@@ -8719,7 +10113,6 @@ export function useMeetSocket({
       clearParticipantConnectionStatus,
       localStream,
       localStreamRef,
-      prejoinMediaIntentRef,
       pendingProducersRef,
       playNotificationSound,
       shouldPlayJoinLeaveSound,
@@ -8749,15 +10142,17 @@ export function useMeetSocket({
       setWebinarSpeakerUserId,
       setWebinarConfig,
       setWebinarQaEntries,
+      setWebinarQaListFromThisConnection,
       setWebinarHandQueue,
       setWebinarStageInvite,
       onWebinarDemoted,
+      onCallEnded,
       setServerRestartNotice,
       setAdminNotice,
       setServerActiveSpeakerAvailable,
       setLocalStream,
       setMeetError,
-      setMeetingEndedNotice,
+      setSetupNotice,
       setPendingUsers,
       setWaitingMessage,
       setNetworkManagedVideoQuality,
@@ -8772,11 +10167,141 @@ export function useMeetSocket({
       userId,
       onTtsMessage,
       onSocketReady,
+      cleanupRoomResources,
+      connectSocketRef,
+      applyJoinAnswerIceServers,
     ],
   );
 
+  // A failed receive path is rebuilt on its own: a new receive transport, then
+  // every published stream consumed again. Sending is not touched.
+  const rebuildReceivePath = useCallback(async (onStart: () => void): Promise<DirectionRebuildResult> => {
+    const socket = socketRef.current;
+    const device = deviceRef.current;
+    if (!socket?.connected || !device) {
+      return { rebuilt: false, reason: "signaling is not connected" };
+    }
+    onStart();
+    resetReceiveState();
+    const transport = consumerTransportRef.current;
+    if (transport && !transport.closed) {
+      intentionallyClosedTransportsRef.current.add(transport);
+      try {
+        transport.close();
+      } catch {}
+    }
+    consumerTransportRef.current = null;
+    try {
+      await createConsumerTransport(socket, device);
+    } catch (error) {
+      return {
+        rebuilt: false,
+        reason: `could not create a receive transport: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
+    }
+    const list = await syncProducers();
+    const rebuilt = consumerTransportRef.current as Transport | null;
+    return judgeReceiveRebuild({
+      list,
+      socketStillConnected: socketRef.current === socket && socket.connected,
+      transportOpen: Boolean(rebuilt && !rebuilt.closed),
+    });
+  }, [
+    consumerTransportRef,
+    createConsumerTransport,
+    deviceRef,
+    resetReceiveState,
+    socketRef,
+    syncProducers,
+  ]);
+
+  // A failed send path is rebuilt on its own: a new send transport, then the
+  // microphone, camera and screen share published on it again.
+  const rebuildSendPath = useCallback(async (onStart: () => void): Promise<DirectionRebuildResult> => {
+    const socket = socketRef.current;
+    if (!socket?.connected) {
+      return { rebuilt: false, reason: "signaling is not connected" };
+    }
+    onStart();
+    const transport = producerTransportRef.current;
+    if (transport && !transport.closed) {
+      intentionallyClosedTransportsRef.current.add(transport);
+      try {
+        transport.close();
+      } catch {}
+    }
+    if (producerTransportRef.current === transport) {
+      producerTransportRef.current = null;
+    }
+    if (!(await ensureProducerTransport())) {
+      return { rebuilt: false, reason: "could not create a send transport" };
+    }
+    if (socketRef.current !== socket || !socket.connected) {
+      return { rebuilt: false, reason: "signaling dropped during the rebuild" };
+    }
+    if (deviceIntents.get().audio.chosen) requestAudioProducerRecovery();
+    if (deviceIntents.get().video.chosen) requestCameraProducerRecovery();
+    return { rebuilt: true };
+  }, [
+    deviceIntents,
+    ensureProducerTransport,
+    producerTransportRef,
+    socketRef,
+    requestAudioProducerRecovery,
+    requestCameraProducerRecovery,
+  ]);
+
+  const applyUserRetry = useCallback(
+    (attempt: ReconnectAttemptState): ReconnectAttemptState => {
+      const next = restartForUserRetry({
+        attempt,
+        attempts: reconnectAttemptsRef.current,
+        relayOnly: relayOnlyIceRef.current,
+        mediaPaths: mediaPathRecoveryRef.current,
+      });
+      manualReconnectRetryRequestedRef.current = false;
+      reconnectAttemptsRef.current = next.attempts;
+      relayOnlyIceRef.current = next.relayOnly;
+      commitMediaPathRecovery(next.mediaPaths);
+      setMeetError(null);
+      updateReconnectRecoveryStatus(
+        buildReconnectRecoveryStatus(
+          "connecting",
+          1,
+          "Retrying reconnect now.",
+        ),
+      );
+      setConnectionState("reconnecting");
+      return next.attempt;
+    },
+    [
+      commitMediaPathRecovery,
+      reconnectAttemptsRef,
+      setConnectionState,
+      setMeetError,
+      updateReconnectRecoveryStatus,
+    ],
+  );
+
+  useEffect(() => {
+    connectSocketRef.current = connectSocket;
+  }, [connectSocket, connectSocketRef]);
+
   const handleReconnect = useCallback(async (options?: ReconnectRequest) => {
+    const failedPath = options?.failedPath;
+    if (failedPath && failedPath.generation !== reconnectGenerationRef.current) return;
+    const noteEscalation = (type: "rebuild-started" | "escalation-settled") => {
+      if (!failedPath?.ownsEscalation) return;
+      updateMediaPathRecovery({
+        type,
+        direction: failedPath.direction,
+        transportId: failedPath.transportId,
+      });
+    };
     if (reconnectInFlightRef.current) {
+      noteEscalation("escalation-settled");
       const cancelBackoff = reconnectBackoffCancelRef.current;
       const decision = resolveInFlightReconnectRequest(options, {
         isWaitingForBackoff: reconnectPhaseRef.current === "waiting",
@@ -8816,16 +10341,122 @@ export function useMeetSocket({
       return;
     }
     const reconnectGeneration = reconnectGenerationRef.current;
-    let skipNextDelay = options?.immediate === true;
-    let lastReconnectError: unknown = null;
+    let attemptState = freshReconnectAttemptState(options);
+    let rejoined = false;
+    let signalingIntact = false;
+    const applyRequestedRelayPolicy = (budget: RelayRefreshBudget) => {
+      const relayOnly = resolveRebuildRelayOnly({
+        requested: attemptState.relayOnlyRequest !== null,
+        relayOnly: relayOnlyIceRef.current,
+      });
+      const changed = relayOnly !== relayOnlyIceRef.current;
+      relayOnlyIceRef.current = relayOnly;
+      reconcileRelayPathsNow(budget);
+      if (!changed) return;
+      console.warn(
+        relayUsableNow()
+          ? "[Meets] Rebuilding through TURN only."
+          : "[Meets] TURN only is wanted, but no TURN credentials are usable yet.",
+      );
+      telemetry.capture("meet_turn_relay_activated", {
+        reason: "media_path_rebuild",
+      });
+    };
     reconnectInFlightRef.current = true;
     reconnectAttemptsRef.current = resolveReconnectStartAttempts(
       reconnectAttemptsRef.current,
       MAX_RECONNECT_ATTEMPTS,
     );
-    setMeetError(null);
 
     try {
+      // One direction failed while signaling is up: get current credentials
+      // with the working direction still flowing, then rebuild only the
+      // failed one. Rejoin only if that does not work.
+      const scopedPath = planMediaRebuildScope(options, {
+        socketConnected: socketRef.current?.connected === true,
+      });
+      const scopedRoomId = currentRoomIdRef.current;
+      if (scopedPath && scopedRoomId) {
+        const { direction: scopedDirection, transportId } = scopedPath;
+        if (attemptState.refreshIceServers) {
+          attemptState.refreshIceServers = false;
+          await refreshIceServersOnOpenSocket(scopedRoomId);
+        }
+        if (reconnectGeneration !== reconnectGenerationRef.current) return;
+        if (intentionalDisconnectRef.current) return;
+        const failedPathChanged = (): boolean => {
+          const transport =
+            scopedDirection === "producer"
+              ? producerTransportRef.current
+              : consumerTransportRef.current;
+          return (
+            !transport ||
+            transport.closed ||
+            transport.id !== transportId
+          );
+        };
+        let outcome: ScopedRebuildOutcome;
+        let failure: string | null = null;
+        const { probe, evidence } = failedPathChanged()
+          ? PATH_NOT_CARRYING
+          : await carriesMediaNowRef.current(scopedDirection);
+        if (reconnectGeneration !== reconnectGenerationRef.current) return;
+        if (intentionalDisconnectRef.current) return;
+        const pathChanged = failedPathChanged();
+        if (evidence && !pathChanged) {
+          updateMediaPathRecovery({
+            type: "path-sampled",
+            direction: scopedDirection,
+            evidence,
+          });
+        }
+        const plan = planScopedRebuild({
+          probe,
+          failedPathChanged: pathChanged,
+        });
+        if (plan === "rejoin-after-cancelled-check") {
+          outcome = "failed";
+          failure = "its check was cancelled";
+        } else if (plan !== "rebuild") {
+          outcome = "stale";
+        } else {
+          applyRequestedRelayPolicy("restart");
+          const noteRebuildStarted = () => {
+            setReconnectInFlight(true);
+            noteEscalation("rebuild-started");
+          };
+          const result =
+            scopedDirection === "consumer"
+              ? await rebuildReceivePath(noteRebuildStarted)
+              : await rebuildSendPath(noteRebuildStarted);
+          if (reconnectGeneration !== reconnectGenerationRef.current) return;
+          if (intentionalDisconnectRef.current) return;
+          outcome = result.rebuilt ? "rebuilt" : "failed";
+          failure = result.rebuilt ? null : result.reason;
+        }
+        const next = nextStepAfterScopedRebuild(outcome, {
+          socketConnected: socketRef.current?.connected === true,
+        });
+        if (next === "settle-recovered") {
+          reconnectAttemptsRef.current = 0;
+          rejoined = true;
+          return;
+        }
+        if (next === "settle-unchanged") {
+          console.info(
+            `[Meets] The ${scopedDirection} path is carrying media again, is sending nothing or was replaced; not rebuilding it.`,
+          );
+          signalingIntact = true;
+          return;
+        }
+        console.warn(
+          outcome === "stale"
+            ? `[Meets] The ${scopedDirection} path needs no rebuild, but signaling dropped; rejoining.`
+            : `[Meets] Could not rebuild the ${scopedDirection} transport on its own (${failure}); rejoining.`,
+        );
+      }
+      setReconnectInFlight(true);
+      setMeetError(null);
       while (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
         if (intentionalDisconnectRef.current) return;
@@ -8839,10 +10470,13 @@ export function useMeetSocket({
           );
         }
         const attempt = reconnectAttemptsRef.current + 1;
-        const delay = skipNextDelay
+        const countedAttempt = attemptState.retryingForRoom ? null : attempt;
+        const delay = attemptState.skipNextDelay
           ? 0
-          : RECONNECT_DELAY_MS * 2 ** (attempt - 1);
-        skipNextDelay = false;
+          : (attemptState.nextDelayOverrideMs ??
+            RECONNECT_DELAY_MS * 2 ** (attempt - 1));
+        attemptState.skipNextDelay = false;
+        attemptState.nextDelayOverrideMs = null;
         reconnectAttemptsRef.current = attempt;
 
         if (shouldSurfaceReconnectState) {
@@ -8850,12 +10484,12 @@ export function useMeetSocket({
           updateReconnectRecoveryStatus(
             buildReconnectRecoveryStatus(
               delay > 0 ? "waiting" : "connecting",
-              attempt,
+              countedAttempt,
               delay > 0
                 ? "Retrying automatically."
                 : "Retrying reconnect now.",
-              lastReconnectError
-                ? describeReconnectFailure(lastReconnectError)
+              attemptState.lastError
+                ? describeReconnectFailure(attemptState.lastError)
                 : null,
               retryAt,
             ),
@@ -8866,10 +10500,9 @@ export function useMeetSocket({
           `[Meets] Reconnecting in ${delay}ms (attempt ${attempt})`,
         );
         telemetry.capture("meet_reconnect_attempt", {
-          roomId: currentRoomIdRef.current ?? undefined,
           attempt,
           maxAttempts: MAX_RECONNECT_ATTEMPTS,
-          usingTurnFallback: useTurnFallbackRef.current,
+          usingTurnFallback: relayOnlyIceRef.current,
         });
         if (delay > 0) {
           await waitForReconnectBackoff(delay);
@@ -8877,21 +10510,7 @@ export function useMeetSocket({
         if (intentionalDisconnectRef.current) return;
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
         if (manualReconnectRetryRequestedRef.current) {
-          manualReconnectRetryRequestedRef.current = false;
-          reconnectAttemptsRef.current = 0;
-          skipNextDelay = true;
-          if (shouldSurfaceReconnectState) {
-            updateReconnectRecoveryStatus(
-              buildReconnectRecoveryStatus(
-                "connecting",
-                1,
-                "Retrying reconnect now.",
-                lastReconnectError
-                  ? describeReconnectFailure(lastReconnectError)
-                  : null,
-              ),
-            );
-          }
+          attemptState = applyUserRetry(attemptState);
           continue;
         }
 
@@ -8904,34 +10523,52 @@ export function useMeetSocket({
             updateReconnectRecoveryStatus(
               buildReconnectRecoveryStatus(
                 "connecting",
-                attempt,
+                countedAttempt,
                 "Connecting to the meeting server.",
-                lastReconnectError
-                  ? describeReconnectFailure(lastReconnectError)
+                attemptState.lastError
+                  ? describeReconnectFailure(attemptState.lastError)
                   : null,
               ),
             );
           }
-          const canReuseSocket = socketRef.current?.connected === true;
+          // Fetch current credentials before closing anything, so media that
+          // still flows keeps flowing while the join route answers.
+          if (
+            attemptState.refreshIceServers &&
+            attemptState.mayReuseSocket &&
+            socketRef.current?.connected === true
+          ) {
+            attemptState.refreshIceServers = false;
+            await refreshIceServersOnOpenSocket(reconnectRoomId);
+            if (reconnectGeneration !== reconnectGenerationRef.current) return;
+            if (intentionalDisconnectRef.current) return;
+          }
+          const canReuseSocket =
+            attemptState.mayReuseSocket && socketRef.current?.connected === true;
+          attemptState.mayReuseSocket = true;
+          noteEscalation("rebuild-started");
           cleanupRoomResources({
             resetRoomId: false,
             preserveMeetingState: true,
           });
+          lastJoinInfoSourceRef.current = "fresh";
           if (!canReuseSocket) {
-            socketRef.current?.disconnect();
-            socketRef.current = null;
-            onSocketReady?.(null);
-            await connectSocket(reconnectRoomId);
+            retireSocket(socketRef, onSocketReady);
+            const reconnectJoinInfo = attemptState.heldJoinInfoTried
+              ? "fresh-first"
+              : "held-first";
+            attemptState.heldJoinInfoTried = true;
+            await connectSocket(reconnectRoomId, { reconnectJoinInfo });
+            attemptState.refreshIceServers = false;
           } else {
             setMeetError(null);
           }
           if (reconnectGeneration !== reconnectGenerationRef.current) return;
           if (intentionalDisconnectRef.current) return;
+          applyRequestedRelayPolicy("renew");
 
           const joinOptions = joinOptionsRef.current;
-          const mediaNeeds = getJoinMediaNeeds(
-            localStreamRef.current || localStream,
-          );
+          const mediaNeeds = getJoinMediaNeeds();
           const stream = await ensureLiveLocalMediaForJoin(
             localStreamRef.current || localStream,
             joinOptions,
@@ -8951,18 +10588,19 @@ export function useMeetSocket({
             updateReconnectRecoveryStatus(
               buildReconnectRecoveryStatus(
                 "joining",
-                attempt,
+                countedAttempt,
                 shouldRetryLocalMediaAfterJoin
                   ? "Rejoining the room first. Your devices will be retried after the meeting is back."
                   : "Restoring media, participants, and room state.",
-                lastReconnectError
-                  ? describeReconnectFailure(lastReconnectError)
+                attemptState.lastError
+                  ? describeReconnectFailure(attemptState.lastError)
                   : null,
               ),
             );
           }
+          let joinResult: Awaited<ReturnType<typeof joinRoomInternal>>;
           try {
-            await joinRoomInternal(reconnectRoomId, stream, joinOptions);
+            joinResult = await joinRoomInternal(reconnectRoomId, stream, joinOptions);
           } catch (joinError) {
             if (!(joinError instanceof JoinRoomRedirectError)) {
               throw joinError;
@@ -8971,14 +10609,21 @@ export function useMeetSocket({
               resetRoomId: false,
               preserveMeetingState: true,
             });
-            socketRef.current?.disconnect();
-            socketRef.current = null;
-            onSocketReady?.(null);
+            retireSocket(socketRef, onSocketReady);
             await connectSocket(reconnectRoomId, {
               sfuUrlOverride: joinError.redirectUrl,
+              reconnectJoinInfo: "fresh-first",
             });
             if (intentionalDisconnectRef.current) return;
-            await joinRoomInternal(reconnectRoomId, stream, joinOptions);
+            joinResult = await joinRoomInternal(reconnectRoomId, stream, joinOptions);
+          }
+          // A newer join this tab began, such as one on "joinApproved",
+          // owns the meeting now: this reconnect only stands down.
+          if (joinResult === "overtaken") {
+            reconnectAttemptsRef.current = 0;
+            manualReconnectRetryRequestedRef.current = false;
+            updateReconnectRecoveryStatus(null);
+            return;
           }
           if (shouldRetryLocalMediaAfterJoin) {
             if (mediaNeeds.needsAudio) {
@@ -8990,75 +10635,124 @@ export function useMeetSocket({
           }
           if (reconnectGeneration !== reconnectGenerationRef.current) return;
           telemetry.capture("meet_reconnect_success", {
-            roomId: reconnectRoomId ?? undefined,
             attempt,
-            usingTurnFallback: useTurnFallbackRef.current,
+            usingTurnFallback: relayOnlyIceRef.current,
           });
           reconnectAttemptsRef.current = 0;
-          manualReconnectRetryRequestedRef.current = false;
           updateReconnectRecoveryStatus(null);
           setMeetError(null);
+          rejoined = true;
           return;
         } catch (err) {
           if (reconnectGeneration !== reconnectGenerationRef.current) return;
-          lastReconnectError = err;
+          if (err instanceof JoinIdentityChangedError) {
+            cleanupRoomResources({
+              resetRoomId: false,
+              preserveMeetingState: true,
+            });
+            updateReconnectRecoveryStatus(null);
+            return;
+          }
+          attemptState.lastError = err;
           const reconnectFailure = describeReconnectFailure(err);
-          const isRecoverable = isRecoverableReconnectFailure(err);
+          const failureKind = getReconnectFailureKind(err);
+          attemptState.retryingForRoom = false;
+          let isRecoverable = failureKind !== "final";
+          const usedHeldJoinInfo = lastJoinInfoSourceRef.current === "held";
+          attemptState.mayReuseSocket = canReuseSocketAfterFailure({
+            failureKind,
+            usedHeldJoinInfo,
+          });
+          if (failureKind === "server-draining") {
+            heldJoinInfoRef.current = null;
+          }
+          if (usedHeldJoinInfo) {
+            // The SFU refused or could not use the held token, which says
+            // nothing about a new one. Ask the join route before giving up.
+            lastJoinInfoSourceRef.current = "fresh";
+            if (failureKind === "final") {
+              heldJoinInfoRef.current = null;
+              isRecoverable = true;
+              attemptState.nextDelayOverrideMs = 0;
+              reconnectAttemptsRef.current = attempt - 1;
+            }
+          }
+          if (
+            failureKind === "room-unavailable" ||
+            failureKind === "server-draining"
+          ) {
+            const noted = noteRoomUnavailable(
+              attemptState.roomWait,
+              Date.now(),
+            );
+            attemptState.roomWait = noted.wait;
+            if (noted.plan.retry) {
+              attemptState.nextDelayOverrideMs = noted.plan.delayMs;
+              reconnectAttemptsRef.current = attempt - 1;
+              attemptState.retryingForRoom = true;
+            }
+          }
           console.warn(
             `[Meets] Reconnect attempt ${attempt} failed:`,
             err,
           );
           telemetry.capture("meet_reconnect_attempt_failure", {
-            roomId: currentRoomIdRef.current ?? undefined,
             attempt,
             maxAttempts: MAX_RECONNECT_ATTEMPTS,
-            error: reconnectFailure,
-            usingTurnFallback: useTurnFallbackRef.current,
+            failure_reason: reconnectFailureKind(err),
+            usingTurnFallback: relayOnlyIceRef.current,
           });
-          if (!isRecoverable) {
+          if (failureKind === "invite-code-required") {
+            // The user has to supply the code, so stop here and let the
+            // recovery card ask for it; Try again rejoins with it.
             manualReconnectRetryRequestedRef.current = false;
             updateReconnectRecoveryStatus(
-              buildReconnectRecoveryStatus(
-                "failed",
-                attempt,
-                "Could not reconnect to the meeting.",
+              buildStoppedRecoveryStatus(
+                "This meeting now needs an invite code. Enter it to rejoin.",
                 reconnectFailure,
+                { needsInviteCode: true },
               ),
             );
             setMeetError({
               code: "CONNECTION_FAILED",
               message: reconnectFailure,
-              recoverable: false,
+              recoverable: true,
             });
             setConnectionState("error");
             return;
           }
-          if (manualReconnectRetryRequestedRef.current) {
+          if (!isRecoverable) {
             manualReconnectRetryRequestedRef.current = false;
-            reconnectAttemptsRef.current = 0;
-            skipNextDelay = true;
-            if (shouldSurfaceReconnectState) {
-              updateReconnectRecoveryStatus(
-                buildReconnectRecoveryStatus(
-                  "connecting",
-                  1,
-                  "Retrying reconnect now.",
-                  reconnectFailure,
-                ),
-              );
-            }
-            continue;
-          }
-          if (shouldSurfaceReconnectState) {
-            updateReconnectRecoveryStatus(
-              buildReconnectRecoveryStatus(
-                attempt >= MAX_RECONNECT_ATTEMPTS ? "failed" : "waiting",
-                attempt,
-                attempt >= MAX_RECONNECT_ATTEMPTS
-                  ? "Could not reconnect to the meeting."
-                  : "Reconnect attempt failed. Retrying automatically.",
+            refuseEntry(
+              { code: "CONNECTION_FAILED", message: reconnectFailure, recoverable: false },
+              buildStoppedRecoveryStatus(
+                "Could not reconnect to the meeting.",
                 reconnectFailure,
               ),
+            );
+            return;
+          }
+          if (manualReconnectRetryRequestedRef.current) {
+            attemptState = applyUserRetry(attemptState);
+            continue;
+          }
+          if (attemptState.roomWait.expired) break;
+          if (shouldSurfaceReconnectState) {
+            updateReconnectRecoveryStatus(
+              attempt >= MAX_RECONNECT_ATTEMPTS
+                ? buildStoppedRecoveryStatus(
+                    describeReconnectGiveUp({
+                      attempts: attempt,
+                      roomWaitExpired: false,
+                    }),
+                    reconnectFailure,
+                  )
+                : buildReconnectRecoveryStatus(
+                    "waiting",
+                    attemptState.retryingForRoom ? null : attempt,
+                    "Reconnect attempt failed. Retrying automatically.",
+                    reconnectFailure,
+                  ),
             );
           }
         }
@@ -9067,19 +10761,19 @@ export function useMeetSocket({
       if (intentionalDisconnectRef.current) return;
       if (reconnectGeneration !== reconnectGenerationRef.current) return;
 
-      const reconnectFailure = describeReconnectFailure(lastReconnectError);
+      const reconnectFailure = describeReconnectFailure(attemptState.lastError);
       manualReconnectRetryRequestedRef.current = false;
       telemetry.capture("meet_reconnect_give_up", {
-        roomId: currentRoomIdRef.current ?? undefined,
         attempts: reconnectAttemptsRef.current,
-        error: reconnectFailure,
-        usingTurnFallback: useTurnFallbackRef.current,
+        failure_reason: reconnectFailureKind(attemptState.lastError),
+        usingTurnFallback: relayOnlyIceRef.current,
       });
       updateReconnectRecoveryStatus(
-        buildReconnectRecoveryStatus(
-          "failed",
-          reconnectAttemptsRef.current,
-          "Could not reconnect after several attempts.",
+        buildStoppedRecoveryStatus(
+          describeReconnectGiveUp({
+            attempts: reconnectAttemptsRef.current,
+            roomWaitExpired: attemptState.roomWait.expired,
+          }),
           reconnectFailure,
         ),
       );
@@ -9090,15 +10784,50 @@ export function useMeetSocket({
       });
       setConnectionState("error");
     } finally {
+      noteEscalation("escalation-settled");
       if (reconnectGeneration === reconnectGenerationRef.current) {
         reconnectInFlightRef.current = false;
+        setReconnectInFlight(false);
+        const { deferred, recovery } = takeDeferredRebuilds(
+          mediaPathRecoveryRef.current,
+        );
+        commitMediaPathRecovery(recovery);
+        const settlement = planReconnectSettlement({
+          rejoined: rejoined || signalingIntact,
+          userRetryQueued: manualReconnectRetryRequestedRef.current,
+          leaving: intentionalDisconnectRef.current,
+        });
+        manualReconnectRetryRequestedRef.current = false;
+        if (settlement.runUserRetry) {
+          void retryReconnectRef.current();
+        } else if (settlement.replayDeferredRebuilds) {
+          // A transport this rejoin built may have failed before it finished.
+          // Its rebuild waited for the rejoin, so run it now.
+          for (const { direction, transportId, ...failure } of deferred) {
+            const transport =
+              direction === "producer"
+                ? producerTransportRef.current
+                : consumerTransportRef.current;
+            if (transport?.id !== transportId) continue;
+            escalateMediaPathFailure(direction, transport, failure);
+          }
+        }
+        reconcileRelayPathsNow();
       }
     }
   }, [
+    applyUserRetry,
     cleanupRoomResources,
+    refuseEntry,
     connectSocket,
     currentRoomIdRef,
     ensureLiveLocalMediaForJoin,
+    refreshIceServersOnOpenSocket,
+    reconcileRelayPathsNow,
+    relayUsableNow,
+    escalateMediaPathFailure,
+    rebuildReceivePath,
+    rebuildSendPath,
     getJoinMediaNeeds,
     intentionalDisconnectRef,
     joinOptionsRef,
@@ -9112,6 +10841,7 @@ export function useMeetSocket({
     setConnectionState,
     setMeetError,
     socketRef,
+    updateMediaPathRecovery,
     updateReconnectRecoveryStatus,
     waitForReconnectBackoff,
     onSocketReady,
@@ -9228,15 +10958,20 @@ export function useMeetSocket({
       if (refs.abortControllerRef.current?.signal.aborted) return;
       const joinGeneration = reconnectGenerationRef.current;
 
-      telemetry.capture("meet_join_attempt", {
-        roomId: targetRoomId,
-        joinMode,
-        isAdmin,
-      });
+      // A join that starts over under the identity its token named is still
+      // the attempt that was already counted.
+      const continuesAttempt = identityRestartRoomIdRef.current === targetRoomId;
+      identityRestartRoomIdRef.current = null;
+      if (!continuesAttempt) {
+        telemetry.capture("meet_join_attempt", {
+          joinMode,
+          isAdmin,
+        });
+      }
 
       localRoomEndedHandledRef.current = false;
       setMeetError(null);
-      setMeetingEndedNotice?.(null);
+      setSetupNotice?.(null);
       updateReconnectRecoveryStatus(null);
       setConnectionState("connecting");
       if (!bypassMediaPermissions) {
@@ -9244,14 +10979,18 @@ export function useMeetSocket({
       }
       refs.intentionalDisconnectRef.current = false;
       serverRoomIdRef.current = null;
-      runtimeStunIceServersRef.current = null;
-      runtimeTurnIceServersRef.current = null;
-      useTurnFallbackRef.current = false;
+      runtimeIceServersRef.current = NO_RUNTIME_ICE_SERVERS;
+      relayOnlyIceRef.current = false;
+      stopRelayRefresh();
+      updateMediaPathRecovery({ type: "reset" });
       setRoomId(targetRoomId);
       if (joinMode === "webinar_attendee") {
         setIsAdmin(false);
       }
       const normalizedDisplayName = normalizeDisplayName(displayNameInput);
+      // An attempt that starts over keeps what the meeting was joined with:
+      // the codes asked for along the way, and the name.
+      const carried = continuesAttempt ? joinOptionsRef.current : null;
       const joinOptions: {
         displayName?: string;
         isRecorder?: boolean;
@@ -9259,29 +10998,47 @@ export function useMeetSocket({
         webinarInviteCode?: string;
         meetingInviteCode?: string;
       } = {
-        displayName: isAdmin ? normalizedDisplayName || undefined : undefined,
+        displayName:
+          (isAdmin ? normalizedDisplayName || undefined : undefined) ??
+          carried?.displayName,
         isRecorder: bypassMediaPermissions,
         joinMode,
+        ...(carried?.webinarInviteCode
+          ? { webinarInviteCode: carried.webinarInviteCode }
+          : {}),
+        ...(carried?.meetingInviteCode
+          ? { meetingInviteCode: carried.meetingInviteCode }
+          : {}),
       };
       joinOptionsRef.current = joinOptions;
       const candidateStream = localStreamRef.current ?? localStream;
-      const mediaNeeds = getJoinMediaNeeds(candidateStream);
+      const mediaNeeds = getJoinMediaNeeds();
       const shouldRequestMedia =
         !joinOptions.isRecorder &&
         joinOptions.joinMode !== "webinar_attendee" &&
         !bypassMediaPermissions &&
         (mediaNeeds.needsAudio || mediaNeeds.needsVideo);
 
-      try {
-        const [, stream] = await Promise.all([
-          connectSocket(targetRoomId),
-          shouldRequestMedia
+      // The attempt that starts over waits for the media request the first
+      // one made. A second request would capture the microphone and camera
+      // again, and nothing would ever stop the first capture.
+      const heldMedia = identityRestartMediaRef.current;
+      identityRestartMediaRef.current = null;
+      const mediaRequest =
+        continuesAttempt && heldMedia?.roomId === targetRoomId
+          ? heldMedia.request
+          : shouldRequestMedia
             ? ensureLiveLocalMediaForJoin(
                 candidateStream,
                 joinOptions,
                 "initial join",
               )
-            : Promise.resolve(candidateStream),
+            : Promise.resolve(candidateStream);
+
+      try {
+        const [, stream] = await Promise.all([
+          connectSocket(targetRoomId),
+          mediaRequest,
         ]);
         if (
           joinGeneration !== reconnectGenerationRef.current ||
@@ -9293,14 +11050,15 @@ export function useMeetSocket({
           !stream &&
           hasRequiredJoinMediaNeed(mediaNeeds)
         ) {
-          setConnectionState("error");
+          refuseEntry(null);
           return;
         }
 
-        const joinMediaIntent = resolveMediaPublishIntent(stream);
+        const joinMediaIntent = resolveMediaPublishIntent();
+        const committedForJoin = localStreamRef.current ?? stream;
         const streamForJoin = joinMediaIntent.isCameraOn
-          ? stream
-          : dropVideoTracksForCameraOff(stream, "camera-off initial join");
+          ? committedForJoin
+          : dropVideoTracksForCameraOff(committedForJoin, "camera-off initial join");
 
         localStreamRef.current = streamForJoin;
         setLocalStream(streamForJoin);
@@ -9314,14 +11072,11 @@ export function useMeetSocket({
               streamForJoin,
               nextJoinOptions,
             );
+            if (joinResult === "overtaken") return;
             telemetry.capture("meet_join_success", {
-              roomId: targetRoomId,
               joinMode: nextJoinOptions.joinMode,
               status: joinResult,
             });
-            if (joinResult === "joined") {
-              prejoinMediaIntentRef.current = null;
-            }
             break;
           } catch (joinError) {
             if (
@@ -9337,9 +11092,7 @@ export function useMeetSocket({
                 },
               );
               cleanupRoomResources({ resetRoomId: false });
-              socketRef.current?.disconnect();
-              socketRef.current = null;
-              onSocketReady?.(null);
+              retireSocket(socketRef, onSocketReady);
               await connectSocket(targetRoomId, {
                 sfuUrlOverride: joinError.redirectUrl,
               });
@@ -9394,24 +11147,31 @@ export function useMeetSocket({
           joinGeneration !== reconnectGenerationRef.current ||
           intentionalDisconnectRef.current
         ) return;
-        console.error("[Meets] Error joining room:", err);
-        telemetry.capture("meet_join_failure", {
-          roomId: targetRoomId,
-          joinMode,
-          error: err instanceof Error ? err.message : String(err ?? ""),
-        });
-        const stream = localStreamRef.current;
-        if (stream) {
-          stream.getTracks().forEach((track) => stopLocalTrack(track));
-          setLocalStream(null);
+        if (err instanceof JoinIdentityChangedError) {
+          identityRestartMediaRef.current = {
+            roomId: targetRoomId,
+            request: mediaRequest,
+          };
+          void mediaRequest.catch(() => undefined);
+          return;
         }
-        setMeetError(createMeetError(err));
-        setConnectionState("error");
+        const joinError = createMeetError(err);
+        if (joinError.code === "ROOM_NOT_FOUND") {
+          console.info("[Meets] No room at this code:", targetRoomId);
+        } else {
+          logCallError("[Meets] Error joining room", err);
+        }
+        telemetry.capture("meet_join_failure", {
+          joinMode,
+          failure_reason: joinFailureReason(joinError),
+        });
+        refuseEntry(joinError);
       }
     },
     [
       connectSocket,
       cleanupRoomResources,
+      refuseEntry,
       displayNameInput,
       dropVideoTracksForCameraOff,
       joinMode,
@@ -9424,7 +11184,6 @@ export function useMeetSocket({
       joinRoomInternal,
       localStream,
       localStreamRef,
-      prejoinMediaIntentRef,
       primeAudioOutput,
       requestMeetingInviteCode,
       requestWebinarInviteCode,
@@ -9436,7 +11195,7 @@ export function useMeetSocket({
       setConnectionState,
       setLocalStream,
       setMeetError,
-      setMeetingEndedNotice,
+      setSetupNotice,
       setRoomId,
       socketRef,
       stopLocalTrack,
@@ -9456,17 +11215,20 @@ export function useMeetSocket({
     [startJoin],
   );
 
-  const retryReconnect = useCallback(async () => {
+  const retryReconnect = useCallback(async (options?: { inviteCode?: string }) => {
+    const inviteCode = options?.inviteCode?.trim();
+    if (inviteCode) {
+      const current = joinOptionsRef.current;
+      joinOptionsRef.current =
+        current.joinMode === "webinar_attendee"
+          ? { ...current, webinarInviteCode: inviteCode }
+          : { ...current, meetingInviteCode: inviteCode };
+    }
     const targetRoomId = currentRoomIdRef.current || roomId;
     if (!targetRoomId) {
       const reconnectFailure = "No meeting room is available to reconnect.";
       updateReconnectRecoveryStatus(
-        buildReconnectRecoveryStatus(
-          "failed",
-          0,
-          "Could not start reconnect.",
-          reconnectFailure,
-        ),
+        buildStoppedRecoveryStatus("Could not start reconnect.", reconnectFailure),
       );
       setMeetError({
         code: "CONNECTION_FAILED",
@@ -9478,31 +11240,25 @@ export function useMeetSocket({
     }
 
     if (reconnectInFlightRef.current) {
-      await handleReconnect({ immediate: true, userInitiated: true });
+      cancelPathProbeRef.current?.();
+      await handleReconnect(USER_RETRY_REQUEST);
       return;
     }
 
     reconnectGenerationRef.current += 1;
-    reconnectAttemptsRef.current = 0;
-    setMeetError(null);
-    updateReconnectRecoveryStatus(
-      buildReconnectRecoveryStatus(
-        "connecting",
-        1,
-        "Retrying reconnect now.",
-      ),
-    );
-    setConnectionState("reconnecting");
+    applyUserRetry(freshReconnectAttemptState());
 
     if (currentRoomIdRef.current) {
-      await handleReconnect({ immediate: true, userInitiated: true });
+      await handleReconnect(USER_RETRY_REQUEST);
       return;
     }
 
     await startJoin(targetRoomId);
   }, [
+    applyUserRetry,
     currentRoomIdRef,
     handleReconnect,
+    joinOptionsRef,
     reconnectAttemptsRef,
     reconnectInFlightRef,
     roomId,
@@ -9511,6 +11267,10 @@ export function useMeetSocket({
     startJoin,
     updateReconnectRecoveryStatus,
   ]);
+
+  useEffect(() => {
+    retryReconnectRef.current = () => retryReconnect();
+  }, [retryReconnect]);
 
   useEffect(() => {
     if (shouldAutoJoinRef.current) {
@@ -9538,8 +11298,8 @@ export function useMeetSocket({
               | { error: string },
           ) => {
             if ("error" in response) {
-              console.error(
-                "[Meets] Failed to toggle room lock:",
+              logCallError(
+                "[Meets] Failed to toggle room lock",
                 response.error,
               );
               resolve(false);
@@ -9571,7 +11331,7 @@ export function useMeetSocket({
               | { error: string }
           ) => {
             if ("error" in response) {
-              console.error("[Meets] Failed to toggle no-guests:", response.error);
+              logCallError("[Meets] Failed to toggle no-guests", response.error);
               resolve(false);
             } else {
               resolve(response.success);
@@ -9597,7 +11357,7 @@ export function useMeetSocket({
           { locked },
           (response: { success: boolean; locked?: boolean } | { error: string }) => {
             if ("error" in response) {
-              console.error("[Meets] Failed to toggle chat lock:", response.error);
+              logCallError("[Meets] Failed to toggle chat lock", response.error);
               resolve(false);
             } else {
               resolve(response.success);
@@ -9626,8 +11386,8 @@ export function useMeetSocket({
           permissions,
           (response: { success: boolean } | { error: string }) => {
             if ("error" in response) {
-              console.error(
-                "[Meets] Failed to update participant media permissions:",
+              logCallError(
+                "[Meets] Failed to update participant media permissions",
                 response.error,
               );
               resolve(false);
@@ -9665,7 +11425,7 @@ export function useMeetSocket({
               | { error: string },
           ) => {
             if ("error" in response) {
-              console.error("[Meets] Failed to end room:", response.error);
+              logCallError("[Meets] Failed to end room", response.error);
               resolve(false);
               return;
             }
@@ -9693,8 +11453,8 @@ export function useMeetSocket({
           "transcript:getToken",
           (response: TranscriptTokenResponse | { error: string }) => {
             if ("error" in response) {
-              console.error(
-                "[Meets] Failed to fetch transcript token:",
+              logCallError(
+                "[Meets] Failed to fetch transcript token",
                 response.error,
               );
               resolve(null);
@@ -9719,8 +11479,8 @@ export function useMeetSocket({
           "transcript:sfuRelayStatus",
           (response: TranscriptSfuRelayStatusResponse | { error: string }) => {
             if ("error" in response) {
-              console.error(
-                "[Meets] Failed to fetch transcript SFU relay status:",
+              logCallError(
+                "[Meets] Failed to fetch transcript SFU relay status",
                 response.error,
               );
               resolve(null);
@@ -9754,8 +11514,8 @@ export function useMeetSocket({
           request,
           (response: TranscriptSfuRelayStartResponse | { error: string }) => {
             if ("error" in response) {
-              console.error(
-                "[Meets] Failed to start transcript SFU relay:",
+              logCallError(
+                "[Meets] Failed to start transcript SFU relay",
                 response.error,
               );
               resolve({
@@ -9786,8 +11546,8 @@ export function useMeetSocket({
           "transcript:sfuRelayStop",
           (response: TranscriptSfuRelayStopResponse | { error: string }) => {
             if ("error" in response) {
-              console.error(
-                "[Meets] Failed to stop transcript SFU relay:",
+              logCallError(
+                "[Meets] Failed to stop transcript SFU relay",
                 response.error,
               );
               resolve(null);
@@ -9812,8 +11572,8 @@ export function useMeetSocket({
           "meeting:getConfig",
           (response: MeetingConfigSnapshot | { error: string }) => {
             if ("error" in response) {
-              console.error(
-                "[Meets] Failed to fetch meeting config:",
+              logCallError(
+                "[Meets] Failed to fetch meeting config",
                 response.error,
               );
               resolve(null);
@@ -9846,8 +11606,8 @@ export function useMeetSocket({
               | { error: string },
           ) => {
             if ("error" in response) {
-              console.error(
-                "[Meets] Failed to update meeting config:",
+              logCallError(
+                "[Meets] Failed to update meeting config",
                 response.error,
               );
               resolve(null);
@@ -9876,7 +11636,7 @@ export function useMeetSocket({
         "webinar:getConfig",
         (response: WebinarConfigSnapshot | { error: string }) => {
           if ("error" in response) {
-            console.error("[Meets] Failed to fetch webinar config:", response.error);
+            logCallError("[Meets] Failed to fetch webinar config", response.error);
             resolve(null);
             return;
           }
@@ -9905,7 +11665,7 @@ export function useMeetSocket({
               | { error: string },
           ) => {
             if ("error" in response) {
-              console.error("[Meets] Failed to update webinar config:", response.error);
+              logCallError("[Meets] Failed to update webinar config", response.error);
               resolve(null);
               return;
             }
@@ -9930,7 +11690,7 @@ export function useMeetSocket({
         "webinar:rotateLink",
         (response: WebinarLinkResponse | { error: string }) => {
           if ("error" in response) {
-            console.error("[Meets] Failed to rotate webinar link:", response.error);
+            logCallError("[Meets] Failed to rotate webinar link", response.error);
             resolve(null);
             return;
           }
@@ -9953,7 +11713,7 @@ export function useMeetSocket({
           "webinar:generateLink",
           (response: WebinarLinkResponse | { error: string }) => {
             if ("error" in response) {
-              console.error("[Meets] Failed to generate webinar link:", response.error);
+              logCallError("[Meets] Failed to generate webinar link", response.error);
               resolve(null);
               return;
             }
@@ -9995,15 +11755,17 @@ export function useMeetSocket({
       const socket = socketRef.current;
       if (!socket) return;
       setWebinarQaEntries((previous) =>
-        previous.map((entry) =>
-          entry.id === id
-            ? {
-                ...entry,
-                hasUpvoted: !entry.hasUpvoted,
-                upvotes: Math.max(0, entry.upvotes + (entry.hasUpvoted ? -1 : 1)),
-              }
-            : entry,
-        ),
+        previous === null
+          ? null
+          : previous.map((entry) =>
+              entry.id === id
+                ? {
+                    ...entry,
+                    hasUpvoted: !entry.hasUpvoted,
+                    upvotes: Math.max(0, entry.upvotes + (entry.hasUpvoted ? -1 : 1)),
+                  }
+                : entry,
+            ),
       );
       socket.emit(
         "webinar:qa:upvote",
@@ -10015,31 +11777,35 @@ export function useMeetSocket({
         ) => {
           if ("error" in response) {
             setWebinarQaEntries((previous) =>
-              previous.map((entry) =>
-                entry.id === id
-                  ? {
-                      ...entry,
-                      hasUpvoted: !entry.hasUpvoted,
-                      upvotes: Math.max(
-                        0,
-                        entry.upvotes + (entry.hasUpvoted ? -1 : 1),
-                      ),
-                    }
-                  : entry,
-              ),
+              previous === null
+                ? null
+                : previous.map((entry) =>
+                    entry.id === id
+                      ? {
+                          ...entry,
+                          hasUpvoted: !entry.hasUpvoted,
+                          upvotes: Math.max(
+                            0,
+                            entry.upvotes + (entry.hasUpvoted ? -1 : 1),
+                          ),
+                        }
+                      : entry,
+                  ),
             );
             return;
           }
           setWebinarQaEntries((previous) =>
-            previous.map((entry) =>
-              entry.id === id
-                ? {
-                    ...entry,
-                    upvotes: response.upvotes,
-                    hasUpvoted: response.hasUpvoted,
-                  }
-                : entry,
-            ),
+            previous === null
+              ? null
+              : previous.map((entry) =>
+                  entry.id === id
+                    ? {
+                        ...entry,
+                        upvotes: response.upvotes,
+                        hasUpvoted: response.hasUpvoted,
+                      }
+                    : entry,
+                ),
           );
         },
       );
@@ -10100,7 +11866,7 @@ export function useMeetSocket({
   }, [socketRef]);
 
   const promoteWebinarAttendee = useCallback(
-    (userId: string): Promise<{ ok: boolean; error?: string }> => {
+    (userId: string): Promise<{ ok: boolean; error?: string; code?: string }> => {
       const socket = socketRef.current;
       if (!socket) return Promise.resolve({ ok: false, error: "Not connected" });
 
@@ -10111,9 +11877,13 @@ export function useMeetSocket({
           () => resolve({ ok: false, error: "The server did not respond. Try again." }),
           "webinar:promoteAttendee",
           { userId },
-          (response: { success: boolean } | { error: string }) => {
+          (
+            response:
+              | { success: boolean }
+              | { error: string; code?: string },
+          ) => {
             if ("error" in response) {
-              resolve({ ok: false, error: response.error });
+              resolve({ ok: false, error: response.error, code: response.code });
               return;
             }
             resolve({ ok: true });
@@ -10151,6 +11921,7 @@ export function useMeetSocket({
 
   return {
     cleanup,
+    closeConnection,
     cleanupRoomResources,
     connectSocket,
     ensureProducerTransport,
@@ -10158,7 +11929,10 @@ export function useMeetSocket({
     joinRoom,
     joinRoomById,
     retryReconnect,
+    mediaPathHealth,
     reconnectRecoveryStatus,
+    admittedAt,
+    reconnectInFlight,
     toggleRoomLock,
     toggleNoGuests,
     toggleChatLock,

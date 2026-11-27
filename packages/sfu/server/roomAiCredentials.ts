@@ -22,7 +22,6 @@ const isTextProvider = (provider: RoomAiProvider): provider is "openai" | "anthr
   provider === "openai" || provider === "anthropic";
 
 export class RoomAiCredentials {
-  // Private fields cannot leak through room snapshots or JSON serialization.
   #keys = new Map<RoomAiProvider, { apiKey: string; ownerId: string }>();
   #assistantModel: string | null = null;
   #features: RoomAiFeatureSettings = {};
@@ -48,7 +47,6 @@ export class RoomAiCredentials {
     const apiKey =
       options.apiKey ??
       (getProviderApiKey(env, provider) || this.get(provider) || "");
-    // Personal keys are used for this request only, never retained on the room.
     if (options.apiKey !== undefined)
       return fetchAiModelCatalog({ provider, apiKey, env });
     const cached = this.#catalogs.get(provider);

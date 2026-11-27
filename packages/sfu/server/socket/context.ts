@@ -14,31 +14,42 @@ export type ConnectionContext = {
   pendingRoomChannelId: string | null;
   pendingUserKey: string | null;
   currentUserKey: string | null;
-  // Answers are added only after their first signed packet is relayed and
-  // removed when a terminal packet arrives. Socket disconnect cleanup drains
-  // this map so peers never retain an orphaned streaming assistant bubble.
+  // How many joins this socket has asked for. Only the newest may act: an
+  // older one still waiting when a newer one arrives answers and does
+  // nothing.
+  joinAttempts: number;
   activeConclaveAnswers: ActiveConclaveAnswers;
-  // True once admin socket handlers have been bound for this socket. joinRoom
-  // (incl. the in-place room-switch path) and the host-promotion paths can each
-  // call registerAdminHandlers on the SAME live socket; this guards against
-  // stacking duplicate listeners (which would fire each admin action N times).
   adminHandlersRegistered: boolean;
 };
 
-// socket.io types `socket.data` as `any`; this pair is the single asserted
-// view of the context slot. registerConnectionHandlers is the only writer,
-// once per connection.
 type SocketContextData = { context?: ConnectionContext };
 
 export const getSocketContext = (
   socket: Socket,
-): ConnectionContext | undefined => (socket.data as SocketContextData).context;
+): ConnectionContext | undefined => (socket.data as SocketContextData | undefined)?.context;
 
 export const setSocketContext = (
   socket: Socket,
   context: ConnectionContext,
 ): void => {
   (socket.data as SocketContextData).context = context;
+};
+
+export const forgetLostSeat = (context: ConnectionContext): void => {
+  const room = context.currentRoom;
+  const client = context.currentClient;
+  if (!client) return;
+  if (
+    room &&
+    context.state.rooms.get(room.channelId) === room &&
+    room.getClient(client.id) === client &&
+    client.socket === context.socket
+  ) {
+    return;
+  }
+  context.currentRoom = null;
+  context.currentClient = null;
+  context.currentUserKey = null;
 };
 
 export const createConnectionContext = (
@@ -56,6 +67,7 @@ export const createConnectionContext = (
     pendingRoomChannelId: null,
     pendingUserKey: null,
     currentUserKey: null,
+    joinAttempts: 0,
     activeConclaveAnswers: new Map(),
     adminHandlersRegistered: false,
   };

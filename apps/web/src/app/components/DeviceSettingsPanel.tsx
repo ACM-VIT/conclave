@@ -53,6 +53,7 @@ import {
   type MediaQualitySettings,
   type ScreenShareQualityPreset,
 } from "../lib/media-quality-settings";
+import PanelNoticeSlot from "./PanelNoticeSlot";
 
 type SettingsTab = "video" | "audio" | "connection";
 
@@ -717,9 +718,13 @@ export default function DeviceSettingsPanel({
   const handlePlayTestSound = useCallback(() => {
     if (isPlayingTestSound) return;
     setIsPlayingTestSound(true);
-    void playSpeakerTestSound(selectedAudioOutputDeviceId).finally(() => {
-      setIsPlayingTestSound(false);
-    });
+    void playSpeakerTestSound(selectedAudioOutputDeviceId)
+      .catch((error) => {
+        console.warn("[Meets] Speaker test failed:", error);
+      })
+      .finally(() => {
+        setIsPlayingTestSound(false);
+      });
   }, [isPlayingTestSound, selectedAudioOutputDeviceId]);
 
   const loopbackLabel =
@@ -837,6 +842,7 @@ export default function DeviceSettingsPanel({
           <X size={18} strokeWidth={ICON_STROKE} />
         </button>
       </header>
+      <PanelNoticeSlot />
 
       <div
         className="grid grid-cols-3 border-b px-4"

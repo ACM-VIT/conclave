@@ -278,10 +278,6 @@ export function summarizePublisherVideoStats(
         id: stat.id,
         ssrc: stat.ssrc ?? null,
         rid: stat.rid ?? null,
-        // Chromium may retain zero-byte RTP placeholders marked `active`, or
-        // send an occasional maintenance frame after an encoding is disabled.
-        // Count an encoding as live only when both configured active and
-        // transmitting; aggregate bandwidth below still counts every byte.
         active:
           (typeof stat.active === "boolean" ? stat.active : true) &&
           transmitted,

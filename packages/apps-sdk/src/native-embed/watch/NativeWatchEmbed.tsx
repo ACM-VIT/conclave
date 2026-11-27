@@ -17,6 +17,7 @@ import {
 import { useWatchDocState } from "../../apps/watch/web/hooks/useWatchDocState";
 import { useWatchRequests } from "../../apps/watch/web/hooks/useWatchRequests";
 import { planPlaybackCorrection } from "../../apps/watch/web/playbackSync";
+import { cutText } from "../../sdk/text";
 import {
   APP_EDIT_COMMANDS,
   WATCH_LIMITS,
@@ -66,7 +67,7 @@ const usePlaybackState = (doc: Y.Doc): "playing" | "paused" =>
     () => getPlayback(doc).state,
   );
 
-const clip = (value: string | null | undefined, limit: number): string => (value ?? "").slice(0, limit);
+const clip = (value: string | null | undefined, limit: number): string => cutText(value ?? "", limit);
 
 const recordKey = (doc: Y.Doc): string => {
   const record = getPlayback(doc);
@@ -106,19 +107,19 @@ export function NativeWatchEmbed({ session }: { session: NativeEmbedSession }) {
   const frameVideoRef = useRef<string | null>(null);
   frameVideoRef.current = frame ? frame.videoId : null;
   useEffect(() => {
-    if (!synced || !videoId || !isValidVideoId(videoId)) {
+    if (host.locallyHidden || !synced || !videoId || !isValidVideoId(videoId)) {
       setFrame(null);
       return;
     }
     setFrame((existing) => existing ?? { videoId, start: expectedPosition(getPlayback(doc)) });
-  }, [synced, videoId, doc]);
+  }, [host.locallyHidden, synced, videoId, doc]);
 
   const markProgrammatic = useCallback(() => {
     programmaticUntil.current = Date.now() + PROGRAMMATIC_WINDOW_MS;
   }, []);
 
   followRef.current = () => {
-    if (!syncedRef.current) return;
+    if (!syncedRef.current || session.hostStatus.locallyHidden) return;
     const current = getVideoId(doc);
     if (!current) {
       loadedVideoId.current = null;
@@ -178,6 +179,7 @@ export function NativeWatchEmbed({ session }: { session: NativeEmbedSession }) {
   };
 
   playerEventRef.current = (event) => {
+    if (session.hostStatus.locallyHidden) return;
     const now = Date.now();
     const current = getVideoId(doc);
     if (event === "ready") {
@@ -269,6 +271,7 @@ export function NativeWatchEmbed({ session }: { session: NativeEmbedSession }) {
       if (!session.isSynced) return { ok: false, error: "notSynced" };
       if (EDIT_COMMANDS.has(envelope.type) && readOnlyRef.current) return { ok: false, error: "readOnly" };
       const current = session.hostStatus;
+      if (current.locallyHidden) return { ok: false, error: "notReady" };
       const context = { userId: current.userId || null, userName: current.userName || null };
       switch (envelope.type) {
         case "playNow": {
@@ -340,6 +343,8 @@ export function NativeWatchEmbed({ session }: { session: NativeEmbedSession }) {
         case "status":
         case "resync":
         case "close":
+        case "prepareToLeave":
+        case "savedSnapshot":
         case "setTool":
         case "setColor":
         case "setStrokeWidth":
@@ -361,21 +366,25 @@ export function NativeWatchEmbed({ session }: { session: NativeEmbedSession }) {
         case "setRemoveWinner":
         case "setSounds":
         case "clearResults":
+        case "addOutcome":
         default:
           return { ok: false, error: "unknownCommand" };
       }
     };
-    session.setCommandHandler(handler);
-    return () => {
-      session.setCommandHandler(null);
-    };
+    session.start(handler);
   }, [session, doc]);
 
-  const attachFrame = useCallback((element: HTMLIFrameElement | null) => controller.attach(element), [controller]);
+  const attachFrame = useCallback((element: HTMLIFrameElement | null) => {
+    controller.attach(element);
+    if (element === null) {
+      lastReport.current = { time: 0, at: 0 };
+      lastRecordKey.current = "";
+    }
+  }, [controller]);
 
   return (
     <div className="watch-page">
-      {frame ? (
+      {frame && !host.locallyHidden ? (
         <iframe
           ref={attachFrame}
           className="watch-frame"

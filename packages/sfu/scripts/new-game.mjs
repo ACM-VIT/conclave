@@ -1,16 +1,4 @@
 #!/usr/bin/env node
-/**
- * Scaffold a new Conclave game end to end.
- *
- *   node packages/sfu/scripts/new-game.mjs <kebab-id> "Display Name"
- *
- * Creates:
- *   - packages/sfu/server/games/modules/<camel>.ts   (authoritative logic)
- *   - apps/web/src/app/components/games/<Pascal>Game.tsx  (renderer)
- * and registers both (server registry + web registry) automatically.
- *
- * After running: fill in the reducer in the module and the JSX in the renderer.
- */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -135,7 +123,6 @@ export default function ${Pascal}Game({
 writeFileSync(modulePath, moduleTemplate);
 writeFileSync(rendererPath, rendererTemplate);
 
-// Auto-register on the server: add import + array entry.
 let server = readFileSync(serverRegistry, "utf8");
 server = server.replace(
   /(import type \{ GameCatalogEntry)/,
@@ -147,7 +134,6 @@ server = server.replace(
 );
 writeFileSync(serverRegistry, server);
 
-// Auto-register on the web: add import + map entry.
 let web = readFileSync(webRegistry, "utf8");
 web = web.replace(
   /(export const GAME_RENDERERS)/,

@@ -46,7 +46,7 @@ function ChatOverlay({ messages, onDismiss }: ChatOverlayProps) {
                     className="inline-flex shrink-0 items-center gap-0.5 text-[11px] font-medium"
                     style={{ color: color.warning }}
                   >
-                    <Lock size={11} strokeWidth={2} />
+                    <Lock size={11} strokeWidth={1.75} />
                     Private
                   </span>
                 ) : null}
@@ -87,7 +87,7 @@ function ChatOverlay({ messages, onDismiss }: ChatOverlayProps) {
               style={{ color: color.textFaint }}
               aria-label={`Dismiss message from ${displayName}`}
             >
-              <X size={15} strokeWidth={2} />
+              <X size={15} strokeWidth={1.75} />
             </button>
           </div>
         );

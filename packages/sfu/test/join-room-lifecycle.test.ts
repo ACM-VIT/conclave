@@ -1,18 +1,24 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Router, Worker } from "mediasoup/types";
+import { seed } from "./support/controlPlane.js";
+import type { Consumer, Router, Worker } from "mediasoup/types";
 import type { Server as SocketIOServer, Socket } from "socket.io";
 import { Admin } from "../config/classes/Admin.js";
 import { Client } from "../config/classes/Client.js";
 import { Room } from "../config/classes/Room.js";
-import { LocalRoomRegistry } from "../server/roomRegistry.js";
+import { config } from "../config/config.js";
+import { NO_HOST_LEFT_MESSAGE } from "../server/admin/controlPlane.js";
+import { LocalRoomRegistry, RoomOpeningError } from "../server/roomRegistry.js";
+import { createWebinar } from "../server/controlPlane/webinarCommands.js";
 import type { SfuAuthPayload } from "../server/socket/auth.js";
 import { createConnectionContext } from "../server/socket/context.js";
 import { registerAdminHandlers } from "../server/socket/handlers/adminHandlers.js";
 import { registerDisconnectHandlers } from "../server/socket/handlers/disconnectHandlers.js";
 import { registerJoinRoomHandler } from "../server/socket/handlers/joinRoom.js";
 import { registerTransportHandlers } from "../server/socket/handlers/transportHandlers.js";
-import { getOrCreateRoomWithOrigin } from "../server/rooms.js";
+import { registerWebinarHandlers } from "../server/socket/handlers/webinarHandlers.js";
+import { ROOM_WRITE_COMMIT_MS, forceCloseRoom, getOrCreateRoomWithOrigin, writeSharedRoomState } from "../server/rooms.js";
 import { createSfuState, type SfuState } from "../server/state.js";
+import { advanceScheduledWebinars } from "../server/scheduledWebinarScheduler.js";
 import { getOrCreateWebinarRoomConfig, setCustomWebinarLinkSlug } from "../server/webinar.js";
 import type { ScheduledWebinar } from "../types.js";
 
@@ -24,18 +30,30 @@ afterEach(() => {
 
 const makeSocket = (id: string, user: SfuAuthPayload = {}) => {
   const handlers = new Map<string, Handler>();
+  const emit = vi.fn();
+  const roomEmits = new Map<string, ReturnType<typeof vi.fn>>();
+  const emitToRoom = (channelId: string) => {
+    const existing = roomEmits.get(channelId);
+    if (existing) return existing;
+    const recorder = vi.fn();
+    roomEmits.set(channelId, recorder);
+    return recorder;
+  };
+  const to = (channelId: string) => ({ emit: emitToRoom(channelId) });
+  const disconnect = vi.fn();
+  const joinChannel = vi.fn();
   const socket = {
     id,
     data: { user },
     on: (event: string, handler: Handler) => handlers.set(event, handler),
-    emit: vi.fn(),
-    disconnect: vi.fn(),
+    emit,
+    disconnect,
     connected: true,
-    join: vi.fn(),
+    join: joinChannel,
     leave: vi.fn(),
-    to: () => ({ emit: vi.fn() }),
+    to,
   } as unknown as Socket;
-  return { socket, handlers };
+  return { socket, handlers, emit, emitToRoom, disconnect, joinChannel };
 };
 
 const makeState = (workers: Worker[] = []): SfuState => {
@@ -51,7 +69,11 @@ const makeState = (workers: Worker[] = []): SfuState => {
 };
 
 const broadcast = vi.fn();
-const io = { to: () => ({ emit: broadcast }) } as unknown as SocketIOServer;
+const disconnectRoom = vi.fn();
+const io = {
+  to: () => ({ emit: broadcast }),
+  in: () => ({ disconnectSockets: disconnectRoom }),
+} as unknown as SocketIOServer;
 
 const join = async (
   state: SfuState,
@@ -69,6 +91,160 @@ const join = async (
   ] as never[]);
   return { context, peer, ack };
 };
+
+it("acknowledges an overtaken join only once after a schedule read", async () => {
+  const state = makeState();
+  const peer = makeSocket("joining", { userId: "reader", email: "reader@example.test" });
+  registerJoinRoomHandler(createConnectionContext(io, peer.socket, state));
+  const original = state.controlPlane;
+  let captured = () => {};
+  let resume = () => {};
+  const readCaptured = new Promise<void>((resolve) => { captured = resolve; });
+  const hold = new Promise<void>((resolve) => { resume = resolve; });
+  state.controlPlane = {
+    ...original,
+    read: async (query) => {
+      const result = await original.read(query);
+      captured();
+      await hold;
+      return result;
+    },
+  };
+
+  const joinRoom = peer.handlers.get("joinRoom")!;
+  const ack = vi.fn();
+  const first = joinRoom(...[{ roomId: "first-room" }, ack] as never[]);
+  await readCaptured;
+  try {
+    await joinRoom(...[{ roomId: "" }, vi.fn()] as never[]);
+  } finally {
+    resume();
+    await first;
+  }
+  expect(ack.mock.calls).toEqual([[{ error: "A newer join from this connection took over." }]]);
+});
+
+describe("host roster on join", () => {
+  it("updates the old room's roster when its host switches rooms on the same socket", async () => {
+    const state = makeState();
+    const [oldRoom, nextRoom] = ["old", "next"].map((id) => {
+      const room = new Room({ id, clientId: "conclave", workerPid: null, router: {} as Router });
+      state.rooms.set(room.channelId, room);
+      return room;
+    });
+    const { peer } = await join(state, "alice-socket", {
+      userId: "alice", clientId: "conclave", sessionId: "a", isForcedHost: true,
+    }, oldRoom.id);
+    await join(state, "bob-socket", {
+      userId: "bob", clientId: "conclave", sessionId: "b", isForcedHost: true,
+    }, oldRoom.id);
+    expect(oldRoom.getHostUserId()).toBe("alice#a");
+    const oldRoomEvents = peer.emitToRoom(oldRoom.channelId);
+    const nextRoomEvents = peer.emitToRoom(nextRoom.channelId);
+    oldRoomEvents.mockClear();
+    nextRoomEvents.mockClear();
+    const ack = vi.fn();
+    await peer.handlers.get("joinRoom")!(
+      ...[{ roomId: nextRoom.id, sessionId: "a" }, ack] as never[]
+    );
+
+    expect(ack).toHaveBeenCalledWith(
+      expect.objectContaining({ roomId: nextRoom.id, status: "joined", reportsSenderPacketCounts: true }),
+    );
+    expect(oldRoomEvents).toHaveBeenCalledWith("userLeft", { roomId: oldRoom.id, userId: "alice#a" });
+    expect(oldRoomEvents).toHaveBeenCalledWith("hostChanged", { roomId: oldRoom.id, hostUserId: "bob#b" });
+    expect(oldRoomEvents).toHaveBeenCalledWith("adminUsersChanged", { roomId: oldRoom.id, hostUserIds: ["bob#b"] });
+    expect(nextRoomEvents).not.toHaveBeenCalled();
+  });
+
+  it("sends an unchanged roster to the guest and broadcasts a new co-host", async () => {
+    const state = makeState();
+    const room = new Room({
+      id: "room",
+      clientId: "conclave",
+      workerPid: null,
+      router: {} as Router,
+    });
+    state.rooms.set(room.channelId, room);
+    const host = new Admin({ id: "host#h", socket: makeSocket("host-socket").socket });
+    room.setUserIdentity(host.id, "host", "Host");
+    room.grantHost("host", "fallback");
+    room.makePrimaryHost("host");
+    room.addClient(host);
+    broadcast.mockClear();
+
+    const guest = await join(state, "guest-socket", {
+      userId: "guest-bob",
+      clientId: "conclave",
+      sessionId: "guest",
+    });
+    expect(guest.peer.emit).toHaveBeenCalledWith("hostChanged", {
+      roomId: room.id,
+      hostUserId: host.id,
+    });
+    expect(guest.peer.emit).toHaveBeenCalledWith("adminUsersChanged", {
+      roomId: room.id,
+      hostUserIds: [host.id],
+    });
+    expect(broadcast).not.toHaveBeenCalledWith("hostChanged", expect.anything());
+    expect(broadcast).not.toHaveBeenCalledWith("adminUsersChanged", expect.anything());
+
+    await join(state, "cohost-socket", {
+      userId: "carol",
+      clientId: "conclave",
+      sessionId: "cohost",
+      isForcedHost: true,
+    });
+    expect(broadcast).not.toHaveBeenCalledWith("hostChanged", expect.anything());
+    expect(broadcast).toHaveBeenCalledWith("adminUsersChanged", {
+      roomId: room.id,
+      hostUserIds: [host.id, "carol#cohost"],
+    });
+  });
+
+  it("updates peers when a returning co-host becomes the primary host", async () => {
+    vi.useFakeTimers();
+    const state = makeState();
+    const room = new Room({
+      id: "room",
+      clientId: "conclave",
+      workerPid: null,
+      router: {} as Router,
+    });
+    state.rooms.set(room.channelId, room);
+    const first = new Admin({
+      id: "alice#a",
+      socket: makeSocket("first-host").socket,
+    });
+    room.setUserIdentity(first.id, "alice", "Alice");
+    room.grantHost("alice", "fallback");
+    room.makePrimaryHost("alice");
+    room.addClient(first);
+    const fallback = await join(state, "fallback-host", {
+      userId: "bob", clientId: "conclave", sessionId: "b", isForcedHost: true,
+    });
+    const returningUser = { userId: "carol", clientId: "conclave", sessionId: "c" };
+    const returning = await join(state, "returning-host", {
+      ...returningUser, isForcedHost: true,
+    });
+
+    registerAdminHandlers(fallback.context, { roomId: room.id });
+    const kickAck = vi.fn();
+    await fallback.peer.handlers.get("kickUser")!(
+      ...[{ userId: first.id }, kickAck] as never[]
+    );
+    expect(kickAck).toHaveBeenCalledWith({ success: true });
+    expect(room.getHostUserId()).toBe("bob#b");
+    room.scheduleDisconnect("carol#c", returning.peer.socket.id, 10_000, vi.fn());
+    broadcast.mockClear();
+
+    const rejoined = await join(state, "rejoined-host", returningUser);
+    const host = { roomId: room.id, hostUserId: "carol#c" };
+    expect(rejoined.ack).toHaveBeenCalledWith(expect.objectContaining(host));
+    expect(broadcast).toHaveBeenCalledWith("hostChanged", host);
+    expect(broadcast).not.toHaveBeenCalledWith("adminUsersChanged", expect.anything());
+  });
+});
 
 describe("reconnect grace timer", () => {
   const guest = {
@@ -92,7 +268,8 @@ describe("reconnect grace timer", () => {
     state.rooms.set(room.channelId, room);
     const host = new Admin({ id: "host#h", socket: makeSocket("host-socket").socket });
     room.setUserIdentity(host.id, "host@example.com", "Host");
-    room.hostUserKey = "host@example.com";
+    room.grantHost("host@example.com", "fallback");
+    room.makePrimaryHost("host@example.com");
     room.addClient(host);
     const oldSocket = makeSocket("old-guest-socket").socket;
     (oldSocket as { connected: boolean }).connected = false;
@@ -159,6 +336,141 @@ describe("reconnect grace timer", () => {
 });
 
 describe("concurrent room creation", () => {
+  it.each(["worker", "router"] as const)(
+    "does not publish a room if its %s closes during final lease confirmation",
+    async (closing) => {
+      const router = { closed: false, close: vi.fn() };
+      const worker = { pid: 1, closed: false, createRouter: async () => router };
+      const replacement = {
+        pid: 2,
+        closed: false,
+        createRouter: async () => ({ closed: false, close: vi.fn() }),
+      };
+      const state = makeState([worker, replacement] as unknown as Worker[]);
+      const renew = state.roomRegistry.renewRoom.bind(state.roomRegistry);
+      let confirm!: () => void;
+      let confirming!: () => void;
+      const atConfirmation = new Promise<void>((resolve) => { confirming = resolve; });
+      const confirmLease = new Promise<void>((resolve) => { confirm = resolve; });
+      vi.spyOn(state.roomRegistry, "renewRoom").mockImplementationOnce(async (input) => {
+        confirming();
+        await confirmLease;
+        return renew(input);
+      });
+
+      const opening = getOrCreateRoomWithOrigin(state, "conclave", "room");
+      const rejected = expect(opening).rejects.toBeInstanceOf(RoomOpeningError);
+      await atConfirmation;
+      (closing === "worker" ? worker : router).closed = true;
+      confirm();
+      await rejected;
+
+      expect(state.rooms.has("conclave:room")).toBe(false);
+      expect(state.roomCreations.size).toBe(0);
+      expect(state.workerRoomReservations.size).toBe(0);
+      expect(await state.roomRegistry.getAssignment("conclave:room")).toBeNull();
+      expect(router.close).toHaveBeenCalledOnce();
+
+      worker.closed = true;
+      const { room, created } = await getOrCreateRoomWithOrigin(state, "conclave", "room");
+      expect(created).toBe(true);
+      expect(room.workerPid).toBe(replacement.pid);
+      expect(room.router.closed).toBe(false);
+    },
+  );
+
+  it("puts simultaneous new rooms on separate idle workers", async () => {
+    let finishedCreatingRouter!: () => void;
+    const routersReady = new Promise<void>((resolve) => { finishedCreatingRouter = resolve; });
+    const workers = [1, 2, 3].map((pid) => ({
+      pid,
+      closed: false,
+      createRouter: vi.fn(async () => {
+        await routersReady;
+        return { closed: false } as Router;
+      }),
+    }));
+    const state = makeState(workers as unknown as Worker[]);
+    const pending = ["a", "b", "c"].map((id) =>
+      getOrCreateRoomWithOrigin(state, "conclave", id),
+    );
+
+    try {
+      await vi.waitFor(() => {
+        for (const worker of workers) {
+          expect(worker.createRouter).toHaveBeenCalledOnce();
+        }
+      });
+    } finally {
+      finishedCreatingRouter();
+      await Promise.all(pending);
+    }
+  });
+
+  it("spreads a burst across workers with unequal consumer counts", async () => {
+    let finishRouters!: () => void;
+    const routersReady = new Promise<void>((resolve) => { finishRouters = resolve; });
+    const workers = [1, 2].map((pid) => ({
+      pid,
+      closed: false,
+      createRouter: vi.fn(async () => {
+        await routersReady;
+        return { closed: false } as Router;
+      }),
+    }));
+    const state = makeState(workers as unknown as Worker[]);
+    const busy = new Room({
+      id: "busy",
+      clientId: "conclave",
+      workerPid: 1,
+      router: { closed: false } as Router,
+    });
+    const client = new Client({ id: "viewer", socket: makeSocket("viewer").socket });
+    busy.addClient(client);
+    client.consumers.set("first-video", {} as Consumer);
+    client.consumers.set("second-video", {} as Consumer);
+    state.rooms.set(busy.channelId, busy);
+
+    const pending = ["a", "b", "c", "d"].map((id) =>
+      getOrCreateRoomWithOrigin(state, "conclave", id),
+    );
+    try {
+      await vi.waitFor(() => {
+        const creations = workers.reduce((total, worker) => total + worker.createRouter.mock.calls.length, 0);
+        expect(creations).toBe(pending.length);
+      });
+    } finally {
+      finishRouters();
+    }
+    const rooms = await Promise.all(pending);
+    expect(rooms[0].room.workerPid).toBe(2);
+    expect(new Set(rooms.map(({ room }) => room.workerPid))).toEqual(new Set([1, 2]));
+  });
+
+  it("spreads sequential rooms that have no consumers across workers", async () => {
+    const workers = [1, 2].map((pid) => ({
+      pid,
+      closed: false,
+      createRouter: async () => ({ closed: false } as Router),
+    }));
+    const state = makeState(workers as unknown as Worker[]);
+    const { room: busy } = await getOrCreateRoomWithOrigin(state, "conclave", "busy");
+    const client = new Client({ id: "viewer", socket: makeSocket("viewer").socket });
+    busy.addClient(client);
+    client.consumers.set("first-video", {} as Consumer);
+    client.consumers.set("second-video", {} as Consumer);
+
+    const placements = [];
+    for (let i = 0; i < 8; i++) {
+      const { room } = await getOrCreateRoomWithOrigin(state, "conclave", `room-${i}`);
+      placements.push(room.workerPid);
+    }
+
+    expect(placements[0]).toBe(2);
+    expect(placements.filter((pid) => pid === 1)).toHaveLength(3);
+    expect(placements.filter((pid) => pid === 2)).toHaveLength(5);
+  });
+
   it("makes only the joiner whose call created the room its host", async () => {
     let releaseRouter!: () => void;
     const routerReady = new Promise<void>((resolve) => { releaseRouter = resolve; });
@@ -186,14 +498,99 @@ describe("concurrent room creation", () => {
 
     expect(createRouter).toHaveBeenCalledOnce();
     expect(a.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "joined" }));
-    expect(b.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "joined" }));
+    // New rooms start locked, so the joiner who lost the race knocks.
+    expect(b.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "waiting" }));
     expect(a.context.currentClient).toBeInstanceOf(Admin);
     expect(b.context.currentClient).not.toBeInstanceOf(Admin);
 
     const room = state.rooms.get("conclave:room")!;
+    expect(room.pendingClients.has("bob")).toBe(true);
     expect(room.hostUserKey).toBe("alice");
     expect(room.isAdminUserKey("bob")).toBe(false);
     expect(room.getAdminUserIds()).toEqual(["alice#a"]);
+  });
+});
+
+describe("shared room write tracking", () => {
+  const open = () => {
+    const worker = {
+      pid: 1,
+      closed: false,
+      createRouter: async () => ({ closed: false, close: vi.fn() }),
+    } as unknown as Worker;
+    const state = makeState([worker]);
+    const opening = getOrCreateRoomWithOrigin(state, "conclave", "room");
+    return { state, opening };
+  };
+
+  it("waits for prior room writes before publishing a replacement on the same channel", async () => {
+    const { state, opening } = open();
+    const { room } = await opening;
+    let finish!: (landed: boolean) => void;
+    const pending = new Promise<boolean>((resolve) => { finish = resolve; });
+    const previous = writeSharedRoomState(state, room, "final room write", () => pending);
+    expect(forceCloseRoom(state, room)).toBe(true);
+
+    const replacement = getOrCreateRoomWithOrigin(state, "conclave", "room");
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(state.rooms.has(room.channelId)).toBe(false);
+    } finally {
+      finish(true);
+      await previous;
+      await replacement;
+    }
+    expect((await replacement).room).not.toBe(room);
+  });
+
+  it("lets a later opening retry when preceding writes outlast its deadline", async () => {
+    const { state, opening } = open();
+    const { room } = await opening;
+    vi.useFakeTimers();
+    let finish!: (landed: boolean) => void;
+    const pending = new Promise<boolean>((resolve) => { finish = resolve; });
+    const previous = writeSharedRoomState(state, room, "final room write", () => pending);
+    expect(forceCloseRoom(state, room)).toBe(true);
+
+    const blocked = expect(getOrCreateRoomWithOrigin(state, "conclave", "room")).rejects.toThrow(
+      "the previous room's writes did not finish in time",
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(ROOM_WRITE_COMMIT_MS);
+      await blocked;
+      expect(state.rooms.has(room.channelId)).toBe(false);
+    } finally {
+      finish(true);
+      await previous;
+    }
+    expect((await getOrCreateRoomWithOrigin(state, "conclave", "room")).created).toBe(true);
+  });
+
+  it("tracks a channel only while it has an unfinished write", async () => {
+    const { state, opening } = open();
+    const { room } = await opening;
+    const openingWrites = state.roomCommitsInFlight.get(room.channelId);
+    if (openingWrites) await Promise.all(openingWrites);
+
+    let finishFirst!: (landed: boolean) => void;
+    let finishLast!: (landed: boolean) => void;
+    const first = new Promise<boolean>((resolve) => { finishFirst = resolve; });
+    const last = new Promise<boolean>((resolve) => { finishLast = resolve; });
+    const firstCommit = writeSharedRoomState(state, room, "first write", () => first);
+    const lastCommit = writeSharedRoomState(state, room, "last write", () => last);
+    expect(state.roomCommitsInFlight.get(room.channelId)).toEqual(new Set([firstCommit, lastCommit]));
+
+    finishFirst(true);
+    expect(await firstCommit).toBe(true);
+    expect(state.roomCommitsInFlight.get(room.channelId)).toEqual(new Set([lastCommit]));
+
+    finishLast(false);
+    expect(await lastCommit).toBe(false);
+    expect(state.roomCommitsInFlight.has(room.channelId)).toBe(false);
+
+    expect(forceCloseRoom(state, room)).toBe(true);
+    expect(await state.roomRegistry.getAssignment(room.channelId)).toBeNull();
+    expect(state.roomCommitsInFlight.has(room.channelId)).toBe(false);
   });
 });
 
@@ -338,6 +735,170 @@ describe("waiting-room entry on disconnect", () => {
 });
 
 describe("scheduled webinar link codes", () => {
+  it.each(["rejected", "stalled", "lease lost", "room replaced"] as const)(
+    "does not end an audience on a %s cleanup check",
+    async (failure) => {
+      vi.useFakeTimers();
+      broadcast.mockClear();
+      disconnectRoom.mockClear();
+      const state = makeState([{
+        pid: 1, closed: false, createRouter: async () => ({
+          closed: false, close: vi.fn(), rtpCapabilities: { codecs: [], headerExtensions: [] },
+        }),
+      } as unknown as Worker]);
+      const now = Date.now();
+      const booked = await state.controlPlane.commit(createWebinar({
+        title: "Town hall", linkSlug: "town-hall",
+        scheduledStartAt: now + 60_000, scheduledEndAt: now + 3_600_000,
+        earlyEntryMinutes: 10, publicAccess: true,
+      }, {
+        clientId: "conclave", createdBy: "host@example.com", defaultHostEmail: "host@example.com",
+      }));
+      if (!booked.ok) throw Error(booked.message ?? booked.reason);
+      const { webinar } = booked.value;
+      const audience = await join(state, "viewer", {
+        userId: "viewer", clientId: "conclave", sessionId: "v", joinMode: "webinar_attendee",
+      }, webinar.linkSlug);
+      expect(audience.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "joined" }));
+      const channel = `conclave:${webinar.roomId}`;
+      const room = state.rooms.get(channel)!;
+      let finish!: (result: null) => void;
+      const held = new Promise<null>((resolve) => { finish = resolve; });
+      const read = vi.spyOn(state.controlPlane, "read");
+      if (failure === "rejected") read.mockRejectedValueOnce(new Error("Store unavailable"));
+      else read.mockImplementationOnce(() => held);
+
+      await vi.advanceTimersByTimeAsync(config.adminCleanupTimeout);
+      if (failure === "room replaced") {
+        forceCloseRoom(state, room);
+        const { room: replacement } = await getOrCreateRoomWithOrigin(state, "conclave", room.id);
+        finish(null);
+        await vi.advanceTimersByTimeAsync(config.adminCleanupTimeout + 1);
+        expect(state.rooms.get(channel)).toBe(replacement);
+        expect(disconnectRoom).not.toHaveBeenCalled();
+        return;
+      }
+      if (failure === "lease lost") {
+        const lease = vi.spyOn(state.roomRegistry, "holdsLease").mockReturnValue(false);
+        finish(null);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(state.rooms.get(channel)).toBe(room);
+        expect(disconnectRoom).not.toHaveBeenCalled();
+        lease.mockRestore();
+      } else if (failure === "stalled") {
+        await vi.advanceTimersByTimeAsync(5_001);
+        expect(room.cleanupDeadline).not.toBeNull();
+        finish(null);
+      }
+      await vi.advanceTimersByTimeAsync(1);
+      expect(state.rooms.get(channel)?.getWebinarAttendeeCount()).toBe(1);
+      expect(disconnectRoom).not.toHaveBeenCalled();
+      expect(broadcast).not.toHaveBeenCalledWith("roomEnded", expect.anything());
+
+      read.mockResolvedValueOnce(null);
+      await vi.advanceTimersByTimeAsync(config.adminCleanupTimeout + 1);
+      expect(state.rooms.has(channel)).toBe(false);
+      expect(disconnectRoom).toHaveBeenCalledOnce();
+      expect(broadcast).toHaveBeenCalledWith("roomEnded", {
+        roomId: room.id, message: NO_HOST_LEFT_MESSAGE, endedBy: "server",
+      });
+    },
+  );
+
+  it.each(["host arrives", "window expires"])("keeps an early audience seated past ordinary cleanup until the %s", async (outcome) => {
+    vi.useFakeTimers();
+    broadcast.mockClear();
+    disconnectRoom.mockClear();
+    const router = {
+      closed: false, close: vi.fn(), rtpCapabilities: { codecs: [], headerExtensions: [] },
+    } as unknown as Router;
+    const state = makeState([{ pid: 1, closed: false, createRouter: async () => router } as unknown as Worker]);
+    const earlyEntryMinutes = 10;
+    const scheduledStartAt = Date.now() + earlyEntryMinutes * 60_000 + 1;
+    const booked = await state.controlPlane.commit(createWebinar({
+      title: "Town hall",
+      linkSlug: "town-hall",
+      scheduledStartAt,
+      scheduledEndAt: scheduledStartAt + 3_600_000,
+      earlyEntryMinutes,
+      publicAccess: true,
+    }, {
+      clientId: "conclave", createdBy: "host@example.com", defaultHostEmail: "host@example.com",
+    }));
+    if (!booked.ok) throw Error(booked.message ?? booked.reason);
+    const { webinar } = booked.value;
+    const viewer: SfuAuthPayload = {
+      userId: "viewer", clientId: "conclave", sessionId: "v", joinMode: "webinar_attendee",
+    };
+    const tooEarly = await join(state, "too-early", viewer, webinar.linkSlug);
+    expect(tooEarly.ack).toHaveBeenCalledWith({ error: "Webinar is not live." });
+    await vi.advanceTimersByTimeAsync(1);
+    const audience = await join(state, "attendee-socket", viewer, webinar.linkSlug);
+    expect(audience.ack).toHaveBeenCalledWith(expect.objectContaining({
+      status: "joined", roomId: webinar.roomId, webinarRole: "attendee", hostUserIds: [],
+    }));
+    const channelId = `conclave:${webinar.roomId}`;
+    await vi.advanceTimersByTimeAsync(config.adminCleanupTimeout + 1);
+    expect(broadcast).not.toHaveBeenCalledWith("roomEnded", expect.objectContaining({ roomId: webinar.roomId }));
+    expect(disconnectRoom).not.toHaveBeenCalled();
+    expect(state.rooms.get(channelId)?.getWebinarAttendeeCount()).toBe(1);
+
+    if (outcome === "window expires") {
+      const expiry = webinar.scheduledEndAt + 30 * 60_000;
+      await vi.advanceTimersByTimeAsync(expiry - Date.now());
+      expect(state.rooms.get(channelId)?.getWebinarAttendeeCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(config.adminCleanupTimeout + 1);
+      expect(state.rooms.has(channelId)).toBe(false);
+      expect(broadcast).toHaveBeenCalledWith("roomEnded", {
+        roomId: webinar.roomId, message: NO_HOST_LEFT_MESSAGE, endedBy: "server",
+      });
+      expect(disconnectRoom).toHaveBeenCalledOnce();
+      return;
+    }
+
+    const scheduledHost = await join(state, "host-socket", {
+      userId: "organizer", email: "host@example.com", clientId: "conclave", sessionId: "h",
+    }, webinar.roomId);
+    expect(scheduledHost.ack).toHaveBeenCalledWith(expect.objectContaining({
+      status: "joined", webinarRole: "host", hostUserIds: ["host@example.com#h"], webinarAttendeeCount: 1,
+    }));
+    expect(broadcast).toHaveBeenCalledWith("hostChanged", {
+      roomId: webinar.roomId, hostUserId: "host@example.com#h",
+    });
+  });
+
+  it("still closes an unscheduled room with no eligible host", async () => {
+    vi.useFakeTimers();
+    broadcast.mockClear();
+    disconnectRoom.mockClear();
+    const state = makeState();
+    const room = new Room({
+      id: "ordinary", clientId: "conclave", workerPid: null,
+      router: { closed: false, close: vi.fn() } as unknown as Router,
+    });
+    state.rooms.set(room.channelId, room);
+    const host = await join(state, "host", {
+      userId: "host", clientId: "conclave", sessionId: "h", isForcedHost: true,
+    }, room.id);
+    expect(host.ack).toHaveBeenCalledWith(expect.objectContaining({ webinarRole: "host" }));
+    const webinarConfig = getOrCreateWebinarRoomConfig(state.webinarConfigs, room.channelId);
+    webinarConfig.enabled = true;
+    webinarConfig.publicAccess = true;
+    setCustomWebinarLinkSlug({ webinarConfig, webinarLinks: state.webinarLinks, room, slug: "ordinary" });
+    const audience = await join(state, "attendee", {
+      userId: "viewer", clientId: "conclave", sessionId: "v", joinMode: "webinar_attendee",
+    }, "ordinary");
+    expect(audience.ack).toHaveBeenCalledWith(expect.objectContaining({ webinarRole: "attendee" }));
+    registerDisconnectHandlers(host.context);
+    await host.peer.handlers.get("disconnect")!(...["client namespace disconnect"] as never[]);
+    await vi.advanceTimersByTimeAsync(config.adminCleanupTimeout + 1);
+    expect(broadcast).toHaveBeenCalledWith("roomEnded", {
+      roomId: room.id, message: NO_HOST_LEFT_MESSAGE, endedBy: "server",
+    });
+    expect(disconnectRoom).toHaveBeenCalled();
+    expect(state.rooms.has(room.channelId)).toBe(false);
+  });
+
   it("sends attendees to the scheduled webinar even if another room bound its code", async () => {
     const state = makeState();
     const now = Date.now();
@@ -350,9 +911,7 @@ describe("scheduled webinar link codes", () => {
       updatedAt: now, liveStartedAt: now, endedAt: null, totalJoinCount: 0, peakAttendeeCount: 0,
       webinarLink: "http://localhost/w/launch", coHostInviteTokenHash: null, coHostInviteTokenCreatedAt: null,
     } as ScheduledWebinar;
-    state.scheduledWebinars.byId.set(webinar.id, webinar);
-    state.scheduledWebinars.bySlug.set(webinar.linkSlug, webinar.id);
-    state.scheduledWebinars.byRoomChannel.set("conclave:sched-real", webinar.id);
+    await seed(state.controlPlane, "webinar", webinar);
 
     for (const id of ["sched-real", "squat"]) {
       const room = new Room({ id, clientId: "conclave", workerPid: null, router: { closed: false, close: vi.fn() } as unknown as Router });
@@ -410,5 +969,216 @@ describe("joining a room that closes during its lease renewal", () => {
     expect(createRouter).toHaveBeenCalledOnce();
     expect(context.currentClient).toBeInstanceOf(Admin);
     expect(state.rooms.get("conclave:room")?.hostUserKey).toBe("carol");
+  });
+});
+
+const holdStoreReads = (state: SfuState, held: (read: number) => boolean = () => true) => {
+  const store = state.controlPlane;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let reads = 0;
+  let waiting = 0;
+  state.controlPlane = {
+    ...store,
+    read: async (query) => {
+      reads += 1;
+      if (held(reads)) {
+        waiting += 1;
+        await gate;
+      }
+      return store.read(query);
+    },
+  };
+  return { release, reached: () => vi.waitFor(() => expect(waiting).toBe(1)) };
+};
+
+const openRoom = (state: SfuState, id = "room"): Room => {
+  const room = new Room({ id, clientId: "conclave", workerPid: null, router: { closed: false, close: vi.fn() } as unknown as Router });
+  state.rooms.set(room.channelId, room);
+  return room;
+};
+
+describe("a webinar link code saved across the store read", () => {
+  type Update = (data: Record<string, unknown>, ack: (response: unknown) => void) => Promise<void>;
+
+  const hostedRoom = async (state: SfuState) => {
+    const room = openRoom(state);
+    const host = await join(state, "host-socket", { userId: "host", clientId: "conclave", sessionId: "h", isForcedHost: true });
+    registerWebinarHandlers(host.context);
+    return { room, host, update: host.peer.handlers.get("webinar:updateConfig") as unknown as Update };
+  };
+
+  it("binds no link for a room that closed during the read, so the code stays free", async () => {
+    const state = makeState();
+    const { room, update } = await hostedRoom(state);
+    const reads = holdStoreReads(state);
+    const ack = vi.fn();
+    const saving = update({ enabled: true, linkSlug: "launch-day" }, ack);
+    await reads.reached();
+    expect(forceCloseRoom(state, room)).toBe(true);
+    reads.release();
+    await saving;
+
+    expect(ack).toHaveBeenCalledWith({ error: "Not in a room" });
+    expect(state.webinarLinks.has("launch-day")).toBe(false);
+    expect(state.webinarConfigs.has(room.channelId)).toBe(false);
+    const other = openRoom(state, "other");
+    expect(
+      setCustomWebinarLinkSlug({
+        webinarConfig: getOrCreateWebinarRoomConfig(state.webinarConfigs, other.channelId),
+        webinarLinks: state.webinarLinks,
+        room: other,
+        slug: "launch-day",
+      }).changed,
+    ).toBe(true);
+  });
+
+  it("leaves a room reopened on the same channel during the read as it was", async () => {
+    const state = makeState();
+    const { room, update } = await hostedRoom(state);
+    const reads = holdStoreReads(state);
+    const ack = vi.fn();
+    const saving = update({ enabled: true, linkSlug: "launch-day" }, ack);
+    await reads.reached();
+    forceCloseRoom(state, room);
+    const reopened = openRoom(state);
+    const fresh = getOrCreateWebinarRoomConfig(state.webinarConfigs, reopened.channelId);
+    reads.release();
+    await saving;
+
+    expect(ack).toHaveBeenCalledWith({ error: "Not in a room" });
+    expect(state.webinarLinks.has("launch-day")).toBe(false);
+    expect(state.webinarConfigs.get(reopened.channelId)).toBe(fresh);
+    expect(fresh).toMatchObject({ enabled: false, linkSlug: null });
+  });
+
+  it("refuses a host who stopped being an admin during the read", async () => {
+    const state = makeState();
+    const { room, host, update } = await hostedRoom(state);
+    const reads = holdStoreReads(state);
+    const ack = vi.fn();
+    const saving = update({ enabled: true, linkSlug: "launch-day" }, ack);
+    await reads.reached();
+    const demoted = new Client({ id: host.context.currentClient!.id, socket: host.peer.socket });
+    room.removeClient(demoted.id);
+    room.addClient(demoted);
+    host.context.currentClient = demoted;
+    reads.release();
+    await saving;
+
+    expect(ack).toHaveBeenCalledWith({ error: "Only admins can manage webinar settings" });
+    expect(state.webinarLinks.has("launch-day")).toBe(false);
+    expect(state.webinarConfigs.get(room.channelId)).toMatchObject({ enabled: false, linkSlug: null });
+  });
+
+  it("changes neither room when the host switched rooms on the same socket during the read", async () => {
+    const state = makeState();
+    const { room, host, update } = await hostedRoom(state);
+    const next = openRoom(state, "next");
+    const reads = holdStoreReads(state, (read) => read === 1);
+    const ack = vi.fn();
+    const saving = update({ enabled: true, linkSlug: "launch-day" }, ack);
+    await reads.reached();
+    const switched = vi.fn();
+    await host.peer.handlers.get("joinRoom")!(...[{ roomId: next.id, sessionId: "h" }, switched] as never[]);
+    expect(switched).toHaveBeenCalledWith(expect.objectContaining({ roomId: next.id, status: "joined" }));
+    expect(host.context.currentRoom).toBe(next);
+    reads.release();
+    await saving;
+
+    expect(ack).toHaveBeenCalledWith({ error: "Not in a room" });
+    expect(state.webinarLinks.has("launch-day")).toBe(false);
+    expect(state.webinarConfigs.get(next.channelId)).toMatchObject({ enabled: false, linkSlug: null });
+    expect(state.webinarConfigs.get(room.channelId)?.enabled ?? false).toBe(false);
+  });
+
+  it("still saves the code when the room and the host are unchanged after the read", async () => {
+    const state = makeState();
+    const { room, update } = await hostedRoom(state);
+    const reads = holdStoreReads(state);
+    const ack = vi.fn();
+    const saving = update({ enabled: true, linkSlug: "launch-day" }, ack);
+    await reads.reached();
+    reads.release();
+    await saving;
+
+    expect(ack).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    expect(state.webinarLinks.get("launch-day")).toMatchObject({ roomChannelId: room.channelId });
+    expect(state.webinarConfigs.get(room.channelId)).toMatchObject({ enabled: true, linkSlug: "launch-day" });
+  });
+});
+
+describe("two joins for one tab across the store read", () => {
+  it("lets the join that was asked last win when the earlier one's read is slower", async () => {
+    const state = makeState();
+    const room = openRoom(state);
+    const reads = holdStoreReads(state, (read) => read === 1);
+    const user = { userId: "alice", clientId: "conclave", sessionId: "a", isForcedHost: true };
+    const earlier = join(state, "old-socket", user);
+    await reads.reached();
+    const asked = join(state, "new-socket", user);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    reads.release();
+    const [, later] = await Promise.all([earlier, asked]);
+
+    expect(later.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "joined" }));
+    expect(room.getClient("alice#a")?.socket).toBe(later.peer.socket);
+    expect(later.peer.disconnect).not.toHaveBeenCalled();
+  });
+
+  it("stops a join whose socket closed during the read", async () => {
+    const state = makeState();
+    const room = openRoom(state);
+    const reads = holdStoreReads(state);
+    const peer = makeSocket("gone-socket", { userId: "bob", clientId: "conclave", sessionId: "b", isForcedHost: true });
+    const context = createConnectionContext(io, peer.socket, state);
+    registerJoinRoomHandler(context);
+    const ack = vi.fn();
+    const joining = peer.handlers.get("joinRoom")!(...[{ roomId: room.id, sessionId: "b" }, ack] as never[]);
+    await reads.reached();
+    (peer.socket as { connected: boolean }).connected = false;
+    reads.release();
+    await joining;
+
+    expect(room.getClient("bob#b")).toBeUndefined();
+    expect(context.currentRoom).toBeNull();
+    expect(peer.joinChannel).not.toHaveBeenCalled();
+  });
+});
+
+describe("a scheduled webinar stored under a legacy client of the deployment", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("is hosted, joined and kept by the tick under the deployment's client", async () => {
+    vi.stubEnv("SFU_CLIENT_ID", "acme");
+    const state = makeState();
+    const now = Date.now();
+    await seed(state.controlPlane, "webinar", {
+      id: "w-legacy", clientId: "conclave", roomId: "sched-legacy", linkSlug: "legacy-launch", title: "Launch", description: "",
+      hostEmail: "host@example.com", hostName: "Host", hostUserId: null, coHosts: [],
+      scheduledStartAt: now - 60_000, scheduledEndAt: now + 3_600_000, status: "live",
+      publicAccess: true, maxAttendees: 100, requiresInviteCode: false, waitingRoomEnabled: false,
+      earlyEntryMinutes: 10, qaEnabled: true, notes: "", createdAt: now, createdBy: "host@example.com",
+      updatedAt: now, liveStartedAt: now, endedAt: null, totalJoinCount: 0, peakAttendeeCount: 0,
+      webinarLink: "http://localhost/w/legacy-launch", coHostInviteTokenHash: null, coHostInviteTokenCreatedAt: null,
+    });
+    const room = new Room({ id: "sched-legacy", clientId: "acme", workerPid: null, router: { closed: false, close: vi.fn() } as unknown as Router });
+    state.rooms.set(room.channelId, room);
+
+    const host = await join(state, "host-socket", {
+      userId: "host", clientId: "acme", sessionId: "h", email: "host@example.com",
+    }, "sched-legacy");
+    expect(host.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "joined", webinarRole: "host" }));
+    const attendee = await join(state, "attendee-socket", {
+      userId: "viewer", clientId: "acme", sessionId: "v", joinMode: "webinar_attendee",
+    }, "legacy-launch");
+    expect(attendee.ack).toHaveBeenCalledWith(expect.objectContaining({ roomId: "sched-legacy" }));
+
+    await advanceScheduledWebinars(state, Date.now(), () => {});
+    expect(state.webinarConfigs.get(room.channelId)).toMatchObject({ scheduledWebinarId: "w-legacy", enabled: true });
+    expect([...state.webinarConfigs.keys()]).toEqual([room.channelId]);
+    expect((await state.controlPlane.read((view) => view.get("webinar", "w-legacy")))?.value.clientId).toBe("conclave");
   });
 });

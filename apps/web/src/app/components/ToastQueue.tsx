@@ -8,6 +8,7 @@ export interface ToastItem {
   label: string;
   message: string;
   tone?: "accent" | "danger";
+  action?: { label: string; onPress: () => void };
   onDismiss?: () => void;
 }
 
@@ -37,24 +38,31 @@ export default function ToastQueue({ toasts }: { toasts: (ToastItem | null | und
           style={{ backgroundColor: `${accentColor}18`, color: accentColor }}
           aria-hidden="true"
         >
-          <Icon size={15} strokeWidth={1.8} />
+          <Icon size={16} strokeWidth={1.75} />
         </span>
         <div className="min-w-0 flex-1">
-          <p
-            className="text-[9.5px] font-semibold uppercase tracking-[0.12em]"
-            style={{ color: accentColor }}
-          >
+          <p className="text-[13px] font-medium" style={{ color: color.text }}>
             {toast.label}
           </p>
-          <p className="mt-0.5 line-clamp-2 text-[11.5px] leading-[1.35]" style={{ color: color.textMuted }}>
+          <p className="mt-0.5 line-clamp-2 text-[12px] leading-[1.35]" style={{ color: color.textMuted }}>
             {toast.message}
           </p>
           {queuedCount > 0 && (
-            <p className="mt-1 text-[10px]" style={{ color: color.textFaint }}>
+            <p className="mt-1 text-[12px]" style={{ color: color.textFaint }}>
               +{queuedCount} more
             </p>
           )}
         </div>
+        {toast.action && (
+          <button
+            type="button"
+            onClick={toast.action.onPress}
+            className="inline-flex h-8 shrink-0 items-center rounded-lg px-3 text-[12.5px] font-medium text-white transition-[filter] duration-[120ms] hover:brightness-110"
+            style={{ backgroundColor: accentColor }}
+          >
+            {toast.action.label}
+          </button>
+        )}
         {toast.onDismiss && (
           <button
             type="button"
@@ -63,7 +71,7 @@ export default function ToastQueue({ toasts }: { toasts: (ToastItem | null | und
             className="ml-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-[background-color,color] duration-[120ms] hover:bg-white/[0.06]"
             style={{ color: color.textMuted }}
           >
-            <X size={14} strokeWidth={1.8} />
+            <X size={16} strokeWidth={1.75} />
           </button>
         )}
       </div>

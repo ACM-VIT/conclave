@@ -545,10 +545,6 @@ export async function enableDynamicNetworkCdp(
   });
 }
 
-/**
- * Apply one prevalidated mutation. Deliberately has no catch/fallback path:
- * absence of either modern CDP command invalidates the transition run.
- */
 export async function applyDynamicNetworkCdpMutation(
   cdp,
   mutation,
@@ -1535,8 +1531,6 @@ export function assessDynamicNetworkCheckpointAuthority({ plan, sampler } = {}) 
             source: path.source,
             connectionId: path.connectionId,
             senderId: path.senderId,
-            // replaceTrack changes the source-track generation while retaining
-            // this exact producer, sender, RTP stat, and SSRC path.
             ...(endpoint === "publisher" ? {} : { trackId: path.trackId }),
             consumerId: path.consumerId,
             producerId: path.producerId,
@@ -1732,8 +1726,6 @@ const publisherHasStableVp8PoorCaps = (publisher) => {
   const configuration = publisher?.senderEncodingConfiguration;
   const encodings = configuration?.encodings;
   const maximumBitrates = [80_000, 25_000, 15_000];
-  // Live VP8 transitions are bitrate-only when the sender started healthy;
-  // constrained-start senders may retain lower cadence caps.
   const maximumFramerates = [12, 20, 30];
   const scales = [4, 2, 1];
   return (
@@ -1820,7 +1812,6 @@ export const dynamicNetworkDownshiftCheckpointPassed = (checkpoint) => {
     hasHint(control, 2, "pristine") &&
     ((publisher?.publishQuality === "low" &&
       ((
-        // Chromium rounds the nominal 426x240 16:9 target to 427x240.
         publisher?.encodedWidth <= 427 &&
         publisher?.encodedWidth > 0 &&
         publisher?.encodedHeight <= 240 &&
@@ -1851,10 +1842,6 @@ const receiverHasBoundedRecoveryProof = (snapshot, generation) =>
   snapshot?.networkPolicyEvidence?.browserNetwork?.quality === "good" &&
   snapshot?.networkPolicyEvidence?.browserNetwork?.saveData !== true &&
   snapshot?.maximumSpatialLayer >= 1 &&
-  // This is the early recovery-controller proof: the bounded probe must be
-  // actively requesting an enhancement layer under independent good-network
-  // evidence. The later recoveryFull milestone separately proves that the SFU
-  // actually delivered and sustained the top layer.
   snapshot?.requestedSpatialLayer >= 1;
 
 const receiverHasGoodRecovery = (snapshot, generation) =>
@@ -2425,11 +2412,6 @@ const deriveRealizationSample = (
     !nonEmptyString(sample.candidatePair?.localCandidateId) ||
     !nonEmptyString(sample.candidatePair?.remoteCandidateId) ||
     sample.candidatePair?.selected !== true ||
-    // Chromium can transiently expose the already-selected pair as
-    // `in-progress` while it runs a connectivity check, even though DTLS is
-    // connected and media counters continue on the same UDP path. Treat that
-    // state as usable; path identity, selection, transport state, and strictly
-    // advancing counters remain the causal authority for this proof.
     !selectedCandidatePairIsUsable(sample.candidatePair?.state) ||
     sample.transport.id !== sample.candidatePair.transportId ||
     sample.transport.selectedCandidatePairId !== sample.candidatePair.id ||
@@ -2753,8 +2735,6 @@ export function assessDynamicNetworkRealization(
     "localCandidateId",
     "remoteCandidateId",
   ]) {
-    // RTCStats IDs are scoped to one endpoint/peer connection; Chrome commonly
-    // uses values such as T01 independently in every browser process.
     const endpointPathIds = DYNAMIC_NETWORK_TRANSITION_ENDPOINTS.map(
       (endpoint) => {
         const id = derived.baseline?.[endpoint]?.[field];
@@ -2826,9 +2806,6 @@ export function assessDynamicNetworkRealization(
     }
   }
 
-  // From 12-24s only the primary receiver is bandwidth-limited. This proves
-  // that the 380kbps download rule affected exactly that endpoint while the
-  // publisher and control receiver retained useful pristine throughput.
   requireHealthyBitrate("receiverLimited", "publisher");
   requireHealthyBitrate("receiverLimited", "controlReceiver");
   requireShapedCeiling(
@@ -2838,13 +2815,6 @@ export function assessDynamicNetworkRealization(
       1_000,
   );
 
-  // From 24-36s the publisher's 220kbps upload ceiling source-limits both
-  // downstream receivers. Chromium's outbound-rtp bytesSent counter is taken
-  // before the CDP upload queue and can therefore describe attempted encoder
-  // traffic rather than traffic delivered through that queue. Prove the
-  // source ceiling from both receivers' fixed UDP paths instead. Their mutual
-  // ratio proves that the independently shaped primary receiver and pristine
-  // control receiver saw the same source-limited fanout.
   const publisherUploadCeilingBps =
     DYNAMIC_NETWORK_TRANSITION_POOR_PROFILES.publisher.uploadKbps * 1_000;
   for (const endpoint of ["primaryReceiver", "controlReceiver"]) {

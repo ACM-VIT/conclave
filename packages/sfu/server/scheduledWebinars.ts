@@ -1,7 +1,4 @@
-import { createHash, randomUUID, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
-import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
+import { createHash, randomBytes } from "node:crypto";
 import type {
   CreateScheduledWebinarRequest,
   ScheduledWebinar,
@@ -9,7 +6,7 @@ import type {
   ScheduledWebinarStatus,
   UpdateScheduledWebinarRequest,
 } from "../types.js";
-import { Logger } from "../utilities/loggers.js";
+import { asRecord } from "../utilities/untrusted.js";
 import {
   DEFAULT_WEBINAR_MAX_ATTENDEES,
   MAX_WEBINAR_MAX_ATTENDEES,
@@ -19,7 +16,9 @@ import {
   normalizeWebinarLinkSlug,
   normalizeHostEmail,
 } from "./webinar.js";
+import { InvalidInput } from "./controlPlane/model.js";
 import { canonicalizeClientId } from "./clientIds.js";
+import { storedTimestampOrNull } from "./storedValues.js";
 
 const DEFAULT_EARLY_ENTRY_MINUTES = 10;
 const MAX_EARLY_ENTRY_MINUTES = 240;
@@ -90,8 +89,7 @@ const sanitizeCoHosts = (
   return result;
 };
 
-const generateRandomSlug = (): string => {
-  const bytes = randomBytes(RANDOM_SLUG_LENGTH);
+export const randomWebinarSlug = (bytes: Buffer): string => {
   let out = "";
   for (let i = 0; i < RANDOM_SLUG_LENGTH; i += 1) {
     out += SLUG_ALPHABET[bytes[i] % SLUG_ALPHABET.length];
@@ -99,549 +97,82 @@ const generateRandomSlug = (): string => {
   return out;
 };
 
-const generateCoHostInviteToken = (): string =>
+export const RANDOM_WEBINAR_SLUG_BYTES = RANDOM_SLUG_LENGTH;
+
+export const generateCoHostInviteToken = (): string =>
   randomBytes(CO_HOST_INVITE_TOKEN_BYTES).toString("base64url");
 
-const hashCoHostInviteToken = (token: string): string =>
+export const hashCoHostInviteToken = (token: string): string =>
   createHash("sha256").update(token).digest("hex");
 
-const generateRoomId = (): string => {
-  const bytes = randomBytes(4).toString("hex");
-  return `sched-${bytes}`;
-};
+export const webinarRoomId = (bytes: Buffer): string =>
+  `sched-${bytes.subarray(0, 4).toString("hex")}`;
 
-export type ScheduledWebinarStore = {
-  byId: Map<string, ScheduledWebinar>;
-  bySlug: Map<string, string>;
-  byRoomChannel: Map<string, string>;
-};
-
-export const createScheduledWebinarStore = (): ScheduledWebinarStore => ({
-  byId: new Map(),
-  bySlug: new Map(),
-  byRoomChannel: new Map(),
-});
-
-const roomChannelKey = (clientId: string, roomId: string): string =>
-  `${clientId}:${roomId}`;
-
-const isSlugTaken = (
-  store: ScheduledWebinarStore,
-  slug: string,
-  excludeId?: string,
-): boolean => {
-  const owner = store.bySlug.get(slug);
-  return Boolean(owner && owner !== excludeId);
+export type WebinarSlugContext = {
+  isSlugTaken: (slug: string) => boolean;
+  randomSlug: () => string;
 };
 
 const resolveLinkSlug = (
-  store: ScheduledWebinarStore,
   requested: string | undefined,
-  excludeId?: string,
+  context: WebinarSlugContext,
 ): string => {
   if (requested) {
-    const normalized = normalizeWebinarLinkSlug(requested);
-    if (isSlugTaken(store, normalized, excludeId)) {
-      throw new Error("That webinar link code is already in use.");
+    let normalized: string;
+    try {
+      normalized = normalizeWebinarLinkSlug(requested);
+    } catch (error) {
+      throw new InvalidInput((error as Error).message);
+    }
+    if (context.isSlugTaken(normalized)) {
+      throw new InvalidInput("That webinar link code is already in use.");
     }
     return normalized;
   }
   for (let attempt = 0; attempt < 32; attempt += 1) {
-    const candidate = generateRandomSlug();
-    if (!isSlugTaken(store, candidate, excludeId)) {
-      return candidate;
-    }
+    const candidate = context.randomSlug();
+    if (!context.isSlugTaken(candidate)) return candidate;
   }
-  throw new Error("Could not generate a unique webinar link.");
+  throw new InvalidInput("Could not generate a unique webinar link.");
 };
 
-const buildWebinarLink = (slug: string): string => {
+export const buildWebinarLink = (slug: string): string => {
   const base = getWebinarBaseUrl().replace(/\/$/, "");
   return `${base}/w/${encodeURIComponent(slug)}`;
 };
 
-const indexScheduledWebinar = (
-  store: ScheduledWebinarStore,
+export type ScheduledWebinarFilter = {
+  clientId?: string;
+  ownerEmail?: string;
+  includeAll?: boolean;
+  status?: ScheduledWebinarStatus[];
+};
+
+export const isWebinarHostOrCoHost = (
   webinar: ScheduledWebinar,
-): void => {
-  store.byId.set(webinar.id, webinar);
-  store.bySlug.set(webinar.linkSlug, webinar.id);
-  store.byRoomChannel.set(
-    roomChannelKey(webinar.clientId, webinar.roomId),
-    webinar.id,
+  email: string | null,
+): boolean =>
+  Boolean(
+    email &&
+      (webinar.hostEmail === email ||
+        webinar.coHosts.some((entry) => entry.email === email)),
   );
-};
 
-const removeFromIndexes = (
-  store: ScheduledWebinarStore,
-  webinar: ScheduledWebinar,
-): void => {
-  store.byId.delete(webinar.id);
-  if (store.bySlug.get(webinar.linkSlug) === webinar.id) {
-    store.bySlug.delete(webinar.linkSlug);
-  }
-  const channel = roomChannelKey(webinar.clientId, webinar.roomId);
-  if (store.byRoomChannel.get(channel) === webinar.id) {
-    store.byRoomChannel.delete(channel);
-  }
-};
-
-export const getScheduledWebinarById = (
-  store: ScheduledWebinarStore,
-  id: string,
-): ScheduledWebinar | null => store.byId.get(id) ?? null;
-
-export const getScheduledWebinarBySlug = (
-  store: ScheduledWebinarStore,
-  slug: string,
-): ScheduledWebinar | null => {
-  const id = store.bySlug.get(slug.trim().toLowerCase());
-  return id ? store.byId.get(id) ?? null : null;
-};
-
-export const getScheduledWebinarForRoom = (
-  store: ScheduledWebinarStore,
-  clientId: string,
-  roomId: string,
-): ScheduledWebinar | null => {
-  const id = store.byRoomChannel.get(roomChannelKey(clientId, roomId));
-  return id ? store.byId.get(id) ?? null : null;
-};
-
-export const moveScheduledWebinarToClient = (
-  store: ScheduledWebinarStore,
-  webinarId: string,
-  clientId: string,
-): ScheduledWebinar | null => {
-  const webinar = store.byId.get(webinarId);
-  const nextClientId = canonicalizeClientId(clientId);
-  if (!webinar || !nextClientId || webinar.clientId === nextClientId) {
-    return webinar ?? null;
-  }
-  const nextRoomChannel = roomChannelKey(nextClientId, webinar.roomId);
-  const owner = store.byRoomChannel.get(nextRoomChannel);
-  if (owner && owner !== webinar.id) {
-    throw new Error("That webinar room already exists in the target client.");
-  }
-  store.byRoomChannel.delete(roomChannelKey(webinar.clientId, webinar.roomId));
-  webinar.clientId = nextClientId;
-  webinar.updatedAt = Date.now();
-  store.byRoomChannel.set(nextRoomChannel, webinar.id);
-  return webinar;
-};
-
-export const listScheduledWebinars = (
-  store: ScheduledWebinarStore,
-  filter: {
-    clientId?: string;
-    ownerEmail?: string;
-    includeAll?: boolean;
-    status?: ScheduledWebinarStatus[];
-  } = {},
+export const filterScheduledWebinars = (
+  webinars: readonly ScheduledWebinar[],
+  filter: ScheduledWebinarFilter = {},
 ): ScheduledWebinar[] => {
-  const ownerEmail = filter.ownerEmail
-    ? normalizeHostEmail(filter.ownerEmail)
-    : null;
-  const result: ScheduledWebinar[] = [];
-  for (const webinar of store.byId.values()) {
-    if (filter.clientId && webinar.clientId !== filter.clientId) continue;
-    if (
-      !filter.includeAll &&
-      ownerEmail &&
-      webinar.hostEmail !== ownerEmail &&
-      !webinar.coHosts.some((entry) => entry.email === ownerEmail)
-    ) {
-      continue;
-    }
-    if (filter.status && !filter.status.includes(webinar.status)) {
-      continue;
-    }
-    result.push(webinar);
-  }
-  return result.sort((a, b) => a.scheduledStartAt - b.scheduledStartAt);
-};
-
-export type ScheduledWebinarPersistence = {
-  save: (snapshot: ScheduledWebinar[]) => void;
-  saveChanged?: (webinars: ScheduledWebinar[]) => void;
-  deleteIds?: (ids: string[]) => void;
-  load: () => ScheduledWebinar[];
-  close?: () => void;
-};
-
-const scheduledWebinarsPath = (): string => {
-  const configured = process.env.SCHEDULED_WEBINARS_PATH?.trim();
-  if (configured) return resolve(configured);
-  return resolve(process.cwd(), "data", "scheduled-webinars.json");
-};
-
-const scheduledWebinarsSqlitePath = (): string => {
-  const configured =
-    process.env.SCHEDULED_WEBINARS_SQLITE_PATH?.trim() ||
-    process.env.CONCLAVE_SQLITE_PATH?.trim();
-  if (configured) return resolve(configured);
-
-  const recordingStoragePath = process.env.RECORDING_STORAGE_PATH?.trim();
-  if (recordingStoragePath) {
-    return resolve(recordingStoragePath, "conclave.sqlite");
-  }
-
-  return resolve(process.cwd(), "data", "conclave.sqlite");
-};
-
-const writeJsonAtomic = (path: string, data: string): void => {
-  const dir = dirname(path);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-  const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`;
-  writeFileSync(tmp, data, "utf8");
-  renameSync(tmp, path);
-};
-
-const createFileScheduledWebinarPersistence = (
-  path: string = scheduledWebinarsPath(),
-): ScheduledWebinarPersistence => ({
-  save: (snapshot) => {
-    try {
-      writeJsonAtomic(path, JSON.stringify(snapshot, null, 2));
-    } catch (error) {
-      Logger.error("Failed to persist scheduled webinars", error);
-    }
-  },
-  load: () => {
-    try {
-      if (!existsSync(path)) return [];
-      const raw = readFileSync(path, "utf8");
-      const data: unknown = JSON.parse(raw);
-      if (!Array.isArray(data)) return [];
-      return data
-        .map((entry) => normalizeStoredWebinar(entry))
-        .filter((entry): entry is ScheduledWebinar => Boolean(entry));
-    } catch (error) {
-      Logger.error("Failed to load scheduled webinars", error);
-      return [];
-    }
-  },
-});
-
-type SqliteStatement = {
-  run: (...params: unknown[]) => unknown;
-  all: (...params: unknown[]) => unknown[];
-};
-
-type SqliteDatabase = {
-  close: () => void;
-  exec: (sql: string) => void;
-  prepare: (sql: string) => SqliteStatement;
-};
-
-const loadNodeSqlite = (): { DatabaseSync: new (path: string) => SqliteDatabase } => {
-  const require = createRequire(import.meta.url);
-  return require("node:sqlite") as {
-    DatabaseSync: new (path: string) => SqliteDatabase;
-  };
-};
-
-const createSqliteScheduledWebinarPersistence = (
-  path: string = scheduledWebinarsSqlitePath(),
-): ScheduledWebinarPersistence => {
-  const dir = dirname(path);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-
-  const { DatabaseSync } = loadNodeSqlite();
-  const db = new DatabaseSync(path);
-  db.exec("PRAGMA busy_timeout = 5000");
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS scheduled_webinars (
-      id TEXT PRIMARY KEY,
-      client_id TEXT NOT NULL,
-      room_id TEXT NOT NULL,
-      link_slug TEXT NOT NULL,
-      status TEXT NOT NULL,
-      scheduled_start_at INTEGER NOT NULL,
-      scheduled_end_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      payload_json TEXT NOT NULL
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS scheduled_webinars_link_slug_idx
-      ON scheduled_webinars(link_slug);
-    CREATE INDEX IF NOT EXISTS scheduled_webinars_room_idx
-      ON scheduled_webinars(client_id, room_id);
-    CREATE INDEX IF NOT EXISTS scheduled_webinars_status_start_idx
-      ON scheduled_webinars(status, scheduled_start_at);
-  `);
-
-  const insert = db.prepare(`
-    INSERT INTO scheduled_webinars (
-      id,
-      client_id,
-      room_id,
-      link_slug,
-      status,
-      scheduled_start_at,
-      scheduled_end_at,
-      updated_at,
-      payload_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      client_id = excluded.client_id,
-      room_id = excluded.room_id,
-      link_slug = excluded.link_slug,
-      status = excluded.status,
-      scheduled_start_at = excluded.scheduled_start_at,
-      scheduled_end_at = excluded.scheduled_end_at,
-      updated_at = excluded.updated_at,
-      payload_json = excluded.payload_json
-    WHERE excluded.updated_at >= scheduled_webinars.updated_at
-  `);
-  const loadRows = db.prepare(`
-    SELECT payload_json
-    FROM scheduled_webinars
-    ORDER BY scheduled_start_at ASC, id ASC
-  `);
-  const deleteById = db.prepare("DELETE FROM scheduled_webinars WHERE id = ?");
-  let knownIds = new Set<string>();
-
-  const upsertWebinar = (webinar: ScheduledWebinar): void => {
-    insert.run(
-      webinar.id,
-      webinar.clientId,
-      webinar.roomId,
-      webinar.linkSlug,
-      webinar.status,
-      webinar.scheduledStartAt,
-      webinar.scheduledEndAt,
-      webinar.updatedAt,
-      JSON.stringify(webinar),
-    );
-  };
-
-  return {
-    save: (snapshot) => {
-      try {
-        const snapshotIds = new Set(snapshot.map((webinar) => webinar.id));
-        db.exec("BEGIN IMMEDIATE");
-        for (const webinar of snapshot) {
-          upsertWebinar(webinar);
-        }
-        for (const id of knownIds) {
-          if (!snapshotIds.has(id)) {
-            deleteById.run(id);
-          }
-        }
-        db.exec("COMMIT");
-        knownIds = snapshotIds;
-      } catch (error) {
-        try {
-          db.exec("ROLLBACK");
-        } catch {}
-        Logger.error("Failed to persist scheduled webinars to SQLite", error);
+  const ownerEmail = filter.ownerEmail ? normalizeHostEmail(filter.ownerEmail) : null;
+  return webinars
+    .filter((webinar) => {
+      if (filter.clientId && webinar.clientId !== filter.clientId) return false;
+      if (!filter.includeAll && ownerEmail && !isWebinarHostOrCoHost(webinar, ownerEmail)) {
+        return false;
       }
-    },
-    saveChanged: (webinars) => {
-      if (webinars.length === 0) return;
-      try {
-        db.exec("BEGIN IMMEDIATE");
-        for (const webinar of webinars) {
-          upsertWebinar(webinar);
-          knownIds.add(webinar.id);
-        }
-        db.exec("COMMIT");
-      } catch (error) {
-        try {
-          db.exec("ROLLBACK");
-        } catch {}
-        Logger.error("Failed to persist changed scheduled webinars", error);
-      }
-    },
-    deleteIds: (ids) => {
-      if (ids.length === 0) return;
-      try {
-        db.exec("BEGIN IMMEDIATE");
-        for (const id of ids) {
-          deleteById.run(id);
-          knownIds.delete(id);
-        }
-        db.exec("COMMIT");
-      } catch (error) {
-        try {
-          db.exec("ROLLBACK");
-        } catch {}
-        Logger.error("Failed to delete scheduled webinars", error);
-      }
-    },
-    load: () => {
-      try {
-        const webinars = loadRows
-          .all()
-          .map((row) => {
-            const payload =
-              row && typeof row === "object" && "payload_json" in row
-                ? String((row).payload_json)
-                : "";
-            if (!payload) return null;
-            return normalizeStoredWebinar(JSON.parse(payload));
-          })
-          .filter((entry): entry is ScheduledWebinar => Boolean(entry));
-        knownIds = new Set(webinars.map((webinar) => webinar.id));
-        return webinars;
-      } catch (error) {
-        Logger.error("Failed to load scheduled webinars from SQLite", error);
-        return [];
-      }
-    },
-    close: () => db.close(),
-  };
-};
-
-const migrateJsonScheduledWebinarsToSqlite = (
-  sqlite: ScheduledWebinarPersistence,
-  json: ScheduledWebinarPersistence,
-): number => {
-  const existing = sqlite.load();
-  if (existing.length > 0) return 0;
-
-  const legacy = json.load();
-  if (legacy.length === 0) return 0;
-
-  sqlite.save(legacy);
-  return sqlite.load().length;
-};
-
-export const createScheduledWebinarPersistence = (): ScheduledWebinarPersistence => {
-  const mode = process.env.SCHEDULED_WEBINARS_PERSISTENCE?.trim().toLowerCase();
-  if (mode === "json" || mode === "file") {
-    return createFileScheduledWebinarPersistence();
-  }
-
-  const jsonPersistence = createFileScheduledWebinarPersistence();
-
-  try {
-    const sqlitePersistence = createSqliteScheduledWebinarPersistence();
-    const migrated = migrateJsonScheduledWebinarsToSqlite(
-      sqlitePersistence,
-      jsonPersistence,
-    );
-    if (migrated > 0) {
-      Logger.info(
-        `Migrated ${migrated} scheduled webinar(s) from JSON into SQLite`,
-      );
-    }
-    return sqlitePersistence;
-  } catch (error) {
-    if (mode === "sqlite") {
-      throw error;
-    }
-    Logger.warn(
-      `SQLite scheduled-webinar persistence unavailable; falling back to JSON: ${(error as Error).message}`,
-    );
-    return jsonPersistence;
-  }
-};
-
-const normalizeStoredWebinar = (raw: unknown): ScheduledWebinar | null => {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const record = raw as Record<string, unknown>;
-  if (typeof record.id !== "string" || !record.id) return null;
-  if (typeof record.linkSlug !== "string" || !record.linkSlug) return null;
-  if (typeof record.roomId !== "string" || !record.roomId) return null;
-  if (typeof record.clientId !== "string" || !record.clientId) return null;
-  const rawStatus = record.status;
-  const status: ScheduledWebinarStatus =
-    rawStatus === "live" || rawStatus === "ended" || rawStatus === "cancelled"
-      ? rawStatus
-      : "scheduled";
-  const linkSlug = String(record.linkSlug);
-  return {
-    id: record.id,
-    clientId: canonicalizeClientId(record.clientId),
-    roomId: record.roomId,
-    linkSlug,
-    title: sanitizeString(record.title, { max: MAX_TITLE_LENGTH }) || "Untitled webinar",
-    description: sanitizeString(record.description, {
-      max: MAX_DESCRIPTION_LENGTH,
-      allowEmpty: true,
-    }),
-    hostEmail: normalizeHostEmail(String(record.hostEmail ?? "")),
-    hostName: sanitizeString(record.hostName, { max: 120, allowEmpty: true }),
-    hostUserId: record.hostUserId ? String(record.hostUserId) : null,
-    coHosts: sanitizeCoHosts(record.coHosts),
-    scheduledStartAt: Number(record.scheduledStartAt) || Date.now(),
-    scheduledEndAt:
-      Number(record.scheduledEndAt) ||
-      (Number(record.scheduledStartAt) || Date.now()) + DEFAULT_DURATION_MS,
-    status,
-    publicAccess: sanitizeBoolean(record.publicAccess, true),
-    maxAttendees: sanitizeMaxAttendees(record.maxAttendees, DEFAULT_WEBINAR_MAX_ATTENDEES),
-    requiresInviteCode: Boolean(record.requiresInviteCode),
-    waitingRoomEnabled: sanitizeBoolean(record.waitingRoomEnabled, true),
-    earlyEntryMinutes: sanitizeEarlyEntry(record.earlyEntryMinutes, DEFAULT_EARLY_ENTRY_MINUTES),
-    qaEnabled: sanitizeBoolean(record.qaEnabled, true),
-    notes: sanitizeString(record.notes, { max: MAX_NOTES_LENGTH, allowEmpty: true }),
-    createdAt: Number(record.createdAt) || Date.now(),
-    createdBy: String(record.createdBy ?? ""),
-    updatedAt: Number(record.updatedAt) || Date.now(),
-    liveStartedAt: record.liveStartedAt ? Number(record.liveStartedAt) : null,
-    endedAt: record.endedAt ? Number(record.endedAt) : null,
-    totalJoinCount: Number(record.totalJoinCount) || 0,
-    peakAttendeeCount: Number(record.peakAttendeeCount) || 0,
-    webinarLink: buildWebinarLink(linkSlug),
-    coHostInviteTokenHash:
-      typeof record.coHostInviteTokenHash === "string"
-        ? record.coHostInviteTokenHash
-        : null,
-    coHostInviteTokenCreatedAt: record.coHostInviteTokenCreatedAt
-      ? Number(record.coHostInviteTokenCreatedAt)
-      : null,
-  };
-};
-
-export const loadPersistedSchedules = (
-  store: ScheduledWebinarStore,
-  persistence: ScheduledWebinarPersistence,
-): number => {
-  const snapshot = persistence.load();
-  for (const webinar of snapshot) {
-    indexScheduledWebinar(store, webinar);
-  }
-  return snapshot.length;
-};
-
-const persistScheduledWebinars = (
-  store: ScheduledWebinarStore,
-  persistence: ScheduledWebinarPersistence,
-): void => {
-  persistence.save(Array.from(store.byId.values()));
-};
-
-export const persistScheduledWebinarChanges = (
-  store: ScheduledWebinarStore,
-  persistence: ScheduledWebinarPersistence,
-  webinars: ScheduledWebinar[],
-): void => {
-  if (webinars.length === 0) return;
-  if (persistence.saveChanged) {
-    persistence.saveChanged(webinars);
-    return;
-  }
-  persistScheduledWebinars(store, persistence);
-};
-
-export const persistScheduledWebinarDeletes = (
-  store: ScheduledWebinarStore,
-  persistence: ScheduledWebinarPersistence,
-  ids: string[],
-): void => {
-  if (ids.length === 0) return;
-  if (persistence.deleteIds) {
-    persistence.deleteIds(ids);
-    return;
-  }
-  persistScheduledWebinars(store, persistence);
+      if (filter.status && !filter.status.includes(webinar.status)) return false;
+      return true;
+    })
+    .sort((a, b) => a.scheduledStartAt - b.scheduledStartAt);
 };
 
 export type CreateScheduledWebinarOptions = {
@@ -652,15 +183,15 @@ export type CreateScheduledWebinarOptions = {
   defaultHostUserId?: string | null;
 };
 
-export const createScheduledWebinar = (
-  store: ScheduledWebinarStore,
+export const buildScheduledWebinar = (
   request: CreateScheduledWebinarRequest,
   options: CreateScheduledWebinarOptions,
+  context: WebinarSlugContext & { id: string; roomId: string; now: number },
 ): { webinar: ScheduledWebinar; inviteCodeHash: string | null } => {
   const clientId = canonicalizeClientId(options.clientId);
   const title = sanitizeString(request.title, { max: MAX_TITLE_LENGTH });
   if (!title || title.length < MIN_TITLE_LENGTH) {
-    throw new Error("Title is required.");
+    throw new InvalidInput("Title is required.");
   }
   const description = sanitizeString(request.description, {
     max: MAX_DESCRIPTION_LENGTH,
@@ -673,7 +204,7 @@ export const createScheduledWebinar = (
 
   const scheduledStartAt = Number(request.scheduledStartAt);
   if (!Number.isFinite(scheduledStartAt) || scheduledStartAt <= 0) {
-    throw new Error("Invalid scheduled start time.");
+    throw new InvalidInput("Invalid scheduled start time.");
   }
   const scheduledEndAt =
     Number.isFinite(Number(request.scheduledEndAt)) &&
@@ -684,48 +215,27 @@ export const createScheduledWebinar = (
   const requestedHostEmail = normalizeHostEmail(request.hostEmail || "");
   const requestHostEmailIsValid =
     requestedHostEmail.length > 0 && requestedHostEmail.includes("@");
-  const fallbackHostEmail = normalizeHostEmail(
-    options.defaultHostEmail || "",
-  );
-  const hostEmail = requestHostEmailIsValid
-    ? requestedHostEmail
-    : fallbackHostEmail;
+  const fallbackHostEmail = normalizeHostEmail(options.defaultHostEmail || "");
+  const hostEmail = requestHostEmailIsValid ? requestedHostEmail : fallbackHostEmail;
   if (!hostEmail || !hostEmail.includes("@")) {
-    throw new Error("Host email is required.");
+    throw new InvalidInput("Host email is required.");
   }
-  const hostName = sanitizeString(
-    request.hostName || options.defaultHostName,
-    { max: 120, allowEmpty: true },
-  );
-
+  const hostName = sanitizeString(request.hostName || options.defaultHostName, {
+    max: 120,
+    allowEmpty: true,
+  });
   const coHosts = sanitizeCoHosts(request.coHosts).filter(
     (entry) => entry.email !== hostEmail,
   );
-
-  const linkSlug = resolveLinkSlug(store, request.linkSlug);
-
-  const publicAccess = sanitizeBoolean(request.publicAccess, true);
-  const maxAttendees = sanitizeMaxAttendees(
-    request.maxAttendees,
-    DEFAULT_WEBINAR_MAX_ATTENDEES,
-  );
+  const linkSlug = resolveLinkSlug(request.linkSlug, context);
   const inviteCodeRaw =
     typeof request.inviteCode === "string" ? request.inviteCode.trim() : "";
-  const inviteCodeHash = inviteCodeRaw
-    ? hashWebinarInviteCode(inviteCodeRaw)
-    : null;
-  const waitingRoomEnabled = sanitizeBoolean(request.waitingRoomEnabled, true);
-  const earlyEntryMinutes = sanitizeEarlyEntry(
-    request.earlyEntryMinutes,
-    DEFAULT_EARLY_ENTRY_MINUTES,
-  );
-  const qaEnabled = sanitizeBoolean(request.qaEnabled, true);
+  const inviteCodeHash = inviteCodeRaw ? hashWebinarInviteCode(inviteCodeRaw) : null;
 
-  const now = Date.now();
   const webinar: ScheduledWebinar = {
-    id: randomUUID(),
+    id: context.id,
     clientId,
-    roomId: generateRoomId(),
+    roomId: context.roomId,
     linkSlug,
     title,
     description,
@@ -736,16 +246,16 @@ export const createScheduledWebinar = (
     scheduledStartAt,
     scheduledEndAt,
     status: "scheduled",
-    publicAccess,
-    maxAttendees,
+    publicAccess: sanitizeBoolean(request.publicAccess, true),
+    maxAttendees: sanitizeMaxAttendees(request.maxAttendees, DEFAULT_WEBINAR_MAX_ATTENDEES),
     requiresInviteCode: Boolean(inviteCodeHash),
-    waitingRoomEnabled,
-    earlyEntryMinutes,
-    qaEnabled,
+    waitingRoomEnabled: sanitizeBoolean(request.waitingRoomEnabled, true),
+    earlyEntryMinutes: sanitizeEarlyEntry(request.earlyEntryMinutes, DEFAULT_EARLY_ENTRY_MINUTES),
+    qaEnabled: sanitizeBoolean(request.qaEnabled, true),
     notes,
-    createdAt: now,
+    createdAt: context.now,
     createdBy: options.createdBy,
-    updatedAt: now,
+    updatedAt: context.now,
     liveStartedAt: null,
     endedAt: null,
     totalJoinCount: 0,
@@ -753,245 +263,173 @@ export const createScheduledWebinar = (
     webinarLink: buildWebinarLink(linkSlug),
     coHostInviteTokenHash: null,
     coHostInviteTokenCreatedAt: null,
+    inviteCodeHash,
   };
-
-  indexScheduledWebinar(store, webinar);
   return { webinar, inviteCodeHash };
 };
 
-export const updateScheduledWebinar = (
-  store: ScheduledWebinarStore,
-  id: string,
-  patch: UpdateScheduledWebinarRequest,
-): { webinar: ScheduledWebinar; inviteCodeHashChange: { value: string | null } | null } => {
-  const existing = store.byId.get(id);
-  if (!existing) {
-    throw new Error("Scheduled webinar not found.");
-  }
-  if (existing.status === "ended" || existing.status === "cancelled") {
-    throw new Error("This webinar has already concluded.");
-  }
+export const isConcludedWebinar = (webinar: ScheduledWebinar): boolean =>
+  webinar.status === "ended" || webinar.status === "cancelled";
 
+export const applyScheduledWebinarUpdate = (
+  existing: ScheduledWebinar,
+  patch: UpdateScheduledWebinarRequest,
+  context: WebinarSlugContext & { now: number },
+): { webinar: ScheduledWebinar; inviteCodeHashChange: { value: string | null } | null } => {
+  if (isConcludedWebinar(existing)) {
+    throw new InvalidInput("This webinar has already concluded.");
+  }
+  const next: ScheduledWebinar = { ...existing, coHosts: [...existing.coHosts] };
   let inviteCodeHashChange: { value: string | null } | null = null;
-  let titleChanged = false;
-  let linkSlugChanged = false;
 
   if (patch.title !== undefined) {
-    const next = sanitizeString(patch.title, { max: MAX_TITLE_LENGTH });
-    if (next) {
-      existing.title = next;
-      titleChanged = true;
-    }
+    const title = sanitizeString(patch.title, { max: MAX_TITLE_LENGTH });
+    if (title) next.title = title;
   }
   if (patch.description !== undefined) {
-    existing.description = sanitizeString(patch.description, {
+    next.description = sanitizeString(patch.description, {
       max: MAX_DESCRIPTION_LENGTH,
       allowEmpty: true,
     });
   }
   if (patch.notes !== undefined) {
-    existing.notes = sanitizeString(patch.notes, {
-      max: MAX_NOTES_LENGTH,
-      allowEmpty: true,
-    });
+    next.notes = sanitizeString(patch.notes, { max: MAX_NOTES_LENGTH, allowEmpty: true });
   }
-  if (typeof patch.scheduledStartAt === "number") {
-    if (Number.isFinite(patch.scheduledStartAt) && patch.scheduledStartAt > 0) {
-      existing.scheduledStartAt = patch.scheduledStartAt;
-    }
+  if (
+    typeof patch.scheduledStartAt === "number" &&
+    Number.isFinite(patch.scheduledStartAt) &&
+    patch.scheduledStartAt > 0
+  ) {
+    next.scheduledStartAt = patch.scheduledStartAt;
   }
-  if (typeof patch.scheduledEndAt === "number") {
-    if (
-      Number.isFinite(patch.scheduledEndAt) &&
-      patch.scheduledEndAt > existing.scheduledStartAt
-    ) {
-      existing.scheduledEndAt = patch.scheduledEndAt;
-    }
+  if (
+    typeof patch.scheduledEndAt === "number" &&
+    Number.isFinite(patch.scheduledEndAt) &&
+    patch.scheduledEndAt > next.scheduledStartAt
+  ) {
+    next.scheduledEndAt = patch.scheduledEndAt;
   }
   if (patch.hostEmail !== undefined) {
-    const next = normalizeHostEmail(patch.hostEmail);
-    if (next && next.includes("@")) {
-      existing.hostEmail = next;
-    }
+    const hostEmail = normalizeHostEmail(patch.hostEmail);
+    if (hostEmail && hostEmail.includes("@")) next.hostEmail = hostEmail;
   }
   if (patch.hostName !== undefined) {
-    existing.hostName = sanitizeString(patch.hostName, {
-      max: 120,
-      allowEmpty: true,
-    });
+    next.hostName = sanitizeString(patch.hostName, { max: 120, allowEmpty: true });
   }
   if (patch.coHosts !== undefined) {
-    existing.coHosts = sanitizeCoHosts(patch.coHosts).filter(
-      (entry) => entry.email !== existing.hostEmail,
+    next.coHosts = sanitizeCoHosts(patch.coHosts).filter(
+      (entry) => entry.email !== next.hostEmail,
     );
   }
   if (patch.linkSlug !== undefined) {
-    const nextSlug = resolveLinkSlug(store, patch.linkSlug, existing.id);
+    const nextSlug = resolveLinkSlug(patch.linkSlug, {
+      ...context,
+      isSlugTaken: (slug) => slug !== existing.linkSlug && context.isSlugTaken(slug),
+    });
     if (nextSlug !== existing.linkSlug) {
-      store.bySlug.delete(existing.linkSlug);
-      existing.linkSlug = nextSlug;
-      existing.webinarLink = buildWebinarLink(nextSlug);
-      store.bySlug.set(nextSlug, existing.id);
-      linkSlugChanged = true;
+      next.linkSlug = nextSlug;
+      next.webinarLink = buildWebinarLink(nextSlug);
     }
   }
-  if (patch.publicAccess !== undefined) {
-    existing.publicAccess = Boolean(patch.publicAccess);
-  }
+  if (patch.publicAccess !== undefined) next.publicAccess = Boolean(patch.publicAccess);
   if (patch.maxAttendees !== undefined) {
-    existing.maxAttendees = sanitizeMaxAttendees(
-      patch.maxAttendees,
-      existing.maxAttendees,
-    );
+    next.maxAttendees = sanitizeMaxAttendees(patch.maxAttendees, existing.maxAttendees);
   }
   if (patch.inviteCode !== undefined) {
     if (patch.inviteCode === null || patch.inviteCode === "") {
-      existing.requiresInviteCode = false;
+      next.requiresInviteCode = false;
+      next.inviteCodeHash = null;
       inviteCodeHashChange = { value: null };
     } else if (typeof patch.inviteCode === "string") {
       const trimmed = patch.inviteCode.trim();
       if (trimmed) {
-        existing.requiresInviteCode = true;
-        inviteCodeHashChange = { value: hashWebinarInviteCode(trimmed) };
+        next.requiresInviteCode = true;
+        next.inviteCodeHash = hashWebinarInviteCode(trimmed);
+        inviteCodeHashChange = { value: next.inviteCodeHash };
       }
     }
   }
   if (patch.waitingRoomEnabled !== undefined) {
-    existing.waitingRoomEnabled = Boolean(patch.waitingRoomEnabled);
+    next.waitingRoomEnabled = Boolean(patch.waitingRoomEnabled);
   }
   if (patch.earlyEntryMinutes !== undefined) {
-    existing.earlyEntryMinutes = sanitizeEarlyEntry(
+    next.earlyEntryMinutes = sanitizeEarlyEntry(
       patch.earlyEntryMinutes,
       existing.earlyEntryMinutes,
     );
   }
-  if (patch.qaEnabled !== undefined) {
-    existing.qaEnabled = Boolean(patch.qaEnabled);
-  }
+  if (patch.qaEnabled !== undefined) next.qaEnabled = Boolean(patch.qaEnabled);
   if (patch.status !== undefined) {
-    const valid: ScheduledWebinarStatus[] = [
-      "scheduled",
-      "live",
-      "ended",
-      "cancelled",
-    ];
+    const valid: ScheduledWebinarStatus[] = ["scheduled", "live", "ended", "cancelled"];
     if (valid.includes(patch.status)) {
-      existing.status = patch.status;
-      if (patch.status === "live" && !existing.liveStartedAt) {
-        existing.liveStartedAt = Date.now();
-      }
-      if (
-        (patch.status === "ended" || patch.status === "cancelled") &&
-        !existing.endedAt
-      ) {
-        existing.endedAt = Date.now();
+      next.status = patch.status;
+      if (patch.status === "live" && !next.liveStartedAt) next.liveStartedAt = context.now;
+      if ((patch.status === "ended" || patch.status === "cancelled") && !next.endedAt) {
+        next.endedAt = context.now;
       }
     }
   }
-
-  existing.updatedAt = Date.now();
-  void titleChanged;
-  void linkSlugChanged;
-
-  return { webinar: existing, inviteCodeHashChange };
+  next.updatedAt = context.now;
+  return { webinar: next, inviteCodeHashChange };
 };
 
-export const deleteScheduledWebinar = (
-  store: ScheduledWebinarStore,
-  id: string,
-): ScheduledWebinar | null => {
-  const existing = store.byId.get(id);
-  if (!existing) return null;
-  removeFromIndexes(store, existing);
-  return existing;
-};
-
-export const recordWebinarJoin = (
-  store: ScheduledWebinarStore,
-  id: string,
+export const withWebinarJoin = (
+  webinar: ScheduledWebinar,
   currentAttendeeCount: number,
-): ScheduledWebinar | null => {
-  const webinar = store.byId.get(id);
-  if (!webinar) return null;
-  webinar.totalJoinCount += 1;
-  if (currentAttendeeCount > webinar.peakAttendeeCount) {
-    webinar.peakAttendeeCount = currentAttendeeCount;
-  }
-  webinar.updatedAt = Date.now();
-  return webinar;
-};
+  now: number,
+): ScheduledWebinar => ({
+  ...webinar,
+  totalJoinCount: webinar.totalJoinCount + 1,
+  peakAttendeeCount: Math.max(webinar.peakAttendeeCount, currentAttendeeCount),
+  updatedAt: now,
+});
 
-export const createScheduledWebinarCoHostInvite = (
-  store: ScheduledWebinarStore,
-  id: string,
-): { webinar: ScheduledWebinar; token: string } => {
-  const webinar = store.byId.get(id);
-  if (!webinar) {
-    throw new Error("Scheduled webinar not found.");
-  }
-  if (webinar.status === "ended" || webinar.status === "cancelled") {
-    throw new Error("Cannot create a co-host link for a concluded webinar.");
-  }
-
-  const token = generateCoHostInviteToken();
-  const now = Date.now();
-  webinar.coHostInviteTokenHash = hashCoHostInviteToken(token);
-  webinar.coHostInviteTokenCreatedAt = now;
-  webinar.updatedAt = now;
-  return { webinar, token };
-};
-
-export const acceptScheduledWebinarCoHostInvite = (
-  store: ScheduledWebinarStore,
-  token: string,
-  user: { email: string; name?: string | null },
+export const withCoHostInvite = (
+  webinar: ScheduledWebinar,
+  tokenHash: string,
+  now: number,
 ): ScheduledWebinar => {
-  const normalizedToken = token.trim();
-  if (!normalizedToken) {
-    throw new Error("Co-host invite token is required.");
+  if (isConcludedWebinar(webinar)) {
+    throw new InvalidInput("Cannot create a co-host link for a concluded webinar.");
   }
-  const tokenHash = hashCoHostInviteToken(normalizedToken);
+  return {
+    ...webinar,
+    coHostInviteTokenHash: tokenHash,
+    coHostInviteTokenCreatedAt: now,
+    updatedAt: now,
+  };
+};
+
+export const acceptCoHostInvite = (
+  webinar: ScheduledWebinar,
+  user: { email: string; name?: string | null },
+  now: number,
+): ScheduledWebinar | null => {
+  if (isConcludedWebinar(webinar)) {
+    throw new InvalidInput("This co-host invite is no longer active.");
+  }
   const email = normalizeHostEmail(user.email);
-  if (!email || !email.includes("@")) {
-    throw new Error("A signed-in account with an email is required.");
+  if (webinar.hostEmail === email) return null;
+  const existing = webinar.coHosts.find((entry) => entry.email === email);
+  if (existing) {
+    if (existing.name || !user.name) return null;
+    const name = sanitizeString(user.name, { max: 120, allowEmpty: true }) || undefined;
+    if (!name) return null;
+    return {
+      ...webinar,
+      coHosts: webinar.coHosts.map((entry) => (entry.email === email ? { ...entry, name } : entry)),
+      updatedAt: now,
+    };
   }
-
-  for (const webinar of store.byId.values()) {
-    if (webinar.coHostInviteTokenHash !== tokenHash) continue;
-    if (webinar.status === "ended" || webinar.status === "cancelled") {
-      throw new Error("This co-host invite is no longer active.");
-    }
-    if (webinar.hostEmail === email) {
-      webinar.updatedAt = Date.now();
-      return webinar;
-    }
-
-    const existing = webinar.coHosts.find((entry) => entry.email === email);
-    if (existing) {
-      if (!existing.name && user.name) {
-        existing.name = sanitizeString(user.name, {
-          max: 120,
-          allowEmpty: true,
-        }) || undefined;
-      }
-      webinar.updatedAt = Date.now();
-      return webinar;
-    }
-
-    if (webinar.coHosts.length >= MAX_CO_HOSTS) {
-      throw new Error(`A webinar can have at most ${MAX_CO_HOSTS} co-hosts.`);
-    }
-
-    const name = sanitizeString(user.name || undefined, {
-      max: 120,
-      allowEmpty: true,
-    });
-    webinar.coHosts.push({ email, name: name || undefined });
-    webinar.updatedAt = Date.now();
-    return webinar;
+  if (webinar.coHosts.length >= MAX_CO_HOSTS) {
+    throw new InvalidInput(`A webinar can have at most ${MAX_CO_HOSTS} co-hosts.`);
   }
-
-  throw new Error("Invalid or expired co-host invite.");
+  const name = sanitizeString(user.name || undefined, { max: 120, allowEmpty: true });
+  return {
+    ...webinar,
+    coHosts: [...webinar.coHosts, { email, name: name || undefined }],
+    updatedAt: now,
+  };
 };
 
 export const buildCoHostInviteLink = (token: string): string => {
@@ -1012,19 +450,16 @@ export type ScheduledWebinarAttendeeEntry =
   | { kind: "open" | "closed"; webinar: ScheduledWebinar };
 
 export const resolveScheduledWebinarAttendeeEntry = (
-  store: ScheduledWebinarStore,
-  slug: string,
+  webinar: ScheduledWebinar | null,
   clientId: string,
   now = Date.now(),
 ): ScheduledWebinarAttendeeEntry => {
-  const webinar = getScheduledWebinarBySlug(store, slug);
   if (!webinar) {
     return { kind: "unscheduled", webinar: null };
   }
   const isOpen =
     canonicalizeClientId(webinar.clientId) === canonicalizeClientId(clientId) &&
-    webinar.status !== "ended" &&
-    webinar.status !== "cancelled" &&
+    !isConcludedWebinar(webinar) &&
     (webinar.status === "live" || isWithinEarlyEntryWindow(webinar, now));
   return { kind: isOpen ? "open" : "closed", webinar };
 };
@@ -1033,6 +468,81 @@ export const hasWebinarEnded = (
   webinar: ScheduledWebinar,
   now = Date.now(),
 ): boolean => {
-  if (webinar.status === "ended" || webinar.status === "cancelled") return true;
+  if (isConcludedWebinar(webinar)) return true;
   return now > webinar.scheduledEndAt + 30 * 60 * 1000;
+};
+
+export const advanceScheduledWebinar = (
+  webinar: ScheduledWebinar,
+  now: number,
+): ScheduledWebinar | null => {
+  if (webinar.status === "scheduled" && now >= webinar.scheduledStartAt) {
+    return {
+      ...webinar,
+      status: "live",
+      liveStartedAt: webinar.liveStartedAt || now,
+      updatedAt: now,
+    };
+  }
+  if (webinar.status === "live" && hasWebinarEnded(webinar, now)) {
+    return { ...webinar, status: "ended", endedAt: now, updatedAt: now };
+  }
+  return null;
+};
+
+
+export const normalizeStoredWebinar = (raw: unknown): ScheduledWebinar | null => {
+  const record = asRecord(raw);
+  if (typeof record.id !== "string" || !record.id) return null;
+  if (typeof record.linkSlug !== "string" || !record.linkSlug) return null;
+  if (typeof record.roomId !== "string" || !record.roomId) return null;
+  if (typeof record.clientId !== "string" || !record.clientId) return null;
+  const scheduledStartAt = storedTimestampOrNull(record.scheduledStartAt);
+  if (scheduledStartAt === null || scheduledStartAt <= 0) return null;
+  const rawStatus = record.status;
+  const status: ScheduledWebinarStatus =
+    rawStatus === "live" || rawStatus === "ended" || rawStatus === "cancelled"
+      ? rawStatus
+      : "scheduled";
+  const linkSlug = record.linkSlug;
+  const endAt = storedTimestampOrNull(record.scheduledEndAt);
+  const updatedAtRaw = storedTimestampOrNull(record.updatedAt);
+  const createdAt = storedTimestampOrNull(record.createdAt) ?? updatedAtRaw ?? 0;
+  return {
+    id: record.id,
+    clientId: canonicalizeClientId(record.clientId),
+    roomId: record.roomId,
+    linkSlug,
+    title: sanitizeString(record.title, { max: MAX_TITLE_LENGTH }) || "Untitled webinar",
+    description: sanitizeString(record.description, {
+      max: MAX_DESCRIPTION_LENGTH,
+      allowEmpty: true,
+    }),
+    hostEmail: normalizeHostEmail(typeof record.hostEmail === "string" ? record.hostEmail : ""),
+    hostName: sanitizeString(record.hostName, { max: 120, allowEmpty: true }),
+    hostUserId: typeof record.hostUserId === "string" && record.hostUserId ? record.hostUserId : null,
+    coHosts: sanitizeCoHosts(record.coHosts),
+    scheduledStartAt,
+    scheduledEndAt: endAt && endAt > 0 ? endAt : scheduledStartAt + DEFAULT_DURATION_MS,
+    status,
+    publicAccess: sanitizeBoolean(record.publicAccess, true),
+    maxAttendees: sanitizeMaxAttendees(record.maxAttendees, DEFAULT_WEBINAR_MAX_ATTENDEES),
+    requiresInviteCode: Boolean(record.requiresInviteCode),
+    waitingRoomEnabled: sanitizeBoolean(record.waitingRoomEnabled, true),
+    earlyEntryMinutes: sanitizeEarlyEntry(record.earlyEntryMinutes, DEFAULT_EARLY_ENTRY_MINUTES),
+    qaEnabled: sanitizeBoolean(record.qaEnabled, true),
+    notes: sanitizeString(record.notes, { max: MAX_NOTES_LENGTH, allowEmpty: true }),
+    createdAt,
+    createdBy: typeof record.createdBy === "string" ? record.createdBy : "",
+    updatedAt: updatedAtRaw ?? createdAt,
+    liveStartedAt: storedTimestampOrNull(record.liveStartedAt) || null,
+    endedAt: storedTimestampOrNull(record.endedAt) || null,
+    totalJoinCount: storedTimestampOrNull(record.totalJoinCount) ?? 0,
+    peakAttendeeCount: storedTimestampOrNull(record.peakAttendeeCount) ?? 0,
+    webinarLink: buildWebinarLink(linkSlug),
+    coHostInviteTokenHash:
+      typeof record.coHostInviteTokenHash === "string" ? record.coHostInviteTokenHash : null,
+    coHostInviteTokenCreatedAt: storedTimestampOrNull(record.coHostInviteTokenCreatedAt) || null,
+    inviteCodeHash: typeof record.inviteCodeHash === "string" ? record.inviteCodeHash : null,
+  };
 };

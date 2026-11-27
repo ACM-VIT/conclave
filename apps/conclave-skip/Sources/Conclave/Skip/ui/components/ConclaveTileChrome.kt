@@ -7,10 +7,13 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.width
-import androidx.compose.runtime.getValue
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -254,19 +257,35 @@ private fun TileNamePill(model: TileChromeModel, speaking: TileSpeakingState, de
 
 @Composable
 private fun VoiceActivityBars(color: Color) {
-    val reduce = rememberReduceMotion()
-    val transition = rememberInfiniteTransition(label = "voice")
-    val first by transition.animateFloat(0.45f, 1f, infiniteRepeatable(tween(390, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "voice0")
-    val second by transition.animateFloat(0.45f, 1f,
-        infiniteRepeatable(tween(390, easing = FastOutSlowInEasing), RepeatMode.Reverse, StartOffset(120)), label = "voice1")
-    val third by transition.animateFloat(0.45f, 1f,
-        infiniteRepeatable(tween(390, easing = FastOutSlowInEasing), RepeatMode.Reverse, StartOffset(240)), label = "voice2")
-    val heights = if (reduce) listOf(0.7f, 0.7f, 0.7f) else listOf(first, second, third)
-    Row(Modifier.height(12.dp), horizontalArrangement = Arrangement.spacedBy(2.dp),
-        verticalAlignment = Alignment.Bottom) {
-        for (height in heights) {
-            Box(Modifier.width(2.dp).fillMaxHeight(height).clip(CircleShape).background(color))
+    val heights = if (rememberReduceMotion()) staticVoiceBarHeights else rememberVoiceBarHeights()
+    Spacer(Modifier.size(VoiceBars.width, VoiceBars.height).drawBehind {
+        val barWidth = VoiceBars.barWidth.toPx()
+        val step = barWidth + VoiceBars.gap.toPx()
+        val radius = CornerRadius(barWidth / 2f)
+        heights.forEachIndexed { index, fraction ->
+            val barHeight = size.height * fraction.value
+            drawRoundRect(color, topLeft = Offset(index * step, size.height - barHeight),
+                size = Size(barWidth, barHeight), cornerRadius = radius)
         }
+    })
+}
+
+private object VoiceBars {
+    val barWidth = 2.dp
+    val gap = 2.dp
+    val height = 12.dp
+    val width = barWidth * 3 + gap * 2
+}
+
+private val staticVoiceBarHeights: List<State<Float>> = List(3) { mutableFloatStateOf(0.7f) }
+
+@Composable
+private fun rememberVoiceBarHeights(): List<State<Float>> {
+    val transition = rememberInfiniteTransition(label = "voice")
+    return List(3) { index ->
+        transition.animateFloat(0.45f, 1f,
+            infiniteRepeatable(tween(390, easing = FastOutSlowInEasing), RepeatMode.Reverse, StartOffset(120 * index)),
+            label = "voice$index")
     }
 }
 

@@ -62,7 +62,10 @@ test("pasted links resolve like the SDK parseVideoId (the Swift WatchLinkPolicy 
 test("the host command list is the Whiteboard commands plus the Wheel and Watch commands", () => {
   const whiteboard = ["setTool", "setColor", "setStrokeWidth", "setFill", "undo", "redo", "setPage", "addPage", "renamePage", "deletePage", "zoomToFit", "export"];
   assert.deepEqual([...protocol.HOST_COMMAND_TYPES], [...whiteboard, ...fixtures.hostCommands]);
-  assert.deepEqual([...protocol.NATIVE_TO_EMBED_TYPES], ["snapshot", "update", "awareness", "status", "resync", "close", ...protocol.HOST_COMMAND_TYPES]);
+  assert.deepEqual([...protocol.NATIVE_TO_EMBED_TYPES], [
+    "snapshot", "update", "awareness", "status", "resync", "close", "prepareToLeave", "savedSnapshot",
+    ...protocol.HOST_COMMAND_TYPES,
+  ]);
   for (const type of protocol.APP_EDIT_COMMANDS) assert.ok(protocol.HOST_COMMAND_TYPES.includes(type), type);
   assert.ok(!protocol.APP_EDIT_COMMANDS.includes("setSounds") && !protocol.APP_EDIT_COMMANDS.includes("request"));
   assert.ok(!protocol.APP_EDIT_COMMANDS.includes("cancelRequest"), "a locked participant may still ask and withdraw");
@@ -141,7 +144,7 @@ test("Wheel and Watch commands reach the renderer and are acked under their requ
     session.doc.destroy();
   });
   const seen = [];
-  session.setCommandHandler((command) => {
+  session.start((command) => {
     seen.push(command.type);
     return { ok: command.type !== "spin" };
   });

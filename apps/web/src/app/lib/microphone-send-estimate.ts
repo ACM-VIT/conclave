@@ -1,8 +1,5 @@
 import type { WebcamProducerNetworkProfile } from "./webcam-codec";
 
-// The mic profile that fits the publisher's own bandwidth estimate. Video is
-// never capped from network guesses any more, so the producer transport's
-// estimate tracks the real uplink and the mic can follow it down.
 const PROFILE_FLOORS_BPS: ReadonlyArray<{
   profile: WebcamProducerNetworkProfile;
   floorBps: number;

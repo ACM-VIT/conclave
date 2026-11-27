@@ -28,17 +28,25 @@ export const resolveServerSfuClientId = (): string =>
 export const resolveSfuClientIdCandidates = (
   preferred?: string | null,
 ): string[] => {
-  const seen = new Set<string>();
-  const candidates = [
-    canonicalizeSfuClientId(preferred),
-    resolveServerSfuClientId(),
-    CONCLAVE_SFU_CLIENT_ID,
-    "default",
-    "public",
-  ];
-  return candidates.filter((candidate): candidate is string => {
-    if (!candidate || seen.has(candidate)) return false;
-    seen.add(candidate);
-    return true;
-  });
+  const named = canonicalizeSfuClientId(preferred);
+  if (named) return [named];
+  return Array.from(new Set([resolveServerSfuClientId(), CONCLAVE_SFU_CLIENT_ID]));
 };
+
+export const findScheduledMeetingForLink = async <
+  Meeting extends { clientId?: string },
+>(
+  linkedClientId: string | null | undefined,
+  lookup: (clientId: string) => Promise<Meeting | null>,
+): Promise<{ clientId: string; meeting: Meeting } | null> => {
+  for (const candidate of resolveSfuClientIdCandidates(linkedClientId)) {
+    const meeting = await lookup(candidate);
+    const booked = meeting?.clientId?.trim();
+    if (!meeting || !booked || canonicalizeSfuClientId(booked) !== candidate) continue;
+    return { clientId: booked, meeting };
+  }
+  return null;
+};
+export const resolveMeetingClientId = (
+  clientId: string | null | undefined,
+): string => canonicalizeSfuClientId(clientId) ?? resolveBrowserSfuClientId();

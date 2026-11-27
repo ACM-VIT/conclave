@@ -4,10 +4,10 @@ import {
   createInstantVoiceClone,
   createVoiceToken,
   deleteInstantVoiceClone,
-  MAX_VOICE_SAMPLE_BYTES,
   MAX_VOICE_SAMPLE_SECONDS,
   MIN_VOICE_SAMPLE_SECONDS,
 } from "@/lib/tts-voice";
+import { readVoiceUpload } from "@/lib/voice-upload";
 
 const errorResponse = (error: unknown, status = 500): NextResponse =>
   NextResponse.json(
@@ -21,25 +21,17 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
   }
 
-  let formData: FormData;
-  try {
-    formData = await request.formData();
-  } catch {
-    return errorResponse(new Error("Invalid voice sample upload."), 400);
+  const upload = await readVoiceUpload(request);
+  if (!upload.ok) {
+    return NextResponse.json({ error: upload.error }, { status: upload.status });
   }
+  const { form: formData, audio } = upload;
 
   if (formData.get("consent") !== "true") {
     return errorResponse(
       new Error("You must confirm that this is your voice and consent to cloning it."),
       400,
     );
-  }
-  const audio = formData.get("audio");
-  if (!(audio instanceof File) || !audio.type.startsWith("audio/")) {
-    return errorResponse(new Error("An audio recording is required."), 400);
-  }
-  if (audio.size <= 0 || audio.size > MAX_VOICE_SAMPLE_BYTES) {
-    return errorResponse(new Error("The voice recording is too large."), 413);
   }
   const durationSeconds = Number(formData.get("durationSeconds"));
   if (

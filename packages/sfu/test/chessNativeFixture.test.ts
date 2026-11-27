@@ -3,19 +3,11 @@ import { chessModule } from "../server/games/modules/chess.js";
 import { GameMoveError } from "../server/games/types.js";
 import type { GameConfig, GameContext, GamePlayer, GameRng } from "../server/games/types.js";
 
-/**
- * ACT-5 native fixture parity (HD request B8-T3 R8). The native chess fixtures in apps/conclave-skip
- * (ChessFixtures, end of GameStagePresenter.swift) hard-code the positions, legal moves and SAN records below; the
- * module must project exactly these for the same lines, and must accept every action type the native board sends
- * (offerDraw, acceptDraw, declineDraw, requestTakeback, acceptTakeback, declineTakeback, resign; S60 11 l, C6-17).
- */
-
 const players: GamePlayer[] = [
   { id: "host", name: "Host" },
   { id: "p2", name: "Pat" },
 ];
 
-/** Identity shuffle: host seats as White, p2 as Black. */
 const rng = (): GameRng => ({
   next: () => 0.99,
   int: () => 0,
@@ -53,7 +45,6 @@ const view = (state: ChessState, now: number): View => chessModule.publicView(st
 const start = (config: GameConfig = {}): ChessState =>
   chessModule.onMove(chessModule.setup(context(0, config)), { playerId: "host", type: "start", payload: undefined }, context(1_000, config));
 
-/** Plays [from, to] pairs, White (host) first, one second apart. */
 const line = (moves: [string, string][], config: GameConfig = {}): { state: ChessState; now: number } => {
   let state = start(config);
   let now = 1_000;

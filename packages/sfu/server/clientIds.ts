@@ -16,6 +16,13 @@ export const resolveDefaultClientId = (): string =>
       CONCLAVE_CLIENT_ID,
   );
 
+export const clientIdFamily = (clientId: string): string[] => {
+  const canonical = canonicalizeClientId(clientId);
+  return canonical === CONCLAVE_CLIENT_ID
+    ? [CONCLAVE_CLIENT_ID, ...LEGACY_CONCLAVE_CLIENT_IDS]
+    : [canonical];
+};
+
 export const clientIdCandidates = (primary: string): string[] => {
   const seen = new Set<string>();
   return [
@@ -31,17 +38,6 @@ export const clientIdCandidates = (primary: string): string[] => {
   });
 };
 
-/**
- * Whether stored data may move from `fromClientId` to `toClientId`.
- *
- * Lookups fall back to the deployment's legacy client ids and move what they
- * find into the requested namespace. The requested id comes from the request
- * (a query parameter or the x-sfu-client header), so moving data on any
- * request let anyone pull a scheduled meeting or webinar out of its tenant
- * with `?clientId=<anything>`, where its attendees and host could no longer
- * find it. Data only ever moves into the deployment's default client, and
- * only from one of its legacy aliases.
- */
 export const canMigrateClientNamespace = (
   fromClientId: string,
   toClientId: string,
@@ -53,3 +49,23 @@ export const canMigrateClientNamespace = (
   return clientIdCandidates(target).includes(source) ||
     LEGACY_CONCLAVE_CLIENT_IDS.has(source.toLowerCase());
 };
+
+export const servedClientId = (storedUnder: string): string => {
+  const deployment = resolveDefaultClientId();
+  return canMigrateClientNamespace(storedUnder, deployment) ? deployment : storedUnder;
+};
+
+export const clientsServedAs = (clientId: string): string[] => {
+  const served = canonicalizeClientId(clientId);
+  return clientIdCandidates(served).filter((candidate) => servedClientId(candidate) === served);
+};
+
+export const clientNamespaceIncludes = (
+  viewClientId: string,
+  storedClientId: string,
+): boolean =>
+  storedClientId === viewClientId ||
+  canMigrateClientNamespace(storedClientId, viewClientId);
+
+export const clientNamespacesIn = (viewClientId: string): string[] =>
+  clientIdCandidates(viewClientId).filter((stored) => clientNamespaceIncludes(viewClientId, stored));

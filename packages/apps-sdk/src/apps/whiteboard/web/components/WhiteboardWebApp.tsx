@@ -3,6 +3,7 @@ import * as Y from "yjs";
 import { useAppDoc } from "../../../../sdk/hooks/useAppDoc";
 import { useAppPresence } from "../../../../sdk/hooks/useAppPresence";
 import { useApps } from "../../../../sdk/hooks/useApps";
+import { cutText } from "../../../../sdk/text";
 import { useToolState } from "../../shared/hooks/useToolState";
 import { useViewport } from "../../shared/hooks/useViewport";
 import { useWhiteboardElements } from "../../shared/hooks/useWhiteboardElements";
@@ -38,13 +39,13 @@ function KeyHint({ label }: { label: string }) {
 }
 
 export function WhiteboardWebApp() {
-  const { user, isAdmin, isReadOnly: appReadOnly } = useApps();
+  const { user, isAdmin, isReadOnly: appReadOnly, isRebuilding } = useApps();
   const { doc, awareness, locked } = useAppDoc("whiteboard");
   const { states } = useAppPresence("whiteboard");
   const { tool, setTool, settings, setSettings } = useToolState();
   const { viewport, panBy, zoomAt, resetViewport, fitBounds } = useViewport();
   const lastPanPosRef = useRef<{ x: number; y: number } | null>(null);
-  const isReadOnly = Boolean(appReadOnly) || (locked && !isAdmin);
+  const isReadOnly = Boolean(appReadOnly) || (locked && !isAdmin) || isRebuilding;
   const {
     pages,
     activePageId,
@@ -95,12 +96,14 @@ export function WhiteboardWebApp() {
   }, [doc]);
 
   const handleUndo = useCallback(() => {
+    if (isReadOnly) return;
     undoManager?.undo();
-  }, [undoManager]);
+  }, [isReadOnly, undoManager]);
 
   const handleRedo = useCallback(() => {
+    if (isReadOnly) return;
     undoManager?.redo();
-  }, [undoManager]);
+  }, [isReadOnly, undoManager]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -319,7 +322,7 @@ export function WhiteboardWebApp() {
     if (!renamingPageId) return;
     const trimmed = renameDraft.trim();
     if (trimmed.length > 0) {
-      renamePage(renamingPageId, trimmed.slice(0, 40));
+      renamePage(renamingPageId, cutText(trimmed, 40));
     }
     setRenamingPageId(null);
     setRenameDraft("");

@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useReducer, useState, type SetStateAction } from "react";
+import {
+  useCallback,
+  useReducer,
+  useState,
+  useSyncExternalStore,
+  type SetStateAction,
+} from "react";
+import { setDeviceOff, type DeviceIntentStore } from "../lib/device-intent";
 import { participantReducer } from "../lib/participant-reducer";
 import { clampMeetVolume, DEFAULT_MEET_VOLUME } from "../lib/meet-volume";
 import type {
@@ -15,14 +22,28 @@ import type {
 
 interface UseMeetStateOptions {
   initialRoomId?: string;
+  deviceIntents: DeviceIntentStore;
 }
 
-export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
+export function useMeetState({ initialRoomId, deviceIntents }: UseMeetStateOptions) {
   const [connectionState, setConnectionState] =
     useState<ConnectionState>("disconnected");
   const [roomId, setRoomId] = useState(initialRoomId ?? "default-room");
-  const [isMuted, setIsMuted] = useState(true);
-  const [isCameraOff, setIsCameraOff] = useState(true);
+  const intents = useSyncExternalStore(
+    deviceIntents.subscribe,
+    deviceIntents.get,
+    deviceIntents.get,
+  );
+  const isMuted = !intents.audio.chosen;
+  const isCameraOff = !intents.video.chosen;
+  const setIsMuted = useCallback(
+    (next: SetStateAction<boolean>) => setDeviceOff(deviceIntents, "audio", next),
+    [deviceIntents],
+  );
+  const setIsCameraOff = useCallback(
+    (next: SetStateAction<boolean>) => setDeviceOff(deviceIntents, "video", next),
+    [deviceIntents],
+  );
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [isHandRaised, setIsHandRaised] = useState(false);
   const [activeScreenShareId, setActiveScreenShareId] = useState<string | null>(
@@ -35,6 +56,7 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [activeSpeakerId, setActiveSpeakerId] = useState<string | null>(null);
   const [meetError, setMeetError] = useState<MeetError | null>(null);
+  const [mediaError, setMediaError] = useState<MeetError | null>(null);
   const [waitingMessage, setWaitingMessage] = useState<string | null>(null);
   const [pendingUsers, setPendingUsers] = useState<Map<string, string>>(
     new Map(),
@@ -75,9 +97,12 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
   const [webinarSpeakerUserId, setWebinarSpeakerUserId] = useState<string | null>(
     null,
   );
-  const [webinarQaEntries, setWebinarQaEntries] = useState<WebinarQaEntry[]>(
-    [],
-  );
+  // The old events' Q&A list for this connection, null until it is sent one.
+  const [webinarQaEntries, setWebinarQaEntries] = useState<
+    WebinarQaEntry[] | null
+  >(null);
+  const [webinarQaListFromThisConnection, setWebinarQaListFromThisConnection] =
+    useState(false);
   const [webinarHandQueue, setWebinarHandQueue] = useState<
     WebinarHandQueueEntry[]
   >([]);
@@ -115,6 +140,8 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
     setActiveSpeakerId,
     meetError,
     setMeetError,
+    mediaError,
+    setMediaError,
     waitingMessage,
     setWaitingMessage,
     pendingUsers,
@@ -160,6 +187,8 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
     webinarSpeakerUserId,
     webinarQaEntries,
     setWebinarQaEntries,
+    webinarQaListFromThisConnection,
+    setWebinarQaListFromThisConnection,
     webinarHandQueue,
     setWebinarHandQueue,
     isWebinarHandRaised,

@@ -8,6 +8,7 @@ import { playConclaveLock } from "../lib/conclaveSound";
 import ConclaveLottie from "./ConclaveLottie";
 import { BrandCaption, BrandMessage } from "./ConclaveBrandScreen";
 import { BRAND_BTN_GHOST, BRAND_BTN_PRIMARY } from "./brandScreenStyles";
+import { describeEnterError } from "../lib/meeting-enter-error";
 
 export type MeetingEnterAction = "new" | "join";
 
@@ -15,70 +16,24 @@ type MeetingEnterOverlayProps = {
   show: boolean;
   action: MeetingEnterAction | null;
   error?: MeetError | null;
+  roomId?: string;
+  dismissLabel?: string;
   onRetry?: () => void;
   onDismiss?: () => void;
+  onStartNewMeeting?: () => void;
 };
 
 const EASE = [0.22, 1, 0.36, 1] as const;
-
-function describeError(
-  action: MeetingEnterAction,
-  error: MeetError,
-): { title: string; detail: string; canRetry: boolean } {
-  const verb = action === "new" ? "start" : "join";
-  switch (error.code) {
-    case "PERMISSION_DENIED":
-      return {
-        title: "Camera & mic are blocked",
-        detail:
-          "Allow access to your camera and microphone, then head back to setup to try again.",
-        canRetry: false,
-      };
-    case "MEDIA_ERROR":
-      return {
-        title: "No camera or mic found",
-        detail:
-          "Check that your devices are connected, then head back to setup to try again.",
-        canRetry: false,
-      };
-    case "CONNECTION_FAILED":
-      return {
-        title: `Couldn't ${verb} the meeting`,
-        detail:
-          "We couldn't reach the server. Check your connection and give it another go.",
-        canRetry: true,
-      };
-    case "TRANSPORT_ERROR":
-      return {
-        title: `Couldn't ${verb} the meeting`,
-        detail:
-          "The media connection didn't go through. Another try usually does it.",
-        canRetry: true,
-      };
-    case "UNKNOWN": {
-      const raw = (error.message || "").trim();
-      const technical =
-        !raw ||
-        /xhr|poll|websocket|transport|socket|network|fetch|timeout|load failed|econnrefused|err_/i.test(
-          raw,
-        );
-      return {
-        title: `Couldn't ${verb} the meeting`,
-        detail: technical
-          ? "Something interrupted the connection. Check your network and try again."
-          : raw,
-        canRetry: true,
-      };
-    }
-  }
-}
 
 export default function MeetingEnterOverlay({
   show,
   action,
   error,
+  roomId = "",
+  dismissLabel = "Back to setup",
   onRetry,
   onDismiss,
+  onStartNewMeeting,
 }: MeetingEnterOverlayProps) {
   const [shownAction, setShownAction] = useState<MeetingEnterAction>("new");
   useEffect(() => {
@@ -96,7 +51,7 @@ export default function MeetingEnterOverlay({
   const caption =
     shownAction === "new" ? "Starting your meeting" : "Joining the meeting";
   const errored = Boolean(error);
-  const described = error ? describeError(shownAction, error) : null;
+  const described = error ? describeEnterError(shownAction, error, roomId) : null;
 
   return (
     <AnimatePresence>
@@ -133,7 +88,11 @@ export default function MeetingEnterOverlay({
                   transition={{ duration: 0.38, ease: EASE }}
                 >
                   <BrandMessage
-                    eyebrow="Something went wrong"
+                    eyebrow={
+                      error?.code === "ROOM_NOT_FOUND"
+                        ? undefined
+                        : "Something went wrong"
+                    }
                     title={described.title}
                     detail={described.detail}
                     actions={
@@ -156,8 +115,17 @@ export default function MeetingEnterOverlay({
                               : BRAND_BTN_PRIMARY
                           }
                         >
-                          Back to setup
+                          {dismissLabel}
                         </button>
+                        {onStartNewMeeting ? (
+                          <button
+                            type="button"
+                            onClick={onStartNewMeeting}
+                            className={BRAND_BTN_GHOST}
+                          >
+                            Start a new meeting instead
+                          </button>
+                        ) : null}
                       </>
                     }
                   />

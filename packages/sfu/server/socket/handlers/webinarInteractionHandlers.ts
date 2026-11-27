@@ -5,6 +5,13 @@ import type {
   WebinarQaModerateRequest,
 } from "../../../types.js";
 import { forceRemoveClientNow } from "../../admin/controlPlane.js";
+import {
+  legacyQaModerate,
+  legacyQaSubmit,
+  legacyQaUpvote,
+  qaBookOf,
+} from "../../apps/authority/legacyWebinarQa.js";
+import { decisionRecordFull } from "../../admin/moderation.js";
 import { getOrCreateWebinarRoomConfig } from "../../webinar.js";
 import {
   emitWebinarHandQueueChanged,
@@ -90,6 +97,20 @@ export const registerWebinarInteractionHandlers = (
       ) => void,
     ) => {
       try {
+        // A room that runs the Q&A app keeps one book. This event is then
+        // another way to ask in it, and the app's rules decide.
+        const book = qaBookOf(context);
+        if (book) {
+          if (!takeToken(socket, "webinar:qaSubmit", RATE_LIMITS.webinarQa)) {
+            respond(callback, {
+              error: "You are sending questions too quickly",
+            });
+            return;
+          }
+          respond(callback, legacyQaSubmit(book, context, data?.question));
+          return;
+        }
+
         const guard = requireAttendee();
         if ("error" in guard) {
           respond(callback, guard);
@@ -160,6 +181,22 @@ export const registerWebinarInteractionHandlers = (
       ) => void,
     ) => {
       try {
+        const book = qaBookOf(context);
+        if (book) {
+          if (!takeToken(socket, "webinar:qaUpvote", RATE_LIMITS.webinarQaVote)) {
+            respond(callback, { error: "You are voting too quickly" });
+            return;
+          }
+          const bookQuestionId = normalizeQaId(data?.id);
+          respond(
+            callback,
+            bookQuestionId
+              ? legacyQaUpvote(book, context, bookQuestionId)
+              : { error: "Invalid question" },
+          );
+          return;
+        }
+
         const guard = requireAttendee();
         if ("error" in guard) {
           respond(callback, guard);
@@ -241,6 +278,21 @@ export const registerWebinarInteractionHandlers = (
         const action = data?.action;
         if (!questionId || !QA_MODERATE_ACTIONS.has(action)) {
           respond(callback, { error: "Invalid moderation request" });
+          return;
+        }
+
+        const book = qaBookOf(context);
+        if (book) {
+          respond(
+            callback,
+            legacyQaModerate(book, context, {
+              id: questionId,
+              action,
+              ...(typeof data?.answerText === "string"
+                ? { answerText: data.answerText }
+                : {}),
+            }),
+          );
           return;
         }
 
@@ -334,7 +386,7 @@ export const registerWebinarInteractionHandlers = (
         }
         const userKey = guard.room.userKeysById.get(guard.userId);
         if (userKey) {
-          guard.room.revokeWebinarPromotion(userKey);
+          guard.room.declineStageInvite(userKey);
         }
         respond(callback, { success: true });
       } catch (error) {
@@ -372,7 +424,10 @@ export const registerWebinarInteractionHandlers = (
           return;
         }
 
-        guard.room.promoteWebinarUserKey(targetUserKey);
+        if (!guard.room.promoteWebinarUserKey(targetUserKey)) {
+          respond(callback, decisionRecordFull("invite"));
+          return;
+        }
         if (guard.room.setWebinarHandRaised(targetUserId, false)) {
           emitWebinarHandQueueChanged(guard.room);
         }
@@ -428,34 +483,46 @@ export const registerWebinarInteractionHandlers = (
           return;
         }
 
+        // A demotion is a decision on the guest: every stage tab of the
+        // guest leaves the stage, as admitting or denying covers every tab.
+        const stageSeats = (
+          targetUserKey
+            ? guard.room.seatsOfSameGuest(targetUserKey, "removal")
+            : [targetUserId]
+        ).filter((userId) => {
+          const seat = guard.room.getClient(userId);
+          return (
+            seat !== undefined &&
+            !seat.isWebinarAttendee &&
+            !(seat instanceof Admin) &&
+            userId !== guard.hostUserId
+          );
+        });
+
         if (targetUserKey) {
-          guard.room.revokeWebinarPromotion(targetUserKey);
-          // While webinar mode is on, this identity may not slip back in as
-          // a participant — a client that ignores the demote signal below
-          // must not be able to simply rejoin the panel.
+          // While webinar mode is on, this guest may not slip back in as a
+          // participant under any of its keys: a client that ignores the
+          // demote signal below must not be able to simply rejoin the panel.
           guard.room.markWebinarDemotedUserKey(targetUserKey);
         }
 
         const webinarConfig = state.webinarConfigs.get(guard.room.channelId);
-        target.socket.emit("webinar:demoted", {
-          roomId: guard.room.id,
-          webinarLinkSlug: webinarConfig?.linkSlug ?? null,
-        } satisfies WebinarDemotedNotification);
+        for (const userId of stageSeats) {
+          const seat = guard.room.getClient(userId);
+          if (!seat) continue;
+          seat.socket.emit("webinar:demoted", {
+            roomId: guard.room.id,
+            webinarLinkSlug: webinarConfig?.linkSlug ?? null,
+          } satisfies WebinarDemotedNotification);
 
-        // Server-side enforcement, not a client courtesy: tear the seat down
-        // now (socket handlers, producers, transports, presence). Disconnect
-        // first so a client that ignores the navigation event cannot keep
-        // invoking handlers through stale currentRoom/currentClient context;
-        // forceRemoveClientNow then cancels the disconnect grace immediately.
-        // The demoted client rejoins through the public webinar link as a
-        // viewer.
-        target.socket.disconnect(true);
-        forceRemoveClientNow({
-          io,
-          state,
-          room: guard.room,
-          userId: targetUserId,
-        });
+          // Server-side enforcement, not a client courtesy: the seat ends
+          // now (media, presence, a transcript relay it runs), then its
+          // socket closes, so a client that ignores the navigation event
+          // cannot keep invoking handlers. The demoted client rejoins
+          // through the public webinar link as a viewer.
+          forceRemoveClientNow({ io, state, room: guard.room, userId });
+          seat.socket.disconnect(true);
+        }
         respond(callback, { success: true });
       } catch (error) {
         respond(callback, { error: (error as Error).message });

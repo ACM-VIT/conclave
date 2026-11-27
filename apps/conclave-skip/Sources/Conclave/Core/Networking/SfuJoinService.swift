@@ -66,6 +66,12 @@ struct SfuJoinInfo: Decodable {
         return SfuJoinIdentity(userKey: userKey, userId: "\(userKey)#\(sessionId)")
     }
 
+    func roomRecoveryScope(roomId: String, clientId: String, sessionId: String) -> NativeRoomRecoveryPass.Scope? {
+        guard let roomId = NativeRoomIdNormalizer.normalize(roomId),
+              let identity = localIdentity(sessionId: sessionId) else { return nil }
+        return NativeRoomRecoveryPass.Scope(roomId: roomId, clientId: clientId, userId: identity.userId, sessionId: sessionId)
+    }
+
     private func decodedTokenClaims() -> SfuJoinTokenClaims? {
         let parts = token.split(separator: ".")
         guard parts.count >= 2 else { return nil }
@@ -182,6 +188,10 @@ struct SfuJoinUser: Codable, Equatable {
 struct SfuJoinRequest: Encodable {
     let roomId: String
     let sessionId: String
+    /// Sending this field, even empty, asks the join route for a guest identity bound to the
+    /// guest pass it keeps in this app's cookie jar. The app takes the identity from the token
+    /// (`SfuJoinInfo.localIdentity`), so it never names a guest id of its own.
+    let guestId: String
     let user: SfuJoinUser?
     let isHost: Bool
     let isAdmin: Bool
@@ -239,6 +249,7 @@ enum SfuJoinService {
         let payload = SfuJoinRequest(
             roomId: roomId,
             sessionId: sessionId,
+            guestId: "",
             user: user,
             isHost: isHost,
             isAdmin: isHost,

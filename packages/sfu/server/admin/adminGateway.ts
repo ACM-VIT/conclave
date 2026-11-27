@@ -1,10 +1,11 @@
+import { runDetached } from "../runDetached.js";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { guardSocketListeners } from "../socket/guardListeners.js";
 import type { Server as SocketIOServer } from "socket.io";
 import { Logger } from "../../utilities/loggers.js";
 import { renewRoomOwnerships } from "../rooms.js";
-import { listScheduledMeetings } from "../scheduledMeetings.js";
-import { listScheduledWebinars } from "../scheduledWebinars.js";
+import { allMeetings } from "../controlPlane/meetingCommands.js";
+import { allWebinars } from "../controlPlane/webinarCommands.js";
 import { canonicalizeClientId } from "../clientIds.js";
 import type { SfuState } from "../state.js";
 import {
@@ -246,12 +247,12 @@ const toRoomSummary = (
   clientId: room.clientId,
   participants:
     room.getMeetingParticipantCount() + room.getWebinarAttendeeCount(),
-  pending: room.pendingClients.size,
+  pending: room.waitingGuestCount,
   admins: room.getAdmins().length,
   locked: room.isLocked,
   screenShare: Boolean(room.screenShareProducerId),
   quality: room.currentQuality,
-  activeAppId: room.appsState.activeAppId,
+  activeAppId: room.apps.activeAppId,
   activeGame:
     room.gameSession && !room.gameSession.isFinished()
       ? room.gameSession.gameId
@@ -299,7 +300,7 @@ export const registerAdminGateway = (
 
   // The scheduling calendar, flattened for the drawer: upcoming and live
   // first, capped so a busy booking-link tenant cannot flood the socket.
-  const buildScheduled = (): AdminScheduledItem[] => {
+  const buildScheduled = async (): Promise<AdminScheduledItem[]> => {
     const items: AdminScheduledItem[] = [];
     const seen = new Set<string>();
     const now = Date.now();
@@ -318,9 +319,11 @@ export const registerAdminGateway = (
       items.push(normalizedItem);
     };
 
-    for (const meeting of listScheduledMeetings(state.scheduledMeetings, {
-      includeAll: true,
-    })) {
+    const [meetings, webinars] = await Promise.all([
+      state.controlPlane.read(allMeetings),
+      state.controlPlane.read(allWebinars),
+    ]);
+    for (const meeting of [...meetings].sort((a, b) => a.scheduledStartAt - b.scheduledStartAt)) {
       addItem({
         kind: "meeting",
         id: meeting.id,
@@ -334,9 +337,7 @@ export const registerAdminGateway = (
         host: meeting.hostName || meeting.hostEmail,
       });
     }
-    for (const webinar of listScheduledWebinars(state.scheduledWebinars, {
-      includeAll: true,
-    })) {
+    for (const webinar of [...webinars].sort((a, b) => a.scheduledStartAt - b.scheduledStartAt)) {
       addItem({
         kind: "webinar",
         id: webinar.id,
@@ -383,7 +384,7 @@ export const registerAdminGateway = (
         users,
         screen: Boolean(room.screenShareProducerId),
         locked: room.isLocked,
-        pendingCount: room.pendingClients.size,
+        pendingCount: room.waitingGuestCount,
       });
     }
     return occupancy;
@@ -556,7 +557,7 @@ export const registerAdminGateway = (
       // The calendar changes rarely; check it on a slow cadence.
       if (now - lastScheduledCheckAt >= 30_000) {
         lastScheduledCheckAt = now;
-        const scheduled = buildScheduled();
+        const scheduled = await buildScheduled();
         const scheduledJson = JSON.stringify(scheduled);
         if (scheduledJson !== lastScheduledJson) {
           lastScheduledJson = scheduledJson;
@@ -587,7 +588,7 @@ export const registerAdminGateway = (
   };
 
   const interval = setInterval(() => {
-    void tick();
+    runDetached("The admin gateway refresh", () => tick());
   }, TICK_MS);
   interval.unref?.();
 
@@ -617,7 +618,7 @@ export const registerAdminGateway = (
         socket.emit("admin:history", { points: [...history] });
         socket.emit("admin:events", { events: [...eventLog], snapshot: true });
         socket.emit("admin:audit", { entries: getAdminAuditEntries() });
-        socket.emit("admin:scheduled", { items: buildScheduled() });
+        socket.emit("admin:scheduled", { items: await buildScheduled() });
       } catch (error) {
         Logger.warn("[AdminGateway] initial snapshot failed", error);
       }

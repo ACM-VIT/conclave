@@ -28,9 +28,7 @@ final class TtsSpeaker {
         queue.activeMessageId
     }
 
-    init(queue: TtsPlaybackQueue? = nil) {
-
-        let queue = queue ?? TtsPlaybackQueue()
+    init(queue: TtsPlaybackQueue) {
         self.queue = queue
         VoicePlaybackQueues.register(queue)
         queue.onStart = { [weak self] item, token in
@@ -277,8 +275,7 @@ final class TtsSpeaker {
         queue.activeMessageId
     }
 
-    init(queue: TtsPlaybackQueue? = nil) {
-        let queue = queue ?? TtsPlaybackQueue()
+    init(queue: TtsPlaybackQueue) {
         self.queue = queue
         VoicePlaybackQueues.register(queue)
         queue.onStart = { [weak queue] _, token in

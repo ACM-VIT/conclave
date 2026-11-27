@@ -1,5 +1,5 @@
 /**
- * Face geometry from facehash 0.1.0, Copyright (c) Cossistant team.
+ * Copyright (c) Cossistant team: face geometry from facehash 0.1.0.
  * https://github.com/cossistantcom/cossistant/tree/main/packages/facehash
  *
  * MIT License

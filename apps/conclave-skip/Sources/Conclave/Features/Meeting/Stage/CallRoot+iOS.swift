@@ -77,6 +77,7 @@ struct CallRoot: View {
                              activitySession: activitySession, stage: stage,
                              webinarLinkProvider: CallRootWebinarLink.provider(webinarLinkProvider, people: people))
         })
+        .appStageDiscardPrompt(host: shell.panels.snapshot.current?.panel == .activities ? nil : activitySession?.appHost)
         .conclaveCallAppearance()
 
         .accessibilityAction(.magicTap) { shell.toggleMicrophone() }

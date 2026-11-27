@@ -1,6 +1,15 @@
+import { resolveViewerUrl } from "../../lib/novnc-viewer";
 import { EMOJI_REACTIONS, type ReactionEmoji } from "./constants";
 import { isMediaCaptureTimeoutError } from "./media-capture-timeout";
-import type { MeetError, ReactionOption } from "./types";
+import { linkOriginIsKnown } from "../../lib/meeting-origin";
+import { canonicalizeSfuClientId, resolveMeetingClientId } from "../../lib/sfu-client-id";
+import type {
+  MeetError,
+  MeetFailureReason,
+  MeetMediaDevice,
+  MeetMediaDeviceCause,
+  ReactionOption,
+} from "./types";
 
 export const toError = (value: unknown): Error =>
   value instanceof Error ? value : new Error(String(value));
@@ -19,79 +28,33 @@ export const readResponseError = async (
   return response.statusText || fallback;
 };
 
-const ROOM_WORDS = [
-  "aloe",
-  "aster",
-  "bloom",
-  "canna",
-  "cedar",
-  "clove",
-  "dahl",
-  "daisy",
-  "erica",
-  "flora",
-  "hazel",
-  "iris",
-  "lilac",
-  "lily",
-  "lotus",
-  "maple",
-  "myrrh",
-  "olive",
-  "pansy",
-  "peony",
-  "poppy",
-  "rose",
-  "sorel",
-  "tansy",
-  "thyme",
-  "tulip",
-  "yucca",
-  "zinn",
-  "akane",
-  "akira",
-  "asuna",
-  "eren",
-  "gohan",
-  "goku",
-  "gojo",
-  "kanao",
-  "kira",
-  "levi",
-  "luffy",
-  "maki",
-  "misa",
-  "nami",
-  "riku",
-  "sokka",
-  "saber",
-  "senku",
-  "shoto",
-  "soma",
-  "sora",
-  "tanji",
-  "taki",
-  "toji",
-  "todo",
-  "toph",
-  "yami",
-  "yuki",
-  "yato",
-  "zoro",
-];
-
-const ROOM_WORDS_PER_CODE = 3;
+// Meet-style codes like "abc-mnop-xyz": 26^10 (about 1.4e14) possible codes,
+// so live meetings cannot be found by guessing. Older three-word codes still
+// work everywhere because any lowercase letters, digits and hyphens do.
+const ROOM_CODE_LETTERS = "abcdefghijklmnopqrstuvwxyz";
+const ROOM_CODE_GROUP_LENGTHS = [3, 4, 3];
 const ROOM_WORD_SEPARATOR = "-";
+// 234 is the largest multiple of 26 under 256; bytes at or above it would
+// favour the first letters.
+const UNBIASED_BYTE_LIMIT = 234;
 export const ROOM_CODE_MAX_LENGTH = 64;
 const WEBINAR_LINK_CODE_MAX_LENGTH = 32;
 
 export function generateRoomCode(): string {
-  const words: string[] = [];
-  for (let i = 0; i < ROOM_WORDS_PER_CODE; i += 1) {
-    const pick = ROOM_WORDS[Math.floor(Math.random() * ROOM_WORDS.length)];
-    words.push(pick);
+  const letterCount = ROOM_CODE_GROUP_LENGTHS.reduce((sum, n) => sum + n, 0);
+  const letters: string[] = [];
+  while (letters.length < letterCount) {
+    for (const byte of crypto.getRandomValues(new Uint8Array(letterCount * 2))) {
+      if (byte >= UNBIASED_BYTE_LIMIT || letters.length === letterCount) continue;
+      letters.push(ROOM_CODE_LETTERS[byte % ROOM_CODE_LETTERS.length]);
+    }
   }
-  return words.join(ROOM_WORD_SEPARATOR);
+  let offset = 0;
+  return ROOM_CODE_GROUP_LENGTHS.map((length) => {
+    const group = letters.slice(offset, offset + length).join("");
+    offset += length;
+    return group;
+  }).join(ROOM_WORD_SEPARATOR);
 }
 
 export function sanitizeRoomCode(value: string): string {
@@ -141,48 +104,592 @@ export function extractRoomCode(input: string): string {
   return sanitizeRoomCode(trimmed);
 }
 
+/** An error that knows why it happened, so reports need not read its message. */
+export class MeetFailure extends Error {
+  constructor(
+    message: string,
+    readonly reason: MeetFailureReason,
+  ) {
+    super(message);
+    this.name = "MeetFailure";
+  }
+}
+
+export type CodeFieldPaste =
+  | { kind: "insert"; text: string }
+  | { kind: "replace"; code: string; clientId: string | null };
+
+const ROOM_CODE_TEXT = /^[a-z0-9-]+$/i;
+const ROOM_CODE_SHAPE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const MEETING_LINK = new RegExp(
+  String.raw`^(?:(?<scheme>https?:)?\/\/)?(?<authority>[^\/?#\\\s@]+)\/(?<segment>[^\/?#\\\s]+)\/?(?:[?#]\S*)?$`,
+  "i",
+);
+export const APP_ROUTE_SEGMENTS = [
+  "api",
+  "book",
+  "delete-account",
+  "ingest",
+  "privacy",
+  "schedule",
+  "sfu-admin",
+  "sign-in",
+  "w",
+] as const;
+const NOT_ROOM_CODES = new Set<string>(["null", "undefined", ...APP_ROUTE_SEGMENTS]);
+
+const isRoomCodeShaped = (code: string) => ROOM_CODE_SHAPE.test(code) && !NOT_ROOM_CODES.has(code);
+
+const linkRoomCode = (segment: string) => {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(segment);
+  } catch {
+    return null;
+  }
+  if (!ROOM_CODE_TEXT.test(decoded)) return null;
+  const code = decoded.toLowerCase();
+  return isRoomCodeShaped(code) ? code : null;
+};
+
+const linkAsNavigated = (link: string, scheme: string | undefined) => {
+  try {
+    return new URL(scheme ? link : `https:${link.startsWith("//") ? "" : "//"}${link}`);
+  } catch {
+    return null;
+  }
+};
+
+export function parseCodeFieldPaste(
+  text: string,
+  conclaveOrigins: readonly string[],
+): CodeFieldPaste | null {
+  const trimmed = text.trim();
+  if (ROOM_CODE_TEXT.test(trimmed)) return { kind: "insert", text: trimmed.toLowerCase() };
+  const { scheme, authority, segment } = MEETING_LINK.exec(trimmed)?.groups ?? {};
+  if (!authority || !segment) return null;
+  if (!linkOriginIsKnown(scheme, authority, conclaveOrigins)) return null;
+  const code = linkRoomCode(segment);
+  if (!code) return null;
+  const url = linkAsNavigated(trimmed, scheme);
+  if (!url) return null;
+  return { kind: "replace", code, clientId: canonicalizeSfuClientId(url.searchParams.get("clientId")) };
+}
+
+const URL_PUNCTUATION = /[:/.?#@%=&+~\\]/;
+
+export const normalizeCodeField = (value: string) =>
+  URL_PUNCTUATION.test(value)
+    ? value
+    : value.toLowerCase().replace(/(\S)\s+(?=\S)/g, "$1-").replace(/-+/g, "-");
+
+export type CodeFieldResolution = { code: string; clientId: string | null; tooLong: boolean };
+
+export function resolveCodeField(
+  value: string,
+  conclaveOrigins: readonly string[],
+): CodeFieldResolution {
+  const paste = parseCodeFieldPaste(value, conclaveOrigins);
+  const link = paste?.kind === "replace" ? paste : null;
+  const candidate = link ? link.code : value.trim();
+  const clientId = link ? resolveMeetingClientId(link.clientId) : null;
+  if (!isRoomCodeShaped(candidate)) return { code: "", clientId: null, tooLong: false };
+  return candidate.length > ROOM_CODE_MAX_LENGTH
+    ? { code: "", clientId, tooLong: true }
+    : { code: candidate, clientId, tooLong: false };
+}
+
+export const codeFieldTenant = (resolution: CodeFieldResolution, pageClientId: string) => {
+  const clientId = resolution.clientId ?? pageClientId;
+  return { clientId, onThisPage: clientId === pageClientId };
+};
+
+export const roomCodeFromField = (value: string, conclaveOrigins: readonly string[]) =>
+  resolveCodeField(value, conclaveOrigins).code;
+
+export type FieldEdit = { start: number; end: number; text: string };
+
+export function planFieldEdit(
+  value: string,
+  start: number,
+  end: number,
+  text: string,
+  normalize: (value: string) => string,
+): FieldEdit {
+  const next = normalize(value.slice(0, start) + text + value.slice(end));
+  let head = 0;
+  while (head < start && value[head] === next[head]) head += 1;
+  let tail = 0;
+  while (
+    tail < value.length - end &&
+    tail < next.length - head &&
+    value[value.length - 1 - tail] === next[next.length - 1 - tail]
+  ) {
+    tail += 1;
+  }
+  return { start: head, end: value.length - tail, text: next.slice(head, next.length - tail) };
+}
+
+const INSERT_INPUT = new Set([
+  "insertText",
+  "insertReplacementText",
+  "insertFromPaste",
+  "insertFromPasteAsQuotation",
+  "insertFromDrop",
+  "insertFromYank",
+]);
+const DELETE_INPUT = new Set([
+  "deleteContent",
+  "deleteContentBackward",
+  "deleteContentForward",
+  "deleteWordBackward",
+  "deleteWordForward",
+  "deleteSoftLineBackward",
+  "deleteSoftLineForward",
+  "deleteHardLineBackward",
+  "deleteHardLineForward",
+  "deleteEntireSoftLine",
+  "deleteByCut",
+  "deleteByDrag",
+]);
+export const PASTED_INPUT = new Set([
+  "insertFromPaste",
+  "insertFromPasteAsQuotation",
+  "insertFromDrop",
+  "insertFromYank",
+]);
+const WORD_CHAR = /[\p{L}\p{N}]/u;
+
+const wordStartBefore = (value: string, at: number) => {
+  let index = at;
+  while (index > 0 && !WORD_CHAR.test(value[index - 1])) index -= 1;
+  while (index > 0 && WORD_CHAR.test(value[index - 1])) index -= 1;
+  return index;
+};
+
+const wordEndAfter = (value: string, at: number) => {
+  let index = at;
+  while (index < value.length && !WORD_CHAR.test(value[index])) index += 1;
+  while (index < value.length && WORD_CHAR.test(value[index])) index += 1;
+  return index;
+};
+
+export function inputEditRange(
+  inputType: string,
+  start: number,
+  end: number,
+  value: string,
+): readonly [number, number] | null {
+  if (INSERT_INPUT.has(inputType)) return [start, end];
+  if (!DELETE_INPUT.has(inputType)) return null;
+  if (start !== end) return [start, end];
+  switch (inputType) {
+    case "deleteContentBackward":
+      return [Math.max(0, start - 1), start];
+    case "deleteContentForward":
+      return [start, Math.min(value.length, start + 1)];
+    case "deleteWordBackward":
+      return [wordStartBefore(value, start), start];
+    case "deleteWordForward":
+      return [start, wordEndAfter(value, start)];
+    case "deleteSoftLineBackward":
+    case "deleteHardLineBackward":
+      return [0, start];
+    case "deleteSoftLineForward":
+    case "deleteHardLineForward":
+      return [start, value.length];
+    case "deleteEntireSoftLine":
+      return [0, value.length];
+    default:
+      return [start, end];
+  }
+}
+
+export type SelectionDirection = "forward" | "backward" | "none";
+export type FieldState = {
+  value: string;
+  selection: readonly [number, number];
+  direction?: SelectionDirection;
+};
+type FieldStep = { before: FieldState; after: FieldState };
+
+const sameFieldState = (a: FieldState, b: FieldState) =>
+  a.value === b.value && a.selection[0] === b.selection[0] && a.selection[1] === b.selection[1];
+
+export class FieldHistory {
+  private steps: FieldStep[] = [];
+  private cursor = 0;
+  private typingOpen = false;
+
+  record(before: FieldState, after: FieldState, typing: boolean) {
+    this.steps.length = this.cursor;
+    const last = this.steps[this.cursor - 1];
+    if (typing && this.typingOpen && last && sameFieldState(last.after, before)) {
+      last.after = after;
+    } else {
+      this.steps.push({ before, after });
+      this.cursor = this.steps.length;
+    }
+    this.typingOpen = typing;
+  }
+
+  undone(value: string): FieldState | null {
+    const step = this.steps[this.cursor - 1];
+    if (!step || step.before.value !== value) {
+      this.clear();
+      return null;
+    }
+    this.typingOpen = false;
+    this.cursor -= 1;
+    return step.before;
+  }
+
+  redone(value: string): FieldState | null {
+    const step = this.steps[this.cursor];
+    if (!step || step.after.value !== value) {
+      this.clear();
+      return null;
+    }
+    this.typingOpen = false;
+    this.cursor += 1;
+    return step.after;
+  }
+
+  seal() {
+    this.typingOpen = false;
+  }
+
+  clear() {
+    this.steps = [];
+    this.cursor = 0;
+    this.typingOpen = false;
+  }
+}
+
+type FieldTracker = {
+  history: FieldHistory;
+  last: FieldState;
+  pending: FieldState | null;
+  applying: boolean;
+};
+
+const TYPING_INPUT = new Set(["insertText", "insertCompositionText"]);
+const fieldTrackers = new WeakMap<HTMLInputElement, FieldTracker>();
+
+const fieldStateOf = (input: HTMLInputElement): FieldState => ({
+  value: input.value,
+  selection: [
+    input.selectionStart ?? input.value.length,
+    input.selectionEnd ?? input.selectionStart ?? input.value.length,
+  ],
+  direction: input.selectionDirection ?? "none",
+});
+
+const fieldTrackerFor = (input: HTMLInputElement) => {
+  let tracker = fieldTrackers.get(input);
+  if (!tracker) {
+    tracker = { history: new FieldHistory(), last: fieldStateOf(input), pending: null, applying: false };
+    fieldTrackers.set(input, tracker);
+  }
+  if (!tracker.applying && tracker.last.value !== input.value) {
+    tracker.history.clear();
+    tracker.last = fieldStateOf(input);
+    tracker.pending = null;
+  }
+  return tracker;
+};
+
+const writeField = (input: HTMLInputElement, tracker: FieldTracker, write: () => void) => {
+  tracker.applying = true;
+  try {
+    write();
+  } finally {
+    tracker.applying = false;
+  }
+  tracker.last = fieldStateOf(input);
+  tracker.pending = null;
+};
+
+export function applyFieldEdit(input: HTMLInputElement, edit: FieldEdit) {
+  const caret = edit.start + edit.text.length;
+  const tracker = fieldTrackerFor(input);
+  if (edit.start === edit.end && !edit.text) {
+    input.setSelectionRange(caret, caret);
+    tracker.history.seal();
+    return;
+  }
+  const before = fieldStateOf(input);
+  writeField(input, tracker, () => {
+    input.setSelectionRange(edit.start, edit.end);
+    const applied =
+      typeof document.execCommand === "function" &&
+      (edit.text
+        ? document.execCommand("insertText", false, edit.text)
+        : document.execCommand("delete"));
+    if (applied) {
+      input.setSelectionRange(caret, caret);
+    } else {
+      input.setRangeText(edit.text, edit.start, edit.end, "end");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  });
+  tracker.history.record(before, tracker.last, false);
+}
+
+export function trackFieldHistory(input: HTMLInputElement) {
+  const onBeforeInput = (event: InputEvent) => {
+    const tracker = fieldTrackerFor(input);
+    if (tracker.applying || event.defaultPrevented) return;
+    tracker.pending = fieldStateOf(input);
+  };
+  const onInput = (event: Event) => {
+    const tracker = fieldTrackers.get(input);
+    if (!tracker || tracker.applying || !(event instanceof InputEvent)) return;
+    if (event.inputType === "historyUndo" || event.inputType === "historyRedo") {
+      const state =
+        event.inputType === "historyUndo"
+          ? tracker.history.undone(input.value)
+          : tracker.history.redone(input.value);
+      if (state) input.setSelectionRange(state.selection[0], state.selection[1], state.direction);
+    } else {
+      const before = tracker.pending ?? tracker.last;
+      const after = fieldStateOf(input);
+      if (after.value !== before.value) {
+        tracker.history.record(before, after, TYPING_INPUT.has(event.inputType));
+      }
+    }
+    tracker.last = fieldStateOf(input);
+    tracker.pending = null;
+  };
+  fieldTrackerFor(input);
+  input.addEventListener("beforeinput", onBeforeInput);
+  input.addEventListener("input", onInput);
+  return () => {
+    input.removeEventListener("beforeinput", onBeforeInput);
+    input.removeEventListener("input", onInput);
+  };
+}
+const ROOM_NOT_FOUND_MESSAGE = "No room found.";
+
+type MediaDevice = "camera" | "microphone";
+type MediaCauses = NonNullable<MeetError["causes"]>;
+type MediaFailureKind = Exclude<MeetMediaDeviceCause["kind"], "other">;
+export type MediaDeviceFailures = Partial<Record<MediaDevice, unknown>>;
+
+const MEDIA_ERROR_MESSAGES: Record<MediaFailureKind, Record<MeetMediaDevice, string>> = {
+  blocked: {
+    camera: "Camera is blocked",
+    microphone: "Microphone is blocked",
+    both: "Camera and microphone are blocked",
+  },
+  missing: {
+    camera: "No camera found",
+    microphone: "No microphone found",
+    both: "No camera or microphone found",
+  },
+  busy: {
+    camera: "Camera is in use",
+    microphone: "Microphone is in use",
+    both: "Camera and microphone are in use",
+  },
+  unresponsive: {
+    camera: "Camera didn’t respond",
+    microphone: "Microphone didn’t respond",
+    both: "Camera and microphone didn’t respond",
+  },
+};
+
+const MEDIA_ERROR_ADVICE: Record<MediaFailureKind, Record<MeetMediaDevice, string>> = {
+  blocked: {
+    camera: "allow camera access in your browser",
+    microphone: "allow microphone access in your browser",
+    both: "allow camera and microphone access in your browser",
+  },
+  missing: {
+    camera: "connect or select a camera",
+    microphone: "connect or select a microphone",
+    both: "connect or select a camera and microphone",
+  },
+  busy: {
+    camera: "close other apps that are using your camera",
+    microphone: "close other apps that are using your microphone",
+    both: "close other apps that are using your camera and microphone",
+  },
+  unresponsive: {
+    camera: "check that your camera isn’t in use by another app",
+    microphone: "check that your microphone isn’t in use by another app",
+    both: "check that your camera and microphone aren’t in use by another app",
+  },
+};
+
+const MEDIA_FAILURE_CODES: Record<MediaFailureKind, MeetError["code"]> = {
+  blocked: "PERMISSION_DENIED",
+  missing: "MEDIA_ERROR",
+  busy: "MEDIA_ERROR",
+  unresponsive: "MEDIA_ERROR",
+};
+
+const lowerFirst = (text: string) => text.charAt(0).toLowerCase() + text.slice(1);
+const upperFirst = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
+function classifyMediaFailure(error: unknown): MediaFailureKind | null {
+  const message = error instanceof Error ? error.message : String(error);
+  const name = error instanceof Error ? error.name : "";
+  const matches = (...names: string[]) =>
+    names.some((candidate) => name === candidate || message.includes(candidate));
+  if (matches("NotAllowedError", "PermissionDeniedError") || message.includes("Permission denied")) {
+    return "blocked";
+  }
+  if (matches("NotFoundError", "DevicesNotFoundError", "OverconstrainedError")) return "missing";
+  if (matches("NotReadableError", "TrackStartError")) return "busy";
+  if (isMediaCaptureTimeoutError(error)) return "unresponsive";
+  return null;
+}
+
+const isConnectionFailure = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("Connection") || message.includes("socket");
+};
+
+function mediaCause(
+  error: unknown,
+  device: MediaDevice,
+  defaultCode: MeetError["code"],
+): MeetMediaDeviceCause {
+  const kind = classifyMediaFailure(error);
+  if (kind) {
+    return { code: MEDIA_FAILURE_CODES[kind], kind, message: MEDIA_ERROR_MESSAGES[kind][device] };
+  }
+  if (isConnectionFailure(error)) {
+    return { code: "CONNECTION_FAILED", kind: "other", message: "Failed to connect to server" };
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return { code: defaultCode, kind: "other", message };
+}
+
+function mediaErrorFromCauses(causes: MediaCauses): MeetError | null {
+  const { camera, microphone } = causes;
+  if (camera && microphone) {
+    const sharedKind = camera.kind === microphone.kind && camera.kind !== "other" ? camera.kind : null;
+    return {
+      code: [camera.code, microphone.code].includes("PERMISSION_DENIED")
+        ? "PERMISSION_DENIED"
+        : camera.code,
+      message: sharedKind
+        ? MEDIA_ERROR_MESSAGES[sharedKind].both
+        : `${microphone.message} and ${lowerFirst(camera.message)}`,
+      recoverable: true,
+      device: "both",
+      causes,
+    };
+  }
+  const device: MediaDevice | null = camera ? "camera" : microphone ? "microphone" : null;
+  const cause = camera ?? microphone;
+  if (!device || !cause) return null;
+  return { code: cause.code, message: cause.message, recoverable: true, device, causes };
+}
+
+export function createMediaDeviceError(
+  failures: MediaDeviceFailures,
+  defaultCode: MeetError["code"] = "MEDIA_ERROR",
+): MeetError | null {
+  const causes: MediaCauses = {};
+  for (const device of ["microphone", "camera"] as const) {
+    if (device in failures) causes[device] = mediaCause(failures[device], device, defaultCode);
+  }
+  return mediaErrorFromCauses(causes);
+}
+
+export const isMediaDeviceBlocked = (
+  error: MeetError | null | undefined,
+  device: MediaDevice,
+): boolean => error?.causes?.[device]?.kind === "blocked";
+
+export const isCameraAccessBlocked = ({
+  hasLiveCamera,
+  permissionState,
+  mediaError,
+}: {
+  hasLiveCamera: boolean;
+  permissionState: PermissionState | "unknown";
+  mediaError: MeetError | null | undefined;
+}): boolean =>
+  !hasLiveCamera &&
+  (permissionState === "unknown"
+    ? isMediaDeviceBlocked(mediaError, "camera")
+    : permissionState !== "granted");
+
+export function mediaErrorAdvice(error: MeetError): string | null {
+  const camera = error.causes?.camera;
+  const microphone = error.causes?.microphone;
+  const adviceFor = (device: MeetMediaDevice, cause: MeetMediaDeviceCause | undefined) =>
+    cause && cause.kind !== "other" ? MEDIA_ERROR_ADVICE[cause.kind][device] : null;
+  const parts =
+    camera && microphone && camera.kind === microphone.kind
+      ? [adviceFor("both", camera)]
+      : [adviceFor("microphone", microphone), adviceFor("camera", camera)];
+  const sentence = parts.filter((part): part is string => Boolean(part)).join(", and ");
+  return sentence ? `${upperFirst(sentence)}, then try again.` : null;
+}
+
 export function createMeetError(
   error: unknown,
-  defaultCode: MeetError["code"] = "UNKNOWN"
+  defaultCode: MeetError["code"] = "UNKNOWN",
+  device?: MeetMediaDevice,
 ): MeetError {
+  const reason = error instanceof MeetFailure ? error.reason : undefined;
+  const meetError = describeMeetError(error, defaultCode, device);
+  return reason ? { ...meetError, reason } : meetError;
+}
+
+function describeMeetError(
+  error: unknown,
+  defaultCode: MeetError["code"],
+  device?: MeetMediaDevice,
+): MeetError {
+  if (error instanceof Error && error.message === ROOM_NOT_FOUND_MESSAGE) {
+    return { code: "ROOM_NOT_FOUND", message: ROOM_NOT_FOUND_MESSAGE, recoverable: true };
+  }
+  if (device) {
+    const devices: MediaDevice[] = device === "both" ? ["microphone", "camera"] : [device];
+    const deviceError = createMediaDeviceError(
+      Object.fromEntries(devices.map((target) => [target, error])),
+      defaultCode,
+    );
+    if (deviceError) return deviceError;
+  }
+  const kind = classifyMediaFailure(error);
+  if (kind && kind !== "busy") {
+    return { code: MEDIA_FAILURE_CODES[kind], message: MEDIA_ERROR_MESSAGES[kind].both, recoverable: true };
+  }
+  if (isConnectionFailure(error)) {
+    return { code: "CONNECTION_FAILED", message: "Failed to connect to server", recoverable: true };
+  }
   const message = error instanceof Error ? error.message : String(error);
-
-  if (
-    message.includes("Permission denied") ||
-    message.includes("NotAllowedError")
-  ) {
-    return {
-      code: "PERMISSION_DENIED",
-      message: "Camera/microphone permission denied",
-      recoverable: true,
-    };
-  }
-  if (
-    message.includes("NotFoundError") ||
-    message.includes("DevicesNotFoundError")
-  ) {
-    return {
-      code: "MEDIA_ERROR",
-      message: "Camera or microphone not found",
-      recoverable: true,
-    };
-  }
-  if (isMediaCaptureTimeoutError(error)) {
-    return {
-      code: "MEDIA_ERROR",
-      message: "Camera or microphone did not respond",
-      recoverable: true,
-    };
-  }
-  if (message.includes("Connection") || message.includes("socket")) {
-    return {
-      code: "CONNECTION_FAILED",
-      message: "Failed to connect to server",
-      recoverable: true,
-    };
-  }
-
   return { code: defaultCode, message, recoverable: false };
+}
+
+export function clearMediaDeviceError(
+  current: MeetError | null,
+  recovered: MediaDevice,
+): MeetError | null {
+  if (!current?.device) return current;
+  if (!current.causes) return current.device === recovered ? null : current;
+  if (!current.causes[recovered]) return current;
+  const { [recovered]: _cleared, ...remaining } = current.causes;
+  return mediaErrorFromCauses(remaining);
+}
+
+export function mergeMediaDeviceError(
+  current: MeetError | null,
+  next: MeetError,
+): MeetError {
+  if (!current?.causes || !next.causes) return next;
+  const covered = (Object.keys(current.causes) as MediaDevice[]).every(
+    (device) => next.causes?.[device],
+  );
+  if (covered) return next;
+  return mediaErrorFromCauses({ ...current.causes, ...next.causes }) ?? next;
 }
 
 export function generateSessionId(): string {
@@ -370,20 +877,6 @@ export function isBrowserVideoUserId(userId: string): boolean {
 }
 
 export function resolveNoVncUrl(noVncUrl: string): string {
-  if (!noVncUrl) return noVncUrl;
-  if (typeof window === "undefined") return noVncUrl;
-
-  try {
-    const parsed = new URL(noVncUrl);
-    const isLocalHost =
-      parsed.hostname === "localhost" ||
-      parsed.hostname === "127.0.0.1" ||
-      parsed.hostname === "0.0.0.0";
-    if (isLocalHost) {
-      parsed.hostname = window.location.hostname;
-    }
-    return parsed.toString();
-  } catch {
-    return noVncUrl;
-  }
+  if (!noVncUrl || typeof window === "undefined") return noVncUrl;
+  return resolveViewerUrl(noVncUrl, window.location.hostname);
 }

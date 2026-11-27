@@ -71,9 +71,16 @@ enum ActivitiesCopy {
     static func endDialogMessage(_ item: NowPlayingModel) -> String {
         switch item.kind {
         case .game: return ConclaveStrings.text("Scores and progress are lost for everyone.")
-        case .app: return item.appId == "whiteboard" ? ConclaveStrings.text("The board clears for everyone.")
-            : ConclaveStrings.text("Everyone returns to the meeting.")
+        case .app: return closeMessage(item.closeEffect)
         case .browser: return ConclaveStrings.text("Everyone returns to the meeting.")
+        }
+    }
+
+    static func closeMessage(_ effect: AppCloseEffect) -> String {
+        switch effect {
+        case .keepsBoard: return ConclaveStrings.text("The board stays saved for this meeting.")
+        case .clearsBoard: return ConclaveStrings.text("The board clears for everyone.")
+        case .returnsToMeeting: return ConclaveStrings.text("Everyone returns to the meeting.")
         }
     }
 

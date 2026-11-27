@@ -2,36 +2,35 @@ import Foundation
 
 enum EntryPolicies {
 
-    static let roomWords: [String] = [
-        "aloe", "aster", "bloom", "canna", "cedar", "clove", "dahl", "daisy", "erica", "flora",
-        "hazel", "iris", "lilac", "lily", "lotus", "maple", "myrrh", "olive", "pansy", "peony",
-        "poppy", "rose", "sorel", "tansy", "thyme", "tulip", "yucca", "zinn", "akane", "akira",
-        "asuna", "eren", "gohan", "goku", "gojo", "kanao", "kira", "levi", "luffy", "maki",
-        "misa", "nami", "riku", "sokka", "saber", "senku", "shoto", "soma", "sora", "tanji",
-        "taki", "toji", "todo", "toph", "yami", "yuki", "yato", "zoro"
+    // Meet-style "abc-mnop-xyz" codes, the same format the web makes: 26^10
+    // possible codes, so live meetings cannot be found by guessing. Older
+    // three-word codes still parse because any letters, digits and hyphens do.
+    static let roomCodeLetters: [String] = [
+        "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+        "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z"
     ]
-    static let roomWordsPerCode = 3
-    static let roomWordSeparator = "-"
+    static let roomCodeGroupLengths = [3, 4, 3]
+    static let roomCodeSeparator = "-"
     static let roomCodeMaxLength = 64
 
     static func generateRoomCode() -> String {
-        var words: [String] = []
-        for _ in 0..<roomWordsPerCode {
-            if let word = roomWords.randomElement() {
-                words.append(word)
-            }
-        }
-        return words.joined(separator: roomWordSeparator)
+        generateRoomCode(pick: { _ in Int.random(in: 0..<roomCodeLetters.count) })
     }
 
     static func generateRoomCode(pick: (Int) -> Int) -> String {
-        var words: [String] = []
-        let count = roomWords.count
-        for position in 0..<roomWordsPerCode {
-            let index = ((pick(position) % count) + count) % count
-            words.append(roomWords[index])
+        let count = roomCodeLetters.count
+        var groups: [String] = []
+        var position = 0
+        for length in roomCodeGroupLengths {
+            var group = ""
+            for _ in 0..<length {
+                let index = ((pick(position) % count) + count) % count
+                group += roomCodeLetters[index]
+                position += 1
+            }
+            groups.append(group)
         }
-        return words.joined(separator: roomWordSeparator)
+        return groups.joined(separator: roomCodeSeparator)
     }
 
     static func sanitizeRoomCode(_ value: String) -> String {

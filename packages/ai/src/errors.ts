@@ -11,8 +11,6 @@ export class AiTaskLimitError extends Error {
 const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 
-// SDK Error objects lose their useful fields when Workers serializes the stack.
-// Return plain, redacted diagnostics; never log the request or its headers.
 export function describeAiError(
   error: unknown,
   provider: AiTextProvider,

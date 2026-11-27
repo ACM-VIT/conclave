@@ -1,54 +1,30 @@
-/**
- * @conclave/ui-tokens — THE single source of truth for color, spacing, radii,
- * type scale, border weights, and motion across the TypeScript surfaces.
- *
- * Design laws baked into the shape of this file:
- *  - ONE sans family (no `mono` key — monospace is gone).
- *  - NO shadow / elevation / glow keys exist (their absence is structural).
- *  - Motion is capped at "fast" (<=120ms); there is no slow/decorative tier.
- *
- * Values are derived from the existing ACM-VIT brand hues that used to be
- * duplicated across globals.css @theme, mobile global.css, the --mobile-* vars,
- * and the per-component COLORS objects. They now live here once.
- */
-
-/** Semantic color tokens. Solid hex where possible so Tailwind opacity
- * modifiers (e.g. `bg-accent/15`) work. */
 export const color = {
-  // Backgrounds & surfaces (dark theme only)
   bg: "#0a0a0b",
   bgAlt: "#131316",
   surface: "#18181b",
   surfaceRaised: "#232327",
   surfaceHover: "#2e2e33",
 
-  // Text (solid + pre-mixed alphas where utilities cannot apply opacity)
   text: "#fafafa",
   textMuted: "rgba(250, 250, 250, 0.74)",
   textFaint: "rgba(250, 250, 250, 0.56)",
 
-  // Accents
   accent: "#F95F4A",
   accentSoft: "rgba(249, 95, 74, 0.2)",
   accentSecondary: "#FF007A",
-  /** Active-speaker border — flat, never a glow. */
   speaking: "#F95F4A",
 
-  // Status
   danger: "#ea4335",
   dangerSoft: "rgba(234, 67, 53, 0.15)",
   warning: "#fbbf24",
   success: "#22c55e",
 
-  // Lines & scrims
   border: "rgba(250, 250, 250, 0.14)",
   borderStrong: "rgba(250, 250, 250, 0.24)",
   scrim: "rgba(0, 0, 0, 0.7)",
   scrimSoft: "rgba(0, 0, 0, 0.45)",
 } as const;
 
-/** Spacing scale in px. Web uses Tailwind's own spacing scale (we do not
- * override it to avoid clobbering existing utilities). */
 export const space = {
   xs: 4,
   sm: 8,
@@ -59,27 +35,20 @@ export const space = {
   "3xl": 48,
 } as const;
 
-/** Corner radii in px. */
 export const radius = {
   sm: 8,
   md: 12,
   lg: 16,
   xl: 20,
-  /** Standard video tile / card. */
   tile: 16,
-  /** Fully-rounded pills & circular control buttons. */
   pill: 999,
 } as const;
 
-/** Font families. The single sans is PolySans; `display` (Bulky Wide) is the
- * only expressive face, for headings only. NO mono key by design. */
 export const font = {
   sans: '"PolySans Trial", system-ui, -apple-system, sans-serif',
   display: '"PolySans Bulky Wide", sans-serif',
 } as const;
 
-/** Type scale — platform-agnostic sizes/weights. Each surface composes these
- * into CSS classes or inline styles. All sans. */
 export const text = {
   display: { fontSize: 28, fontWeight: "700", letterSpacing: -0.2 },
   heading: { fontSize: 18, fontWeight: "700", letterSpacing: 0 },
@@ -88,14 +57,11 @@ export const text = {
   caption: { fontSize: 11, fontWeight: "500", letterSpacing: 0.4 },
 } as const;
 
-/** Border weights in px. */
 export const border = {
   hairline: 1,
-  /** Active-speaker / selected emphasis. */
   thick: 2,
 } as const;
 
-/** Opacity tokens. */
 export const opacity = {
   muted: 0.6,
   faint: 0.4,
@@ -103,8 +69,6 @@ export const opacity = {
   disabled: 0.35,
 } as const;
 
-/** Motion durations in ms. Only an instant and a single fast tier exist —
- * there is deliberately no slow/decorative duration. */
 export const motion = {
   instant: 0,
   fast: 120,
@@ -124,8 +88,6 @@ export const tokens = {
 export type Tokens = typeof tokens;
 export type ColorToken = keyof typeof color;
 
-// Native F00 palette. Colors are unsigned 32-bit ARGB numbers, including alpha.
-// Keep the existing web exports and `tokens` aggregate independent of this data.
 const nativeBrand = {
   coral: 0xFFF95F4A,
   coralDeep: 0xFFB94333,
@@ -269,17 +231,12 @@ const nativeAndroidDark = {
   onTertiaryFixedVariant: nativeAndroidLight.onTertiaryFixedVariant,
 } as const;
 
-/** Canonical native tokens; generated Swift, asset catalogs and XML consume this
- * namespace directly. Platform semantics (UIKit colors, text styles, system
- * fonts, capsule shapes and iOS green switches) stay in native adapters. */
 export const native = {
   brand: nativeBrand,
   neutral: nativeNeutral,
   status: nativeStatus,
   ios: {
     app: {
-      // Other App colors, including dark secondaryLabel and systemRed, are
-      // dynamic UIKit roles. Do not substitute sampled system hex values.
       textSecondaryLight: 0xFF636366,
       textSecondaryLightHighContrast: 0xFF48484A,
       coralFill: nativeBrand.coral,
@@ -289,7 +246,6 @@ export const native = {
       coralTextDark: nativeBrand.coralBright,
       coralTextLightHighContrast: nativeBrand.coralDeepHighContrast,
       coralTextDarkHighContrast: nativeBrand.coralBrightHighContrast,
-      // Static launch colors only; app backgrounds use systemGroupedBackground.
       launchBackgroundLight: 0xFFF2F2F7,
       launchBackgroundDark: nativeNeutral.black,
     },
@@ -300,17 +256,17 @@ export const native = {
       surfaceRaised: nativeNeutral.surfaceRaised,
       surfaceHigh: nativeNeutral.surfaceHigh,
       text: nativeBrand.paper,
-      textSecondary: 0xBDFAFAFA, // 74%, rounded to the nearest alpha byte.
-      textSecondaryHighContrast: 0xE6FAFAFA, // 90%
-      textTertiary: 0x8FFAFAFA, // 56%
-      textTertiaryHighContrast: 0xBDFAFAFA, // 74%
-      border: 0x24FAFAFA, // 14%
-      borderHighContrast: 0x52FAFAFA, // 32%
-      borderStrong: 0x3DFAFAFA, // 24%
-      borderStrongHighContrast: 0x66FAFAFA, // 40%
-      labelScrim: 0xA3000000, // 64%
-      labelScrimHighContrast: 0xCC000000, // 80%
-      scrim: 0xB3000000, // 70%
+      textSecondary: 0xBDFAFAFA,
+      textSecondaryHighContrast: 0xE6FAFAFA,
+      textTertiary: 0x8FFAFAFA,
+      textTertiaryHighContrast: 0xBDFAFAFA,
+      border: 0x24FAFAFA,
+      borderHighContrast: 0x52FAFAFA,
+      borderStrong: 0x3DFAFAFA,
+      borderStrongHighContrast: 0x66FAFAFA,
+      labelScrim: 0xA3000000,
+      labelScrimHighContrast: 0xCC000000,
+      scrim: 0xB3000000,
       coralFill: nativeBrand.coral,
       onCoral: nativeBrand.ink,
       onCoralHighContrast: nativeNeutral.black,
@@ -322,12 +278,8 @@ export const native = {
       success: nativeStatus.dark.success,
       warning: nativeStatus.dark.warning,
       live: nativeStatus.dark.live,
-      // Leave stays dynamic systemRed in the iOS adapter at standard contrast. Under Increase Contrast the
-      // adapter switches to this fixed fill: the white glyph reads 4.555:1 (owner OQ4, 2026-10-26).
       leaveHighContrast: 0xFFE9152D,
     },
-    // Game boards (S60 R6-7, F00 2.6 A9): the two square or cell fills of the always-dark board card, taken
-    // from the in-call zinc ramp (2.161:1 apart; paper reads 4.630 on the light square and 10.006 on the dark).
     game: {
       boardLight: nativeNeutral.zinc500,
       boardDark: nativeNeutral.zinc700,
@@ -336,7 +288,6 @@ export const native = {
   android: {
     light: nativeAndroidLight,
     dark: nativeAndroidDark,
-    // A separate scheme even while values match dark. It never follows light.
     inCall: { ...nativeAndroidDark },
     extended: {
       successLight: nativeStatus.light.success,
@@ -365,16 +316,14 @@ export const native = {
       onToggleOff: 0xFF601410,
       toggleEngagedContainer: nativeNeutral.zinc100,
       onToggleEngaged: nativeNeutral.zinc900,
-      borderLight: 0x14000000, // 8%
-      borderDark: 0x24FAFAFA, // 14%
-      borderLightHighContrast: 0x52000000, // 32%
-      borderDarkHighContrast: 0x52FAFAFA, // 32%
-      // Game boards (S60 R6-7): the same fixed pair as native.ios.game; boards are always dark.
+      borderLight: 0x14000000,
+      borderDark: 0x24FAFAFA,
+      borderLightHighContrast: 0x52000000,
+      borderDarkHighContrast: 0x52FAFAFA,
       gameBoardLight: nativeNeutral.zinc500,
       gameBoardDark: nativeNeutral.zinc700,
     },
   },
-  // Points on iOS, dp on Android. Typography stays in platform text styles.
   space: {
     space2: 2,
     space4: 4,
@@ -398,15 +347,13 @@ export const native = {
     extraSmallAndroid: 4,
   },
   avatar: {
-    // Identity colors only, never UI accents. Order matches web Facehash.
     palette: [
       nativeBrand.coral, 0xFFFF007A, 0xFF7C5CFF, 0xFF2DA8A8,
       0xFF4F86F7, 0xFF3FA66A, 0xFFF59E0B, 0xFF14B8A6,
       0xFFE879F9, 0xFF38BDF8, 0xFFFF8A3D, 0xFFFB7185,
       0xFFC084FC, 0xFF6366F1, 0xFF10B981, 0xFFFF5EAE,
     ],
-    ring: 0x2EFFFFFF, // White at 18%.
-    // The cheeky mouth's tongue (web #FF8FB1); identity art, never a UI accent.
+    ring: 0x2EFFFFFF,
     tongue: 0xFFFF8FB1,
   },
 } as const;

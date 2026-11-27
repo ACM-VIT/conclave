@@ -64,10 +64,12 @@ export default function ScheduledMeetingLanding({
 
   const shareLink = useMemo(() => {
     if (typeof window === "undefined") return "";
-    return buildMeetingUrl(window.location.origin, {
-      roomCode: meeting.roomCode,
-      clientId,
-    });
+    return (
+      buildMeetingUrl(window.location.origin, {
+        roomCode: meeting.roomCode,
+        clientId,
+      }) ?? ""
+    );
   }, [clientId, meeting.roomCode]);
 
   useEffect(() => {
@@ -91,8 +93,9 @@ export default function ScheduledMeetingLanding({
     setIsStarting(true);
     setStartError(null);
     try {
+      const query = new URLSearchParams({ clientId });
       const response = await fetch(
-        `/api/meetings/scheduled/${encodeURIComponent(meeting.id)}/start`,
+        `/api/meetings/scheduled/${encodeURIComponent(meeting.id)}/start?${query}`,
         { method: "POST" },
       );
       if (!response.ok) {
@@ -108,7 +111,7 @@ export default function ScheduledMeetingLanding({
       setStartError((error as Error).message || "Could not start the meeting");
       setIsStarting(false);
     }
-  }, [isStarting, meeting.id]);
+  }, [clientId, isStarting, meeting.id]);
 
   if (meeting.status === "cancelled") {
     return (
@@ -176,10 +179,12 @@ export default function ScheduledMeetingLanding({
           )}
           {isLive && (
             <a
-              href={buildMeetingPath({
-                roomCode: meeting.roomCode,
-                clientId,
-              })}
+              href={
+                buildMeetingPath({
+                  roomCode: meeting.roomCode,
+                  clientId,
+                }) ?? undefined
+              }
               className={CTA_PRIMARY}
             >
               Open the meeting

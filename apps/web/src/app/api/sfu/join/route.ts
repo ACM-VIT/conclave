@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { resolveHostGrant } from "@conclave/meeting-core";
 import { resolveConclaveMinNativeVersion } from "@/app/lib/site-version";
 import { auth } from "@/lib/auth";
+import { resolveGuestJoinIdentity } from "@/lib/guest-pass";
 import {
   canonicalizeSfuClientId,
   resolveServerSfuClientId,
@@ -16,7 +17,6 @@ import {
 } from "@/lib/sfu-url";
 import {
   resolveConfiguredOwnerSfuUrl,
-  resolveRoomPlacementCapability,
   resolveReservedSfuUrl,
   selectPreOwnerSfu,
   type PreOwnerSfuSelection,
@@ -43,6 +43,15 @@ const logSecretFingerprint = (secret: string): void => {
 type JoinRequestBody = {
   roomId?: string;
   sessionId?: string;
+  /**
+   * Sending this field at all, with any value, marks a client that takes its
+   * guest identity from the join token instead of deriving
+   * `guest-<sessionId>` itself. The server picks the pass.
+   */
+  guestId?: string | null;
+  guestGrant?: string | null;
+  /** Ids of the passes this tab has joined under. A hint, never a proof. */
+  guestJoinedAs?: string[] | null;
   joinMode?: "meeting" | "webinar_attendee";
   user?: {
     id?: string | null;
@@ -54,6 +63,7 @@ type JoinRequestBody = {
   isGhost?: boolean;
   ghost?: boolean;
   allowRoomCreation?: boolean;
+  createsMeeting?: boolean;
   clientId?: string;
 };
 
@@ -97,9 +107,6 @@ type SfuStatusResponse = {
   draining?: boolean;
   healthy?: boolean;
   rooms?: number;
-  capabilities?: {
-    roomPlacement?: number;
-  };
 };
 
 const splitUrls = (value: string | undefined): string[] =>
@@ -128,7 +135,6 @@ const isScheduledRoomId = (value: string): boolean =>
 
 let roomRoutingWarningLogged = false;
 let sfuStatusWarningLogged = false;
-let legacyPlacementWarningLogged = false;
 
 const fetchWithTimeout = async (
   input: string,
@@ -262,7 +268,6 @@ const resolveNonDrainingSfuUrl = async (options: {
         ...(typeof status?.region === "string" && status.region.trim()
           ? { region: status.region.trim() }
           : {}),
-        roomPlacementCapability: resolveRoomPlacementCapability(status),
         latencyMs: Date.now() - startedAt,
       } satisfies SfuRoutingCandidate;
     }),
@@ -274,7 +279,6 @@ const resolveNonDrainingSfuUrl = async (options: {
         index,
         url: options.candidateSfuUrls[index] ?? "",
         availability: "unknown",
-        roomPlacementCapability: "unknown",
       } satisfies SfuRoutingCandidate;
     }
     return status.value;
@@ -290,7 +294,6 @@ type RoutedSfuResolution =
       ok: false;
       reason:
         | "all-draining"
-        | "placement-unsupported"
         | "placement-unavailable"
         | "unsafe-local-registry";
     };
@@ -328,14 +331,7 @@ const reserveRoomPlacement = async (options: {
   if (!response.ok) {
     return {
       ok: false,
-      reason:
-        response.status === 409
-          ? "all-draining"
-          : response.status === 404 ||
-              response.status === 405 ||
-              response.status === 501
-            ? "placement-unsupported"
-          : "placement-unavailable",
+      reason: response.status === 409 ? "all-draining" : "placement-unavailable",
     };
   }
 
@@ -395,24 +391,12 @@ const resolveRoutedSfuUrl = async (options: {
       );
       sfuStatusWarningLogged = true;
     }
-    if (selection.candidate.roomPlacementCapability === "legacy") {
-      if (!legacyPlacementWarningLogged) {
-        console.warn(
-          "[SFU Join] Selected SFU predates atomic room placement; using the stable deterministic route during the rolling upgrade.",
-        );
-        legacyPlacementWarningLogged = true;
-      }
-      return { ok: true, url: selection.candidate.url };
-    }
-
     let everyAttemptWasDraining = true;
     const reservationCandidates = [
       selection.candidate,
       ...selection.alternatives,
     ];
-    for (let index = 0; index < reservationCandidates.length; index += 1) {
-      const candidate = reservationCandidates[index];
-      if (!candidate) continue;
+    for (const candidate of reservationCandidates) {
       const reservation = await reserveRoomPlacement({
         candidate,
         candidateSfuUrls,
@@ -425,15 +409,6 @@ const resolveRoutedSfuUrl = async (options: {
       }
       if (reservation.reason === "unsafe-local-registry") {
         return reservation;
-      }
-      if (index === 0 && reservation.reason === "placement-unsupported") {
-        if (!legacyPlacementWarningLogged) {
-          console.warn(
-            "[SFU Join] Selected SFU does not expose atomic room placement; using the stable deterministic route during the rolling upgrade.",
-          );
-          legacyPlacementWarningLogged = true;
-        }
-        return { ok: true, url: selection.candidate.url };
       }
       if (reservation.reason !== "all-draining") {
         everyAttemptWasDraining = false;
@@ -588,13 +563,19 @@ const resolveCloudflareTurnIceServers = async (): Promise<IceServer[]> => {
   }
 };
 
-const resolveIceServers = async (): Promise<IceServer[]> => {
+const resolveIceServers = async (): Promise<{
+  iceServers: IceServer[];
+  ttlSeconds?: number;
+}> => {
   const cloudflareTurnIceServers = await resolveCloudflareTurnIceServers();
   if (cloudflareTurnIceServers.length > 0) {
-    return cloudflareTurnIceServers;
+    return {
+      iceServers: cloudflareTurnIceServers,
+      ttlSeconds: resolveCloudflareTurnTtl(),
+    };
   }
 
-  return resolveStunIceServers();
+  return { iceServers: resolveStunIceServers() };
 };
 
 const resolveClientId = (request: Request, body?: JoinRequestBody) => {
@@ -647,7 +628,20 @@ export async function POST(request: Request) {
     sessionUser?.name?.trim() || body?.user?.name?.trim() || undefined;
   const normalizedSessionEmail = normalizeEmail(sessionEmail);
   const providedId = sessionUser?.id?.trim() || undefined;
-  const baseUserId = email || providedId || `guest-${sessionId}`;
+  const secret = process.env.SFU_SECRET || "development-secret";
+  const guest =
+    email || providedId
+      ? null
+      : resolveGuestJoinIdentity({
+          sfuSecret: secret,
+          seat: { clientId, roomId, sessionId },
+          request,
+          body,
+        });
+  if (guest && !guest.ok) {
+    return NextResponse.json({ error: guest.error }, { status: guest.status });
+  }
+  const baseUserId = email || providedId || guest?.userKey;
   const isWebinarAttendeeJoin = joinMode === "webinar_attendee";
   const isScheduledHostRoom = isScheduledRoomId(roomId);
   const isSuperAdmin = isSfuSuperAdminEmail(normalizedSessionEmail);
@@ -667,16 +661,17 @@ export async function POST(request: Request) {
     }
   }
 
-  const { isHost, allowRoomCreation } = resolveHostGrant({
+  const { isHost, allowRoomCreation, createsCode } = resolveHostGrant({
     isWebinarAttendeeJoin,
     isForcedHost,
     scheduledRoomHostMatch,
     isScheduledHostRoom,
     requestedHost,
     bodyAllowRoomCreation: Boolean(body?.allowRoomCreation),
+    bodyCreatesMeeting: body?.createsMeeting === true,
+    signedIn: Boolean(normalizedSessionEmail),
   });
 
-  const secret = process.env.SFU_SECRET || "development-secret";
   const routedSfu = await resolveRoutedSfuUrl({
     candidateSfuUrls: resolveSfuUrls(),
     secret,
@@ -713,20 +708,29 @@ export async function POST(request: Request) {
       isHost,
       isAdmin: isHost,
       allowRoomCreation,
+      ...(createsCode ? { createsCode: true } : {}),
       clientId,
       sessionId,
       joinMode,
+      ...guest?.claims,
     },
     secret,
     { expiresIn: "12h" },
   );
 
-  const iceServers = await iceServersPromise;
+  const { iceServers, ttlSeconds: iceServersTtlSeconds } =
+    await iceServersPromise;
 
-  return NextResponse.json({
+  const response = NextResponse.json({
     token,
     sfuUrl: routedSfuUrl,
     ...(iceServers.length > 0 ? { iceServers } : {}),
+    ...(iceServersTtlSeconds ? { iceServersTtlSeconds } : {}),
     minNativeVersion: resolveConclaveMinNativeVersion(process.env),
+    ...guest?.issued,
   });
+  if (guest?.setCookie) {
+    response.headers.append("Set-Cookie", guest.setCookie);
+  }
+  return response;
 }

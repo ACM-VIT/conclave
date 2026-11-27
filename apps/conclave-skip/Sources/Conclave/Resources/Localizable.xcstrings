@@ -2036,6 +2036,9 @@
     "Couldn’t change your name." : {
       "extractionState" : "manual"
     },
+    "Couldn’t confirm these names were added. Check the list before adding them again." : {
+      "extractionState" : "manual"
+    },
     "Couldn’t create the diagnostics file." : {
       "extractionState" : "manual"
     },
@@ -2311,8 +2314,16 @@
     "Discard" : {
       "extractionState" : "manual"
     },
+    "Discard and Continue" : {
+      "extractionState" : "manual",
+      "generatesSymbol" : false
+    },
     "Discard Recording?" : {
       "extractionState" : "manual"
+    },
+    "Discard Unverified Edits?" : {
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Dismiss" : {
       "extractionState" : "manual"
@@ -2530,6 +2541,9 @@
       "extractionState" : "manual"
     },
     "Force Opaque Controls" : {
+      "extractionState" : "manual"
+    },
+    "Force Test Crash" : {
       "extractionState" : "manual"
     },
     "Frame Rate" : {
@@ -5074,6 +5088,9 @@
     "Share Again" : {
       "extractionState" : "manual"
     },
+    "Share Crash Reports" : {
+      "extractionState" : "manual"
+    },
     "Share Device Audio" : {
       "extractionState" : "manual"
     },
@@ -5597,10 +5614,17 @@
     "The Imposter Escapes" : {
       "extractionState" : "manual"
     },
+    "The previous app view stopped before its edits could be verified. Continuing may lose those edits. Changes saved to the room will be kept." : {
+      "extractionState" : "manual",
+      "generatesSymbol" : false
+    },
     "The Webinar Will Begin Soon" : {
       "extractionState" : "manual"
     },
     "The board clears for everyone." : {
+      "extractionState" : "manual"
+    },
+    "The board stays saved for this meeting." : {
       "extractionState" : "manual"
     },
     "The camera isn’t available in the background." : {
@@ -6383,6 +6407,29 @@
                 "stringUnit" : {
                   "state" : "translated",
                   "value" : "%lld not on the wheel"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Wheel Waiting Names %lld" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "The wheel is full. %lld more name is waiting for a place."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "The wheel is full. %lld more names are waiting for a place."
                 }
               }
             }

@@ -2,16 +2,15 @@ import { Suspense } from "react";
 import { headers as nextHeaders } from "next/headers";
 import MeetsClientShell from "../meets-client-shell";
 import RouteLoadingState from "../components/RouteLoadingState";
-import { sanitizeRoomCode, sanitizeWebinarLinkCode } from "../lib/utils";
 import ScheduledMeetingLanding from "../components/ScheduledMeetingLanding";
 import {
   isMeetingJoinable,
-  lookupPublicScheduledMeetingByRoomCode,
+  lookupScheduledMeetingForCode,
   lookupScheduledMeetingHostEmail,
-  type PublicScheduledMeeting,
 } from "@/lib/scheduled-meetings";
 import { auth } from "@/lib/auth";
-import { resolveSfuClientIdCandidates } from "@/lib/sfu-client-id";
+import { resolveMeetingClientId } from "@/lib/sfu-client-id";
+import { roomIdFromMeetingPath, webinarSlugFromPath, type RoomDestination } from "@/lib/meeting-links";
 
 type MeetRoomPageProps = {
   params: Promise<{ code: string }>;
@@ -36,14 +35,6 @@ const isTruthyParam = (value: string | string[] | undefined): boolean => {
   return ["1", "true", "yes", "y", "on"].includes(value.trim().toLowerCase());
 };
 
-const sanitizeClientId = (
-  value: string | string[] | undefined,
-): string | undefined => {
-  const candidate = getParamValue(value)?.trim();
-  if (!candidate) return undefined;
-  return /^[a-zA-Z0-9._:-]{1,64}$/.test(candidate) ? candidate : undefined;
-};
-
 const resolveSessionEmail = async (): Promise<string | null> => {
   try {
     const headers = await nextHeaders();
@@ -53,22 +44,6 @@ const resolveSessionEmail = async (): Promise<string | null> => {
   } catch {
     return null;
   }
-};
-
-const lookupScheduledMeetingCandidate = async (
-  roomCode: string,
-  preferredClientId?: string,
-): Promise<{ clientId: string; meeting: PublicScheduledMeeting } | null> => {
-  for (const clientId of resolveSfuClientIdCandidates(preferredClientId)) {
-    const meeting = await lookupPublicScheduledMeetingByRoomCode(
-      clientId,
-      roomCode,
-    );
-    if (meeting) {
-      return { clientId, meeting };
-    }
-  }
-  return null;
 };
 
 export default function MeetRoomPage({
@@ -95,8 +70,6 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
   )));
   const rawCode = typeof code === "string" ? code : "";
   const roomCode = decodeURIComponent(rawCode);
-  const resolvedRoomCode =
-    roomCode === "undefined" || roomCode === "null" ? "" : roomCode;
   const bypassMediaPermissions = isTruthyParam(resolvedSearchParams.recorder);
   const devOverridesEnabled = process.env.NODE_ENV === "development";
   const safeBotOverridesEnabled =
@@ -110,44 +83,42 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
     : undefined;
   const joinMode =
     joinModeParam === "webinar_attendee" ? "webinar_attendee" : undefined;
-  const sanitizedRoomCode =
-    joinMode === "webinar_attendee"
-      ? sanitizeWebinarLinkCode(resolvedRoomCode)
-      : sanitizeRoomCode(resolvedRoomCode);
+  const destination: RoomDestination = {
+    roomCode: joinMode === "webinar_attendee" ? webinarSlugFromPath(roomCode) : roomIdFromMeetingPath(roomCode),
+    clientId: resolveMeetingClientId(getParamValue(resolvedSearchParams.clientId)),
+  };
   const displayName = safeBotOverridesEnabled
     ? getParamValue(resolvedSearchParams.name)
     : undefined;
-  const sfuClientId = sanitizeClientId(resolvedSearchParams.clientId);
-  let resolvedSfuClientId = sfuClientId;
+  let mayOpenRoom = false;
+  let joinClientId = destination.clientId;
   const user = displayName ? { name: displayName } : undefined;
   const isAdmin =
     devOverridesEnabled && isTruthyParam(resolvedSearchParams.admin);
 
-  if (sanitizedRoomCode && !bypassMediaPermissions) {
-    const scheduledCandidate = await lookupScheduledMeetingCandidate(
-      sanitizedRoomCode,
-      sfuClientId,
-    );
-    const scheduled = scheduledCandidate?.meeting ?? null;
-    if (scheduledCandidate) {
-      resolvedSfuClientId = scheduledCandidate.clientId;
-    }
-    if (scheduledCandidate && scheduled && !isMeetingJoinable(scheduled)) {
-      const scheduledClientId = scheduledCandidate.clientId;
+  if (destination.roomCode) {
+    const lookup = await lookupScheduledMeetingForCode(destination, {
+      allowLegacyBooking: resolvedSearchParams.clientId === undefined && joinMode !== "webinar_attendee",
+    });
+    mayOpenRoom = lookup.kind !== "unscheduled";
+    if (lookup.kind === "scheduled") joinClientId = lookup.clientId;
+    // Recorders go straight to the join.
+    if (
+      lookup.kind === "scheduled" &&
+      !bypassMediaPermissions &&
+      !isMeetingJoinable(lookup.meeting)
+    ) {
       const [sessionEmail, hostEmail] = await Promise.all([
         resolveSessionEmail(),
-        lookupScheduledMeetingHostEmail(
-          scheduledClientId,
-          sanitizedRoomCode,
-        ),
+        lookupScheduledMeetingHostEmail(lookup),
       ]);
       const viewerIsHost = Boolean(
         sessionEmail && hostEmail && sessionEmail === hostEmail,
       );
       return (
         <ScheduledMeetingLanding
-          meeting={scheduled}
-          clientId={scheduledClientId}
+          meeting={lookup.meeting}
+          clientId={lookup.clientId}
           viewerIsHost={viewerIsHost}
         />
       );
@@ -156,10 +127,11 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
 
   return (
     <MeetsClientShell
-      initialRoomId={sanitizedRoomCode}
+      initialRoomId={destination.roomCode}
       forceJoinOnly={true}
+      allowRoomCreation={mayOpenRoom}
       bypassMediaPermissions={bypassMediaPermissions}
-      sfuClientId={resolvedSfuClientId}
+      sfuClientId={joinClientId}
       autoJoinOnMount={autoJoinOnMount}
       hideJoinUI={hideJoinUI}
       joinMode={joinMode}

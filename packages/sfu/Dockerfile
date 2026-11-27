@@ -1,13 +1,13 @@
-FROM node:22-trixie-slim
+# Build stage: the compiler toolchain and pnpm exist only here.
+# Using debian-slim instead of alpine because mediasoup ships pre-built for glibc only.
+# Trixie supplies the glibc/libstdc++ versions required by current mediasoup worker prebuilds.
+FROM node:22-trixie-slim AS build
 
 WORKDIR /app
 
-# Build deps for mediasoup native module. Trixie supplies the glibc/libstdc++
-# versions required by current mediasoup worker prebuilds.
-# Using debian-slim instead of alpine because mediasoup ships pre-built for glibc only.
+# Build deps for the mediasoup worker, used when no prebuilt binary matches.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 python3-pip make g++ ca-certificates \
-      dumb-init wget \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PYTHON=/usr/bin/python3
@@ -17,18 +17,47 @@ RUN npm install --global pnpm@12.16.1
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY patches ./patches
 COPY packages/ai/package.json packages/ai/package.json
+COPY packages/apps-sdk/package.json packages/apps-sdk/package.json
+COPY packages/meeting-core/package.json packages/meeting-core/package.json
 COPY packages/sfu/package.json packages/sfu/package.json
 COPY packages/shared-browser/package.json packages/shared-browser/package.json
 COPY packages/ui-tokens/package.json packages/ui-tokens/package.json
-RUN pnpm install --filter @conclave/sfu... --frozen-lockfile --node-linker=isolated
+RUN pnpm install --filter @conclave/sfu... --frozen-lockfile --node-linker=isolated --prod
 
-COPY . .
+COPY packages ./packages
+RUN node packages/sfu/scripts/ensure-mediasoup-worker.mjs
+FROM build AS canary
+RUN pnpm install --filter @conclave/sfu... --frozen-lockfile --node-linker=isolated
+RUN pnpm --filter @conclave/sfu run build:canary
+
+# Runtime stage: Node, the installed production dependencies (including the
+# mediasoup worker binary) and the SFU sources, all owned by root and read-only
+# to the unprivileged `node` user. Only /var/lib/conclave is writable.
+FROM node:22-trixie-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends dumb-init ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+      /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+      /usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn-*
+
+COPY --from=build --chown=root:root /app /app
+COPY --from=canary --chown=root:root /app/packages/sfu/dist/canary-call.mjs /app/packages/sfu/dist/canary-call.mjs
+LABEL org.conclave.health-deploy-id=true
 
 # Default state dir; volume-mount this in prod for durability.
-RUN mkdir -p /var/lib/conclave && chown -R node:node /var/lib/conclave
+RUN mkdir -p /var/lib/conclave/recordings && chown -R node:node /var/lib/conclave
 
-ENV CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite
+# Compose places the SQLite and JSON control-plane files on the recordings
+# volume. The per-store JSON paths and fallback dir are legacy import inputs.
+ENV CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite \
+    CONCLAVE_FALLBACK_IMPORT_DIR=/var/lib/conclave/recordings/json-fallback-import \
+    SCHEDULING_PATH=/var/lib/conclave/recordings/scheduling.json \
+    SCHEDULED_MEETINGS_PATH=/var/lib/conclave/recordings/scheduled-meetings.json \
+    SCHEDULED_WEBINARS_PATH=/var/lib/conclave/recordings/scheduled-webinars.json \
+    CONTROL_PLANE_JSON_PATH=/var/lib/conclave/recordings/control-plane.json
 
-ENTRYPOINT ["/usr/bin/dumb-init", "--"]
+USER node
 WORKDIR /app/packages/sfu
+ENTRYPOINT ["/usr/bin/dumb-init", "--"]
 CMD ["node", "--import", "tsx", "server.ts"]

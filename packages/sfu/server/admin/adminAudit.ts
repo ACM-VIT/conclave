@@ -1,10 +1,3 @@
-/**
- * In-memory audit trail of operator commands. Entries are recorded by the
- * HTTP admin routes (the only write path) and streamed to dashboards by the
- * admin gateway. Per-process and bounded on purpose: this is an operations
- * feed, not a compliance store.
- */
-
 export type AdminAuditEntry = {
   at: number;
   operator: string;
@@ -26,9 +19,7 @@ export const recordAdminAudit = (entry: AdminAuditEntry): void => {
   for (const listener of listeners) {
     try {
       listener(entry);
-    } catch {
-      // A misbehaving listener must not break command handling.
-    }
+    } catch {}
   }
 };
 

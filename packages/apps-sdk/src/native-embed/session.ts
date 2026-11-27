@@ -1,10 +1,14 @@
 import * as Y from "yjs";
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from "y-protocols/awareness";
+import { createUploadQueue } from "../sdk/runtime/uploadQueue";
 import type { NativeTransport } from "./bridge";
+import { cutText } from "../sdk/text";
 import {
+  DOC_ANSWERED_COMMANDS,
   HOST_COMMAND_TYPES,
   NATIVE_EMBED_BUNDLE_VERSION,
   NATIVE_EMBED_LIMITS,
+  WHEEL_LIMITS,
   base64FromBytes,
   bytesFromBase64,
   decodeHostMessage,
@@ -20,6 +24,7 @@ import {
 export type HostStatus = {
   readOnly: boolean;
   connection: "live" | "reconnecting";
+  locallyHidden: boolean;
   reduceMotion: boolean;
   pencilOnly: boolean;
   userId: string;
@@ -43,6 +48,7 @@ export type EmbedStatusPayload = {
 export type WheelAppStatus = {
   kind: "wheel";
   entries: { id: string; label: string }[];
+  waiting: number;
   results: { id: string; label: string; byName: string }[];
   removeWinner: boolean;
   sounds: boolean;
@@ -64,14 +70,18 @@ export type WatchAppStatus = {
 
 export type AppStatusPayload = { app: WheelAppStatus | WatchAppStatus };
 
-export type CommandResult = { ok: boolean; error?: string; pngBase64?: string };
-export type CommandHandler = (envelope: Envelope<NativeToEmbedType>) => CommandResult;
+export type CommandResult = { ok: boolean; error?: string; pngBase64?: string; added?: number[] };
+export type CommandHandler = (envelope: Envelope<NativeToEmbedType>, repeat: boolean, doc: Y.Doc) => CommandResult;
+
+type HeldCommand = { envelope: Envelope<NativeToEmbedType>; repeat: boolean };
+type PendingAdd = { client: number; clock: number; result: CommandResult };
 
 type AwarenessChange = { added: number[]; updated: number[]; removed: number[] };
 
 const INITIAL_HOST_STATUS: HostStatus = {
   readOnly: true,
   connection: "live",
+  locallyHidden: false,
   reduceMotion: false,
   pencilOnly: false,
   userId: "",
@@ -79,6 +89,7 @@ const INITIAL_HOST_STATUS: HostStatus = {
 };
 
 const COMMAND_TYPES: ReadonlySet<string> = new Set<string>(HOST_COMMAND_TYPES);
+const DOC_ANSWERED: ReadonlySet<string> = new Set<string>(DOC_ANSWERED_COMMANDS);
 
 const AWARENESS_INTERVAL_MS = 50;
 const REMOTE = "remote";
@@ -90,33 +101,58 @@ export class NativeEmbedSession {
   readonly rejections: RejectionReason[] = [];
 
   private readonly transport: NativeTransport;
+  private readonly roomDoc: Y.Doc | null;
+  private readonly pendingAdds = new Map<string, PendingAdd>();
+  private addProbeTimer: ReturnType<typeof setTimeout> | undefined;
+  private addProbeId: string | null = null;
+  private addProbeAttempts = 0;
   private host: HostStatus = INITIAL_HOST_STATUS;
   private synced = false;
   private closed = false;
   private requestNumber = 0;
   private readonly seen: string[] = [];
+  private readonly executed = new Set<string>();
   private readonly listeners = new Set<() => void>();
   private commandHandler: CommandHandler | null = null;
+  private started = false;
+  private readonly held: HeldCommand[] = [];
   private readonly pendingAwareness = new Set<number>();
   private awarenessTimer: ReturnType<typeof setTimeout> | null = null;
   private lastStatus = "";
+  private saveCheck: "none" | "sync" | "local" = "none";
+  private leaveRequest: { id: string; phase: "draining" | "verifying" } | null = null;
+  private readonly uploads = createUploadQueue((_appId, _replicaId, upload) => {
+    if (this.closed || this.host.readOnly || this.host.connection !== "live") return false;
+    if ("update" in upload && upload.update.length <= NATIVE_EMBED_LIMITS.updateBytes) this.send("update", { update: base64FromBytes(upload.update) });
+    return true;
+  }, { onProgress: () => {
+    this.advanceLeave();
+    this.scheduleAddProbe();
+  } });
 
   constructor(transport: NativeTransport, scope: SessionScope, doc: Y.Doc) {
     this.transport = transport;
     this.scope = scope;
     this.doc = doc;
+    this.roomDoc = scope.appId === "wheel" ? new Y.Doc() : null;
     this.awareness = new Awareness(doc);
     doc.on("update", this.handleDocUpdate);
     this.awareness.on("update", this.handleAwarenessUpdate);
     transport.onMessage((raw) => this.receive(raw));
   }
 
-  start(): void {
-    this.send("ready", {
-      bundleVersion: NATIVE_EMBED_BUNDLE_VERSION,
-      appId: this.scope.appId,
-      stateVector: base64FromBytes(Y.encodeStateVector(this.doc)),
-    });
+  start(handler: CommandHandler): void {
+    if (this.closed) return;
+    this.commandHandler = handler;
+    if (!this.started) {
+      this.started = true;
+      this.send("ready", {
+        bundleVersion: NATIVE_EMBED_BUNDLE_VERSION,
+        appId: this.scope.appId,
+        stateVector: this.roomVector(),
+      });
+    }
+    for (const command of this.held.splice(0)) this.runCommand(command.envelope, command.repeat);
   }
 
   get hostStatus(): HostStatus {
@@ -138,10 +174,6 @@ export class NativeEmbedSession {
     };
   }
 
-  setCommandHandler(handler: CommandHandler | null): void {
-    this.commandHandler = handler;
-  }
-
   sendStatus(status: EmbedStatusPayload | AppStatusPayload): void {
     if (this.closed) return;
     const key = JSON.stringify(status);
@@ -160,15 +192,26 @@ export class NativeEmbedSession {
     const decoded = decodeHostMessage(raw, this.scope);
     if (!decoded.ok) return this.reject(decoded.reason);
     const envelope = decoded.envelope;
-    if (this.seen.includes(envelope.requestId)) return this.reject("duplicateRequest");
-    this.seen.push(envelope.requestId);
-    if (this.seen.length > NATIVE_EMBED_LIMITS.requestMemory) this.seen.shift();
+    if (envelope.type === "savedSnapshot") return this.checkSavedSnapshot(envelope.requestId, envelope.payload);
+    if (envelope.type === "snapshot" && envelope.requestId.startsWith("wheel-confirm-")) {
+      if (envelope.requestId !== this.addProbeId) return "none";
+      this.addProbeId = null;
+      const sync = bytesFromBase64(envelope.payload.syncMessage, NATIVE_EMBED_LIMITS.snapshotBytes);
+      if (!sync.ok) return this.reject(sync.reason);
+      if (sync.bytes.length > 0) this.applyRemoteUpdate(sync.bytes);
+      this.scheduleAddProbe();
+      return "none";
+    }
+    const repeat = this.executed.has(envelope.requestId) || this.seen.includes(envelope.requestId);
+    if (repeat && !DOC_ANSWERED.has(envelope.type)) return this.reject("duplicateRequest");
+    if (COMMAND_TYPES.has(envelope.type)) this.markExecuted(envelope.requestId);
+    else this.noteSeen(envelope.requestId);
     const payload = envelope.payload;
     switch (envelope.type) {
       case "snapshot":
         return this.applySnapshot(payload);
       case "update": {
-        const update = bytesFromBase64(payload.update, NATIVE_EMBED_LIMITS.updateBytes);
+        const update = bytesFromBase64(payload.update, NATIVE_EMBED_LIMITS.remoteUpdateBytes);
         if (!update.ok) return this.reject(update.reason);
         if (update.bytes.length > 0) this.applyRemoteUpdate(update.bytes);
         return "none";
@@ -190,11 +233,16 @@ export class NativeEmbedSession {
         return "none";
       case "resync":
         this.synced = false;
-        this.send("sync", { stateVector: base64FromBytes(Y.encodeStateVector(this.doc)) });
+        this.resetAddProbe();
+        this.send("sync", { stateVector: this.roomVector() });
         this.notify();
         return "none";
       case "close":
         this.close();
+        return "none";
+      case "prepareToLeave":
+        this.leaveRequest = { id: envelope.requestId, phase: "draining" };
+        this.advanceLeave();
         return "none";
       case "setTool":
       case "setColor":
@@ -217,6 +265,7 @@ export class NativeEmbedSession {
       case "setRemoveWinner":
       case "setSounds":
       case "clearResults":
+      case "addOutcome":
       case "playNow":
       case "enqueue":
       case "request":
@@ -227,7 +276,7 @@ export class NativeEmbedSession {
       case "remove":
       default:
         if (!COMMAND_TYPES.has(envelope.type)) return this.reject("unknownType");
-        this.runCommand(envelope);
+        this.runCommand(envelope, repeat);
         return "none";
     }
   }
@@ -235,9 +284,16 @@ export class NativeEmbedSession {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.leaveRequest = null;
     if (this.awarenessTimer !== null) clearTimeout(this.awarenessTimer);
     this.awarenessTimer = null;
     this.pendingAwareness.clear();
+    this.uploads.clear();
+    this.held.length = 0;
+    this.pendingAdds.clear();
+    this.resetAddProbe();
+    this.roomDoc?.destroy();
+    this.commandHandler = null;
     this.doc.off("update", this.handleDocUpdate);
     this.awareness.off("update", this.handleAwarenessUpdate);
     this.notify();
@@ -259,6 +315,7 @@ export class NativeEmbedSession {
     }
     this.synced = true;
     if (vector.bytes.length > 0) this.sendMissing(vector.bytes);
+    this.scheduleAddProbe();
     this.notify();
     return "none";
   }
@@ -271,16 +328,64 @@ export class NativeEmbedSession {
     } catch {
       return;
     }
-    if (diff.length <= 2 || diff.length > NATIVE_EMBED_LIMITS.updateBytes) return;
-    this.send("update", { update: base64FromBytes(diff) });
+    if (diff.length <= 2) return;
+    if (this.saveCheck === "none") this.saveCheck = "sync";
+    this.uploads.add(this.scope.appId, undefined, diff);
+  }
+
+  private advanceLeave(): void {
+    const request = this.leaveRequest;
+    if (!request) return;
+    if (this.host.connection !== "live") {
+      this.finishLeave(false);
+      return;
+    }
+    if (request.phase !== "draining" || this.uploads.hasPending(this.scope.appId)) return;
+    if (this.saveCheck === "none") {
+      this.finishLeave(true);
+      return;
+    }
+    request.phase = "verifying";
+    this.send("verifySaved", {}, request.id);
+  }
+
+  private checkSavedSnapshot(requestId: string, payload: Record<string, unknown>): RejectionReason {
+    if (this.leaveRequest?.id !== requestId || this.leaveRequest.phase !== "verifying") return "none";
+    const sync = bytesFromBase64(payload.syncMessage, NATIVE_EMBED_LIMITS.snapshotBytes);
+    const vector = bytesFromBase64(payload.stateVector, NATIVE_EMBED_LIMITS.snapshotBytes);
+    let saved = false;
+    if (sync.ok && vector.ok && vector.bytes.length > 0 && !this.uploads.hasPending(this.scope.appId)) {
+      try {
+        const snapshot = Y.createSnapshot(Y.decodeUpdate(sync.bytes).ds, Y.decodeStateVector(vector.bytes));
+        saved = Y.snapshotContainsUpdate(snapshot, Y.encodeStateAsUpdate(this.doc, vector.bytes));
+      } catch {
+        saved = false;
+      }
+    }
+    if (saved) this.saveCheck = "none";
+    this.finishLeave(saved);
+    return "none";
+  }
+
+  private finishLeave(saved: boolean): void {
+    const request = this.leaveRequest;
+    if (!request) return;
+    this.leaveRequest = null;
+    this.acknowledge(request.id, saved ? { ok: true } : { ok: false, error: "notSaved" });
   }
 
   private applyRemoteUpdate(bytes: Uint8Array): void {
     try {
+      if (this.roomDoc) Y.applyUpdate(this.roomDoc, bytes, REMOTE);
       Y.applyUpdate(this.doc, bytes, REMOTE);
+      this.acknowledgePublishedAdds();
     } catch {
       this.rejections.push("badPayload");
     }
+  }
+
+  private roomVector(): string {
+    return base64FromBytes(Y.encodeStateVector(this.roomDoc ?? this.doc));
   }
 
   private applyHostStatus(payload: Record<string, unknown>): void {
@@ -288,43 +393,132 @@ export class NativeEmbedSession {
     this.host = {
       readOnly: payload.readOnly === true,
       connection: payload.connection === "reconnecting" ? "reconnecting" : "live",
+      locallyHidden: payload.locallyHidden === true,
       reduceMotion: payload.reduceMotion === true,
       pencilOnly: payload.pencilOnly === true,
-      userId: typeof payload.userId === "string" ? payload.userId.slice(0, 128) : "",
-      userName: typeof payload.userName === "string" ? payload.userName.slice(0, 128) : "",
+      userId: typeof payload.userId === "string" ? cutText(payload.userId, 128) : "",
+      userName: typeof payload.userName === "string" ? cutText(payload.userName, 128) : "",
     };
     if (wasReadOnly !== this.host.readOnly) this.lastStatus = "";
+    if (this.host.connection !== "live") this.resetAddProbe();
+    this.uploads.wake();
+    this.advanceLeave();
+    this.scheduleAddProbe();
     this.notify();
   }
 
-  private runCommand(envelope: Envelope<NativeToEmbedType>): void {
+  private runCommand(envelope: Envelope<NativeToEmbedType>, repeat: boolean): void {
     const handler = this.commandHandler;
+    if (handler === null && this.held.length < NATIVE_EMBED_LIMITS.requestMemory) {
+      this.held.push({ envelope, repeat });
+      return;
+    }
     let result: CommandResult = { ok: false, error: "notReady" };
     if (handler) {
       try {
-        result = handler(envelope);
+        if (this.roomDoc && envelope.type === "addEntries") {
+          if (this.pendingAdds.has(envelope.requestId)) return;
+          const immediate = this.runWheelAdd(handler, envelope, repeat, this.roomDoc);
+          if (!immediate) return;
+          result = immediate;
+        } else if (this.roomDoc && envelope.type === "addOutcome") {
+          result = handler(envelope, repeat, this.roomDoc);
+          if (result.error === "notApplied" &&
+              (this.host.connection !== "live" || handler(envelope, repeat, this.doc).error !== "notApplied")) {
+            result = { ok: false, error: "notSynced" };
+          }
+        } else {
+          result = handler(envelope, repeat, this.doc);
+        }
       } catch {
         result = { ok: false, error: "failed" };
       }
     }
+    this.acknowledge(envelope.requestId, result);
+  }
+
+  private runWheelAdd(
+    handler: CommandHandler,
+    envelope: Envelope<NativeToEmbedType>,
+    repeat: boolean,
+    room: Y.Doc,
+  ): CommandResult | undefined {
+    if (this.host.connection !== "live") return { ok: false, error: "notSynced", added: [] };
+    const client = this.doc.clientID;
+    const before = Y.getState(this.doc.store, client);
+    const result = handler(envelope, repeat, this.doc);
+    if (!result.ok || !result.added?.length) return result;
+    const clock = Y.getState(this.doc.store, client);
+    if (clock === before) {
+      const confirmed = handler({ ...envelope, type: "addOutcome" }, repeat, room);
+      return confirmed.ok ? confirmed : { ok: false, error: "notSynced" };
+    }
+    this.pendingAdds.set(envelope.requestId, { client, clock, result });
+    this.addProbeAttempts = 0;
+    this.acknowledgePublishedAdds();
+    this.scheduleAddProbe();
+  }
+
+  private scheduleAddProbe(): void {
+    if (this.addProbeTimer !== undefined || this.addProbeId !== null || !this.canProbeAdds()) return;
+    this.addProbeTimer = setTimeout(() => {
+      this.addProbeTimer = undefined;
+      if (!this.canProbeAdds()) return;
+      this.addProbeAttempts += 1;
+      const id = `wheel-confirm-${this.requestNumber + 1}`;
+      this.addProbeId = id;
+      this.send("sync", { stateVector: this.roomVector(), purpose: "wheel-add-confirmation" }, id);
+    }, 750);
+  }
+
+  private resetAddProbe(): void {
+    clearTimeout(this.addProbeTimer);
+    this.addProbeTimer = undefined;
+    this.addProbeId = null;
+    this.addProbeAttempts = 0;
+  }
+
+  private canProbeAdds(): boolean {
+    return !this.closed && this.synced && this.pendingAdds.size > 0 &&
+      this.addProbeAttempts < 3 && this.host.connection === "live" && !this.uploads.hasPending(this.scope.appId);
+  }
+
+  private acknowledgePublishedAdds(): void {
+    if (!this.roomDoc) return;
+    for (const [id, add] of this.pendingAdds) {
+      if (Y.getState(this.roomDoc.store, add.client) < add.clock) continue;
+      this.pendingAdds.delete(id);
+      this.acknowledge(id, add.result);
+    }
+    if (this.pendingAdds.size === 0) this.resetAddProbe();
+  }
+
+  private acknowledge(requestId: string, result: CommandResult): void {
     const payload: Record<string, unknown> = { ok: result.ok };
     if (result.error) payload.error = result.error.slice(0, 64);
     if (result.pngBase64) payload.pngBase64 = result.pngBase64;
-    this.send("ack", payload, envelope.requestId);
+    if (result.added) payload.added = result.added.slice(0, WHEEL_LIMITS.entries);
+    this.send("ack", payload, requestId);
   }
 
   private readonly handleDocUpdate = (update: Uint8Array, origin: unknown): void => {
-    if (origin === REMOTE || this.closed || !this.synced) return;
+    if (origin === REMOTE || this.closed) return;
+    if (this.saveCheck !== "local") {
+      this.saveCheck = "local";
+      this.send("editsPending", {});
+    }
+    if (!this.synced) return;
     if (this.host.readOnly || this.host.connection !== "live") return;
-    if (update.length > NATIVE_EMBED_LIMITS.updateBytes) return;
-    this.send("update", { update: base64FromBytes(update) });
+    this.uploads.add(this.scope.appId, undefined, update);
   };
 
+  // Forwards only this client's own entry: a peer's cursor that times out
+  // here is timed out by every client on its own.
   private readonly handleAwarenessUpdate = (change: AwarenessChange, origin: unknown): void => {
     if (origin === REMOTE || this.closed) return;
-    for (const id of change.added) this.pendingAwareness.add(id);
-    for (const id of change.updated) this.pendingAwareness.add(id);
-    for (const id of change.removed) this.pendingAwareness.add(id);
+    const own = this.awareness.clientID;
+    if (![...change.added, ...change.updated, ...change.removed].includes(own)) return;
+    this.pendingAwareness.add(own);
     if (this.awarenessTimer === null) this.awarenessTimer = setTimeout(this.flushAwareness, AWARENESS_INTERVAL_MS);
   };
 
@@ -344,6 +538,21 @@ export class NativeEmbedSession {
     const message = encodeEnvelope(type, this.scope, id, payload);
     if (message.length > NATIVE_EMBED_LIMITS.envelopeCharacters) return;
     this.transport.post(message);
+  }
+
+  private markExecuted(requestId: string): void {
+    this.executed.add(requestId);
+    if (this.executed.size <= NATIVE_EMBED_LIMITS.executedCommands) return;
+    const oldest = this.executed.values().next();
+    if (!oldest.done) {
+      this.executed.delete(oldest.value);
+      this.pendingAdds.delete(oldest.value);
+    }
+  }
+
+  private noteSeen(requestId: string): void {
+    this.seen.push(requestId);
+    if (this.seen.length > NATIVE_EMBED_LIMITS.requestMemory) this.seen.shift();
   }
 
   private reject(reason: RejectionReason): RejectionReason {

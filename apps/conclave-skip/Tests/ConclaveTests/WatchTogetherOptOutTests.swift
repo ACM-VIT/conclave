@@ -14,7 +14,7 @@ struct WatchTogetherOptOutTests {
     }
 
     private func stage(_ inputs: StageInputs) -> StagePresenter {
-        let presenter = StagePresenter(shell: MeetingShellPresenter())
+        let presenter = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         presenter.setViewport(StagePoliciesTests.iphoneSE)
         presenter.apply(inputs)
         return presenter
@@ -102,7 +102,7 @@ struct WatchTogetherOptOutTests {
 
     @Test func rejoiningAfterAnAbandonedLoadMountsAFreshPlayer() {
         let presenter = stage(inputs())
-        let activity = ActivitySession(shell: MeetingShellPresenter(), stage: presenter)
+        let activity = ActivitySession(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()), stage: presenter)
         activity.bindStage()
         let relay = ActiveAppSession()
         relay.onBridgeEnded = { [weak relay] id in relay?.detachBridge(appSessionId: id) }
@@ -125,7 +125,7 @@ struct WatchTogetherOptOutTests {
 
     @Test func leavingReleasesOnlyThisDevicesPlayer() {
         let presenter = stage(inputs())
-        let activity = ActivitySession(shell: MeetingShellPresenter(), stage: presenter)
+        let activity = ActivitySession(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()), stage: presenter)
         activity.bindStage()
         var released: [String] = []
         var commands: [AppHostCoreCommand] = []
@@ -146,6 +146,222 @@ struct WatchTogetherOptOutTests {
         presenter.rejoinWatchTogether()
         #expect(activity.appHost.model.wantsWebView)
         #expect(released.count == 1)
+    }
+
+    @Test(arguments: ["close", "replace"], [false, true])
+    func anUneditedWatchCanLeaveLocallyAndThenChangeTheRoomStage(action: String, waitForDetach: Bool) async {
+        let stage = stage(inputs())
+        let activity = ActivitySession(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()), stage: stage)
+        let relay = ActiveAppSession()
+        relay.bundleOrigin = AppBridgeProtocol.iosOrigin
+        activity.bindStage()
+        activity.appHost.bind(session: relay)
+        relay.begin(appId: "watch", callSessionId: "call-watch", isReadOnly: false)
+        activity.appHost.apply(AppHostInputs.make(callSession: 1, appId: "watch", isHost: true))
+        let id = relay.appSessionId
+        var released: [String] = []
+        relay.onBridgeEnded = { released.append($0) }
+        relay.acceptPrimedSnapshot(AppsSyncResponse(syncMessage: Data(), stateVector: Data(), awarenessUpdate: nil), appSessionId: id)
+        let attached = relay.attachBridge(appSessionId: id) { [weak relay] raw in
+            guard let relay, let envelope = AppBridgeCodec.jsonObject(raw),
+                  envelope["type"] as? String == "prepareToLeave",
+                  let requestId = envelope["requestId"] as? String else { return }
+            _ = Self.post(relay, "ack", requestId: requestId, payload: ["ok": true], mount: relay.bridgeGeneration)
+        }
+        #expect(attached)
+        #expect(Self.post(relay, "ready", requestId: "e-ready", payload: ["appId": "watch", "bundleVersion": "1.0.0"],
+                          mount: relay.bridgeGeneration) == .none)
+        #expect(activity.appHost.model.phase == .ready)
+
+        stage.leaveWatchTogether()
+        #expect(!activity.appHost.model.wantsWebView)
+        if waitForDetach {
+            await settle { released == [id] }
+            #expect(released == [id])
+            #expect(!relay.embedReady)
+        }
+        if action == "close" {
+            #expect(activity.appHost.confirmClose() == .dispatched)
+        }
+        let canChangeStage = await relay.prepareToLeave()
+        #expect(canChangeStage, "A clean local hide must not block a room stage change.")
+        if canChangeStage {
+            if action == "close" { relay.end() }
+            else { relay.begin(appId: "wheel", callSessionId: "call-watch", isReadOnly: false) }
+        }
+        #expect(relay.appId == (action == "close" ? "" : "wheel"))
+        #expect(released.contains(id))
+    }
+
+    #if os(macOS)
+    @Test(arguments: ["close", "replace"])
+    func theViewModelCanChangeTheStageAfterALocalWatchHide(action: String) async {
+        let viewModel = isolatedViewModel()
+        viewModel.state = MeetingState(userId: "host@example.com#local-session", sessionId: "local-session")
+        viewModel.state.roomId = "room-a"
+        viewModel.state.connectionState = .joined
+        viewModel.state.isAdmin = true
+        viewModel.socketManager.onAppsState?(AppsStateNotification(activeAppId: "watch", locked: false, roomId: "room-a",
+                                                                  revision: 7, docGeneration: 2))
+        let relay = viewModel.activeAppSession
+        await settle { relay.appId == "watch" }
+        let id = relay.appSessionId
+        relay.bundleOrigin = AppBridgeProtocol.iosOrigin
+        relay.acceptPrimedSnapshot(AppsSyncResponse(syncMessage: Data(), stateVector: nil, awarenessUpdate: nil), appSessionId: id)
+        let attached = relay.attachBridge(appSessionId: id) { [weak relay] raw in
+            guard let relay, let envelope = AppBridgeCodec.jsonObject(raw),
+                  envelope["type"] as? String == "prepareToLeave",
+                  let requestId = envelope["requestId"] as? String else { return }
+            _ = Self.post(relay, "ack", requestId: requestId, payload: ["ok": true], mount: relay.bridgeGeneration)
+        }
+        #expect(attached)
+        #expect(Self.post(relay, "ready", requestId: "e-ready", payload: ["appId": "watch", "bundleVersion": "1.1.0"],
+                          mount: relay.bridgeGeneration) == .none)
+        viewModel.stage.apply(viewModel.makeStageInputs())
+        viewModel.stage.leaveWatchTogether()
+        #expect(viewModel.stage.chrome.isWatchTogetherHidden)
+        #expect(!viewModel.activitySession.appHost.model.wantsWebView)
+        await settle { !relay.embedReady }
+        #expect(!relay.embedReady)
+        if action == "close" { viewModel.closeActiveApp() }
+        else { viewModel.openMeetingApp("wheel") }
+        await settle { !viewModel.state.isAppsActionInFlight }
+        #expect(viewModel.state.activeAppId == (action == "close" ? nil : "wheel"))
+        #expect(viewModel.state.appsRevision == 7)
+    }
+    @Test(arguments: ["close", "present"], [true, false])
+    func lostRendererRequiresAnExplicitDiscardBeforeTheSameStageChange(action: String, replacementSaves: Bool) async throws {
+        let viewModel = isolatedViewModel()
+        viewModel.state = MeetingState(userId: "host@example.com#local-session", sessionId: "local-session")
+        viewModel.state.roomId = "room-a"
+        viewModel.state.connectionState = .joined
+        viewModel.state.isAdmin = true
+        viewModel.socketManager.onAppsState?(AppsStateNotification(activeAppId: "watch", locked: false, roomId: "room-a",
+                                                                  revision: 7, docGeneration: 2))
+        let relay = viewModel.activeAppSession
+        let host = viewModel.activitySession.appHost
+        await settle { relay.appId == "watch" }
+        let id = relay.appSessionId
+        relay.bundleOrigin = AppBridgeProtocol.iosOrigin
+        let firstAttached = relay.attachBridge(appSessionId: id) { _ in }
+        #expect(firstAttached)
+        let mount = relay.bridgeGeneration
+        #expect(Self.post(relay, "editsPending", requestId: "e-edit", payload: [:], mount: mount) == .none)
+        relay.embedFailed(appSessionId: id, issue: .rendererGone, mount: mount)
+        host.retry()
+        relay.acceptPrimedSnapshot(AppsSyncResponse(syncMessage: Data(), stateVector: nil, awarenessUpdate: nil), appSessionId: id)
+        var replacementSaveAttempts = 0
+        let replacementAttached = relay.attachBridge(appSessionId: id) { [weak relay] raw in
+            guard let relay, let packet = AppBridgeCodec.jsonObject(raw),
+                  packet["type"] as? String == "prepareToLeave", let requestId = packet["requestId"] as? String else { return }
+            replacementSaveAttempts += 1
+            _ = Self.post(relay, "ack", requestId: requestId, payload: ["ok": replacementSaves], mount: relay.bridgeGeneration)
+        }
+        #expect(replacementAttached)
+        #expect(Self.post(relay, "ready", requestId: "e-ready", payload: ["appId": "watch", "bundleVersion": "1.1.0"],
+                          mount: relay.bridgeGeneration) == .none)
+        #expect(Self.post(relay, "editsPending", requestId: "replacement-edit", payload: [:],
+                          mount: relay.bridgeGeneration) == .none)
+        let perform = {
+            if action == "close" { viewModel.closeActiveApp() }
+            else { viewModel.openMeetingApp("wheel") }
+        }
+
+        perform()
+        await settle { !host.stageDiscardPromptId.isEmpty && !viewModel.state.isAppsActionInFlight }
+        let cancelled = host.stageDiscardPromptId
+        #expect(!cancelled.isEmpty)
+        #expect(viewModel.state.activeAppId == "watch")
+        host.resolveStageDiscardPrompt(id: cancelled, confirmed: false)
+
+        perform()
+        await settle { !host.stageDiscardPromptId.isEmpty && !viewModel.state.isAppsActionInFlight }
+        let confirmed = host.stageDiscardPromptId
+        #expect(!confirmed.isEmpty && confirmed != cancelled)
+        host.resolveStageDiscardPrompt(id: cancelled, confirmed: true)
+        #expect(host.stageDiscardPromptId == confirmed)
+        #expect(viewModel.state.activeAppId == "watch")
+        viewModel.toggleAppsLock()
+        #expect(!viewModel.state.isAppsActionInFlight)
+        host.resolveStageDiscardPrompt(id: confirmed, confirmed: true)
+        await settle { !viewModel.state.isAppsActionInFlight }
+        #expect(replacementSaveAttempts == 1)
+        let expectedApp = replacementSaves ? (action == "close" ? nil : "wheel") : "watch"
+        #expect(viewModel.state.activeAppId == expectedApp)
+        #expect(!viewModel.state.isAppsLocked)
+        #expect(viewModel.state.appsRevision == 7)
+    }
+    #endif
+
+    @Test func aRefusedWatchEditSurvivesHideAndCanBeCheckedAgainAfterRejoin() async throws {
+        let stage = stage(inputs())
+        let activity = ActivitySession(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()), stage: stage)
+        let relay = ActiveAppSession()
+        relay.bundleOrigin = AppBridgeProtocol.iosOrigin
+        activity.bindStage()
+        activity.appHost.bind(session: relay)
+        relay.begin(appId: "watch", callSessionId: "call-watch", isReadOnly: false)
+        activity.appHost.apply(AppHostInputs.make(callSession: 1, appId: "watch", isHost: true))
+        let id = relay.appSessionId
+        var released: [String] = []
+        relay.onBridgeEnded = { released.append($0) }
+        var wire: [[String: Any]] = []
+        relay.acceptPrimedSnapshot(AppsSyncResponse(syncMessage: Data(), stateVector: Data(), awarenessUpdate: nil), appSessionId: id)
+        relay.syncTransport = { _, _ in
+            AppsSyncResponse(syncMessage: Data([0, 0]), stateVector: Data([0]), awarenessUpdate: nil)
+        }
+        let attached = relay.attachBridge(appSessionId: id) { raw in
+            if let message = AppBridgeCodec.jsonObject(raw) { wire.append(message) }
+        }
+        #expect(attached)
+        let mount = relay.bridgeGeneration
+        #expect(Self.post(relay, "ready", requestId: "e-ready", payload: ["appId": "watch", "bundleVersion": "1.1.0"], mount: mount) == .none)
+        #expect(Self.post(relay, "editsPending", requestId: "e-edit", payload: [:], mount: mount) == .none)
+
+        stage.leaveWatchTogether()
+        #expect(!activity.appHost.model.wantsWebView)
+        #expect((wire.last?["payload"] as? [String: Any])?["locallyHidden"] as? Bool == true)
+        let leave = Task { @MainActor in await relay.prepareToLeave() }
+        await settle { wire.last?["type"] as? String == "prepareToLeave" }
+        let refused = try #require(wire.last?["requestId"] as? String)
+        #expect(Self.post(relay, "verifySaved", requestId: refused, payload: [:], mount: mount) == .none)
+        await settle { wire.last?["type"] as? String == "savedSnapshot" }
+        #expect(Self.post(relay, "ack", requestId: refused, payload: ["ok": false, "error": "notSaved"], mount: mount) == .none)
+        #expect(!(await leave.value))
+        #expect(released.isEmpty)
+
+        stage.rejoinWatchTogether()
+        #expect(activity.appHost.model.wantsWebView)
+        #expect(relay.bridgeGeneration == mount)
+        #expect((wire.last?["payload"] as? [String: Any])?["locallyHidden"] as? Bool == false)
+        let retry = Task { @MainActor in await relay.prepareToLeave() }
+        await settle { wire.last?["type"] as? String == "prepareToLeave" && wire.last?["requestId"] as? String != refused }
+        let accepted = try #require(wire.last?["requestId"] as? String)
+        #expect(Self.post(relay, "verifySaved", requestId: accepted, payload: [:], mount: mount) == .none)
+        await settle { wire.last?["type"] as? String == "savedSnapshot" }
+        #expect(Self.post(relay, "ack", requestId: accepted, payload: ["ok": true], mount: mount) == .none)
+        #expect(await retry.value)
+        relay.embedFailed(appSessionId: id, issue: .rendererGone, mount: mount)
+        #expect(await relay.prepareToLeave(), "A failed renderer with verified edits no longer owes a save check.")
+    }
+
+    private func settle(_ condition: () -> Bool) async {
+        for _ in 0..<200 where !condition() {
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+    }
+
+    private static func post(_ relay: ActiveAppSession, _ type: String, requestId: String,
+                             payload: [String: Any], mount: Int) -> AppBridgeRejection {
+        guard let raw = try? JSONSerialization.data(withJSONObject: [
+            "v": 1, "type": type, "callSessionId": relay.callSessionId, "appSessionId": relay.appSessionId,
+            "requestId": requestId, "payload": payload,
+        ]) else {
+            Issue.record("Could not encode the \(type) fixture.")
+            return .malformed
+        }
+        return relay.receiveFromEmbed(raw: String(decoding: raw, as: UTF8.self), origin: AppBridgeProtocol.iosOrigin,
+                                      isMainFrame: true, mount: mount)
     }
 }
 #endif

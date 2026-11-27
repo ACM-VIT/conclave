@@ -45,6 +45,7 @@ export interface ControlsBarProps {
   slim?: boolean;
   coachAvatars?: { id: string; name: string }[];
   roomId?: string;
+  clientId?: string;
   isMuted: boolean;
   isMicrophoneUnmuteDisabled?: boolean;
   isCameraOff: boolean;
@@ -126,6 +127,10 @@ export interface ControlsBarProps {
   onCloseWatch?: () => void;
   isAppsOpen?: boolean;
   hasActiveApp?: boolean;
+  /** A panel app is waiting on this viewer: a poll to vote in, a new question. */
+  hasAppWaiting?: boolean;
+  /** A toast is up. One-time tips wait, so they do not cover it. */
+  isToastShowing?: boolean;
   onToggleApps?: () => void;
   isDevPlaygroundEnabled?: boolean;
   isDevPlaygroundActive?: boolean;
@@ -454,7 +459,7 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
     overflow.push({
       id: "whiteboard",
       icon: StickyNote,
-      label: p.isWhiteboardActive ? "Close whiteboard" : "Open whiteboard",
+      label: p.isWhiteboardActive ? "Close whiteboard" : "Present whiteboard",
       active: p.isWhiteboardActive,
       paletteOnly: appsPanelOwnsApps,
       onPress: () => (p.isWhiteboardActive ? p.onCloseWhiteboard?.() : p.onOpenWhiteboard?.()),
@@ -474,7 +479,7 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
     overflow.push({
       id: "dev-playground",
       icon: TerminalSquare,
-      label: p.isDevPlaygroundActive ? "Close dev playground" : "Open dev playground",
+      label: p.isDevPlaygroundActive ? "Close dev playground" : "Present dev playground",
       active: p.isDevPlaygroundActive,
       paletteOnly: appsPanelOwnsApps,
       onPress: () =>

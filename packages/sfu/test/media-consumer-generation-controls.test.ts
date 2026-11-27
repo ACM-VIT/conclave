@@ -56,6 +56,7 @@ const makeConsumer = (
     rtpParameters: { codecs: [], encodings: [] },
     appData: {},
     on: events.on.bind(events),
+    emit: events.emit.bind(events),
     observer,
     close: vi.fn(),
     setPreferredLayers: vi.fn(
@@ -141,12 +142,58 @@ const makeHarness = (
     currentUserKey: null,
     activeConclaveAnswers: new Map(),
     adminHandlersRegistered: false,
+    joinAttempts: 0,
   } satisfies ConnectionContext;
   registerMediaHandlers(context);
   return { client, handlers, room, socket };
 };
 
 describe("current consumer generation controls", () => {
+  it("sends changed consumer scores and continues to send layer events", async () => {
+    const { client, handlers, socket } = makeHarness();
+    const consumer = makeConsumer("consumer-webcam");
+    client.consumerTransport = {
+      id: "recv-transport",
+      consume: vi.fn().mockResolvedValue(consumer),
+    } as unknown as WebRtcTransport;
+    const consume = handlers.get("consume") as unknown as ConsumeHandler;
+    await consume(
+      {
+        transportId: "recv-transport",
+        producerId: "producer",
+        rtpCapabilities: {},
+      },
+      vi.fn(),
+    );
+    vi.mocked(socket.emit).mockClear();
+
+    const initialScore = consumer.score;
+    consumer.emit("score", initialScore);
+    consumer.emit("score", { ...initialScore });
+    const changedScore = { ...initialScore, producerScores: [6, 10, 10] };
+    Object.assign(consumer, { score: changedScore });
+    consumer.emit("score", changedScore);
+    consumer.emit("score", { ...changedScore });
+    consumer.emit("layerschange", consumer.currentLayers);
+
+    expect(socket.emit).toHaveBeenCalledTimes(3);
+    expect(socket.emit).toHaveBeenNthCalledWith(
+      1,
+      "consumerTelemetry",
+      expect.objectContaining({ event: "score", score: initialScore }),
+    );
+    expect(socket.emit).toHaveBeenNthCalledWith(
+      2,
+      "consumerTelemetry",
+      expect.objectContaining({ event: "score", score: changedScore }),
+    );
+    expect(socket.emit).toHaveBeenNthCalledWith(
+      3,
+      "consumerTelemetry",
+      expect.objectContaining({ event: "layerschange" }),
+    );
+  });
+
   it("defaults webcam consumers in a low-quality room to the lowest layer at full frame rate", async () => {
     const { client, handlers } = makeHarness({ roomQuality: "low" });
     const consumer = makeConsumer("consumer-webcam");

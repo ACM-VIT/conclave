@@ -187,6 +187,30 @@ File-reading tests are kept only for:
   (`S1ChatPhotosTests`);
 - the two media invariant guards named under Media Threading below.
 
+Swift tests never touch `UserDefaults.standard`. Concurrent test processes
+share that domain, so one test's write lands in another's read. Every API
+that takes a preferences store requires it (no `= .standard` default), and
+only the production singletons pass `UserDefaults.standard`. A test passes
+`IsolatedDefaults.make()` or builds its view model with `isolatedViewModel()`,
+and does not reach `AppState.shared`, `MeetingViewModel.shared` or the other
+singletons listed in `scripts/check-native-test-stores.mjs`. `pnpm check`
+runs that guard.
+
+Robolectric runs each SDK in its own sandbox in one JVM, and Skip's `Bundle`
+registers a JVM-wide URL stream handler factory, which Java allows once. The
+`SandboxAssetUrlHandler` plugin (`Tests/ConclaveTests/Skip/resources/META-INF/services`)
+registers it in every sandbox before every test and accepts "factory already
+defined", so whichever sandbox comes first owns it and no class needs a
+per-class reset. `Sources/Conclave/Skip/skip.yml` adds the `resources` folder of
+each `:Conclave` test Kotlin source dir to the test resources, so the descriptor
+follows the bridge tests wherever they are compiled from (the repo's `Skip`
+folder in the app build, `src/test/kotlin` in Skip's own test project) and never
+depends on where the Gradle project was generated. Without it a class on another
+SDK breaks every diagnostics store write in a later sandbox. The plugin checks
+once per sandbox that `asset:` URLs open Skip's connection, and
+`SandboxAssetUrlHandlerTests` (sdk 28 and 33) fails in every sandbox when the
+plugin did not run and compares an `asset:` read with the AssetManager's bytes.
+
 ## Performance Learnings
 
 The app felt sluggish mostly because of over-broad recomposition, not because
@@ -225,6 +249,218 @@ adb logcat -d | grep setRequestedFrameRate
 
 The expected idle state in a meeting is not constant 60 fps redraws. Lottie
 will animate during entry, but it must be removed after reveal.
+
+## Android Video Tile Rendering
+
+The code carries no comments, so this section is the record of why it is
+shaped this way. Files are under `Sources/Conclave/Skip/`:
+
+- `VideoRenderer.kt`: `VideoTrackView`, the composable every video goes through.
+- `VideoHosts.kt`: `SurfaceVideoHost` and `TextureVideoHost`, the two kinds of
+  Android view behind it, and `VideoBufferSizePolicy`.
+- `VideoTileRenderer.kt`: frames in, draws out, for one view.
+- `VideoRenderLoop.kt`: the GL thread and EGL context of one view, behind the
+  `VideoRenderBackend` interface the tests fake.
+- `VideoCornerCutter.kt`: the pass that rounds a buffer's corners.
+- `ui/call/stage/StageVideoBacking.kt`: which stage tile gets which view.
+
+### Which view a tile gets
+
+A stage tile is drawn into one of three things, chosen by
+`StageVideoBackingPolicy`:
+
+- `Surface`: a SurfaceView behind the window at the default level. Grid tiles,
+  the spotlight main tile, the program feed.
+- `OverlaySurface`: a SurfaceView one level up, translucent, with its corners
+  cut in GL. Rail tiles, and the floating self view or speaker inset when the
+  layout has no rail.
+- `Texture`: a TextureView in the window. Everything else.
+
+Surface tiles never redraw the window: their frames go straight to the system
+compositor. The window shows them through the hole the SurfaceView punches
+where it is drawn, so anything Compose draws later (name pill, speaking ring,
+menus, panels) stays on top, and the tile's rounded clip rounds the hole. A
+TextureView costs a window redraw per video frame, but it can be clipped,
+faded, scaled and stacked like any other view.
+
+Rules that follow from how a surface behind the window works:
+
+- There are only two surface levels, and the stage stacks three deep (main,
+  rail, floating self view). The policy gives each level one place. Two
+  overlapping tiles must never share a surface level;
+  `noTwoOverlappingTilesShareASurfaceLevelInAnyLayout` checks this on the real
+  layouts. Change the policy and that test together.
+- In compact portrait the rail is a bottom row and a self view in a bottom
+  corner lies over it. That is why a floating tile is a `Texture` whenever the
+  layout has a rail.
+- A layer alpha cannot fade a surface, and a layer scale is not cropped by its
+  parent clip before API 34. A tile that fades (the landscape share rail, the
+  minimized self view) or zooms (the remote share) stays a `Texture`. Keep it
+  that way, or move the fade or zoom into the renderer first.
+- A rail that stops fading with the chrome (the share ended, the phone turned)
+  snaps to full alpha in `ParticipantTile`, and stays a `Texture` until it gets
+  there. A surface must never sit under a fading layer.
+- A surface's level is fixed when it is created, so a tile that changes
+  backing gets a new view and shows its cover until the next frame.
+- A surface shows a black backstop until its first frame. `VideoTrackView`
+  keeps an in-call-background cover over it until `VideoHost.hasFrame`. A
+  TextureView draws nothing until its first frame and needs no cover.
+- A surface tile without a track has no view at all. An empty SurfaceView still
+  costs the compositor a layer.
+- A tile that floats over other video cannot be rounded by the window, which is
+  transparent there too. Its buffer carries the shape: the overlay surface is
+  `PixelFormat.TRANSLUCENT` and `VideoCornerCutter` multiplies the four corner
+  squares by the rounded-rectangle coverage (blend `GL_ZERO, GL_SRC_ALPHA`, so
+  the buffer stays premultiplied). The shader works in corner-local pixels so
+  medium precision is enough on every GPU.
+- Video previews inside panels (mini tile, effects, settings) and the shared
+  browser stay `Texture`: they sit above the stage and would need a fourth
+  level.
+
+### How a view draws
+
+Each view has its own `VideoRenderLoop`: one GL thread and one EGL context, in
+the share group of `VideoRendererShared.eglBase` so decoder and camera textures
+can be drawn directly. The view creates it and stops it in `release()`. It
+replaces WebRTC's `EglRenderer`, which cannot draw a letterbox into the buffer
+or cut corners.
+
+One loop for every view was built and measured, and is not what ships: with a
+single context each draw first switches the current surface, and on the
+emulators that cost 6 to 11 points of a core more than a loop per view. Measure
+on a phone before sharing the loop. The pull request that added this section
+has the numbers.
+
+- Threads: attach, detach, clear, mirror and fit come from the main thread.
+  Frames arrive on WebRTC's threads. Everything GL runs on the loop's thread.
+- A draw happens only when a frame arrives. Only the newest undrawn frame is
+  kept. A frame is given back as soon as it is drawn: a hardware-decoded frame
+  is a texture its decoder waits to get back, so nothing can be redrawn
+  without a new frame.
+- Attaches and clears carry a token that rises with each one
+  (`presentationToken` in the hosts). A frame is stamped with the newest token
+  when it arrives and is drawn only once that attach or clear has run on the
+  render thread. So a frame that arrives after a clear is never painted over
+  by it, and the first-frame notice a host acts on is for the picture it is
+  showing now.
+- Each attach gives the renderer a lease on that window (`WindowLease`). The
+  main thread revokes it first thing when the window detaches or the view is
+  released. Every render-thread call that touches the window's surface
+  (create, bind, size query, clear, draw, corner cut, swap) goes through
+  `LeasedWindowBackend`, which refuses it once the lease is revoked. So
+  nothing the render thread starts after `surfaceDestroyed` begins can touch
+  that window: an attach still queued creates nothing (Android throws on a
+  released window), and a draw paused between two calls stops at the next one.
+- A detach goes to the front of the render thread's queue.
+  `surfaceDestroyed` waits for the detach, which normally takes as
+  long as the draw in progress. All surface tiles share one allowance for
+  that wait (`VideoDetachWait`, 150 ms in any second), because a rotation or
+  a move to the background destroys several surfaces in a row and a wait per
+  tile adds up on the main thread.
+- A surface is destroyed by the time `surfaceDestroyed` returns, whatever its
+  render thread is doing. When the detach has not been answered within the
+  allowance, the main thread destroys the EGL surface itself
+  (`VideoTileRenderer.abandonSurface`). Android disconnects the window from
+  EGL at that point, which also ends a swap stalled inside it. A render
+  thread call already inside EGL then (a bind waiting on the shared lock, a
+  draw or swap waiting on the window) is cut off from the window by that
+  destroy and fails, and the lease refuses every call after it. Only an
+  `eglCreateWindowSurface` already running when the allowance ran out can
+  finish later, and the next call destroys what it made. The task queued
+  ahead of the detach takes the surface off its context. Why the main thread
+  cuts work off instead of waiting longer, and what was rejected, is ADR 0022
+  (`docs/adr/0022-android-surface-teardown-cuts-off-render-work.md`). After
+  `release()` the callback waits for the release that is already queued, from
+  the same allowance and with the same fallback.
+- The render thread keeps its surface reachable for that fallback. It destroys
+  a surface before taking it off the context, and it creates one without
+  making it current, because both the unbind and the bind take the shared EGL
+  lock and can wait behind another tile's stalled swap. The swap interval is
+  set the first time a surface is bound.
+- The loop takes WebRTC's `EglBase.lock` around make-current, swap and context
+  creation, as WebRTC's own renderers, encoders and camera helper do. Some
+  drivers deadlock between one thread's swap and another thread's context
+  creation, so the lock stays, and a stalled swap holds up every tile until
+  it ends. A swap waiting on its window ends when its surface is destroyed,
+  which `surfaceDestroyed` does within the shared wait. A swap stalled inside
+  the driver ends only when the driver returns, and every stage tile stays
+  frozen until then. Only a phone can show whether a driver does that. The
+  tests model the shared lock and a stall that ends on destroy
+  (`RecordingBackend(eglLock)`, `stallNextSwapUntilItsSurfaceIsDestroyed`).
+- A TextureView's SurfaceTexture may only be released after the EGL surface on
+  it is gone, so `TextureVideoHost` keeps its listener after `release()` and
+  hands a texture destroyed in between to the render thread's acknowledgement.
+- An EGL surface the system refuses is asked for again on later frames, after
+  1, 3, 7, 15 and then every 31 frames, for as long as the window is attached.
+  A surface that cannot be made current, or whose swap fails, is destroyed and
+  rebuilt the same way. The count resets once a frame is presented.
+- A post to the loop and its shutdown take the same lock, so a task is queued
+  ahead of the teardown or refused, never behind it. A frame offered to a
+  stopped loop is given back at once.
+- A GL failure (out of memory, a rejected shader) is caught on the render
+  thread and costs the tile a frame. The drawers are released and rebuilt.
+- The swap interval is 0: a swap never waits for the compositor to take the
+  buffer before it.
+- The EGL config has alpha, so an overlay surface can have transparent
+  corners. Opaque surfaces ignore it. A 1x1 pbuffer keeps the context current
+  while the view has no surface, so GL objects can still be released.
+- The context must keep `GL_UNPACK_ALIGNMENT` at 1, as WebRTC's own renderer
+  does. With the default of 4 a simulcast layer whose width is not a multiple
+  of 4 comes out sheared.
+- WebRTC's `GlRectDrawer` recompiles its shader when the frame kind changes
+  (YUV, OES, RGB). The loop keeps one drawer per kind.
+- A surface has no view transform, so aspect-fit bars are drawn into its
+  buffer. A TextureView fills its buffer and fits with `setTransform`.
+- The bars are worked out for the view's shape, not the buffer's. Until a
+  resize lands the buffer keeps its old shape and the display stretches it to
+  the view, so a frame boxed for the buffer shows squashed. A pinned tile
+  moving into picture-in-picture showed as a thin strip between dark bars for
+  1.5 to 8 s on the API 36 emulator before this.
+- A surface's buffer is never larger than the visible part of the frame
+  (`VideoBufferSizePolicy`, through `SurfaceHolder.setFixedSize`). The display
+  scales the small buffer. The buffer follows a resize one frame late, so the
+  renderer asks EGL for its size on every frame.
+- A SurfaceView's window takes a buffer only if its size is the one the
+  window shows now or the one it was last asked for. The compositor throws any
+  other buffer away (`rejecting buffer` in logcat) and its frame is never
+  shown. A window with no buffer yet takes a new size at once. Three rules keep
+  such buffers out of the queue:
+  - The host asks a window for a new buffer size only while the window shows
+    a picture in a buffer of the size it has now (`shownBufferSize`). So one
+    resize is under way at a time, and a buffer drawn for the size before it
+    always has a size the window knows. A window with no picture is never
+    resized: its first picture goes into the buffer it was created with. A
+    resize that reached it first would make the compositor throw that buffer
+    away, after the tile's cover had been lifted for it.
+  - The host asks for a buffer size only once a frame has passed with no
+    change to the view's size. A tile's fit follows its size by one frame
+    (`slotSize` in `SlotView`), and a window moving into picture-in-picture
+    changes size on every frame. The sizes in between are ones the tile never
+    settles on.
+  - The renderer queues a buffer only if its size is the window's
+    (`surfaceChanged`). A buffer of any other size was taken from the queue
+    before a resize: the EGL surface is destroyed and created again, which
+    hands that buffer back and takes one of the current size. So the first
+    frame after a resize is already in a buffer of the new size, and a picture
+    is never shown at the scale of the size before. The check runs again after
+    the draw, because the window can be resized while a frame is drawn. A
+    window that gives no buffer of its size for a second gets a warning in the
+    log, and frames are then drawn into what there is. That give-up belongs to
+    one size request (`SizeRequest`, one per `surfaceChanged`), not to the
+    surface or to the dimensions: every size the window reports, even one it
+    reported before, is checked from the start again.
+  - A window's size belongs to that window. The renderer forgets it when the
+    window detaches, so a new window's first frame is not held to the size of
+    the one before.
+- Every loop counts its live EGL context and window surfaces. With
+  `adb shell setprop log.tag.ConclavePerf DEBUG` each change is logged as
+  `event video.gl contexts=N surfaces=M`, summed over all loops. Both are 0
+  after a call.
+
+The pieces without GL are unit tested in
+`Tests/ConclaveTests/Skip/VideoRenderingTests.kt` through a fake
+`VideoRenderBackend`. GPU load, overlay use and battery need a phone: the
+emulator cannot show them.
 
 ## Entry Overlay
 
@@ -369,6 +605,12 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   `closeSendProducer`, `closeSendTransport`), never directly and never via
   `sync`. SendTransport/SendHandler state is unsynchronized, and the queued
   transport close keeps the Device alive until any in-flight create is done.
+  Every other producer mutation joins the same queue: pause, resume and layer
+  changes (`pauseSendProducer`, `resumeSendProducer`,
+  `setSendProducerMaxSpatialLayer`) and the noise-suppression `replaceTrack`,
+  because a pause reads the track pointer a `replaceTrack` writes. Android
+  does the same on the producer's `SendTransportLane`. Mute latency is not
+  at stake: the track and capture go silent on the main thread first.
 - iOS: the SFU closes a displaced producer and broadcasts `producerClosed`
   for it to the owner before acking the replacement, so with off-main creates
   that event reaches the view model first. Microphone replacements (bandwidth
@@ -376,10 +618,220 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   `intentionalLocalAudioProducerCloseIds` before the create, and
   `handleLocalProducerClosed` consumes it (like the video marker). Once the
   replacement's create returns in the same session, never fall back to the
-  predecessor: commit the replacement, paused and server-muted if a mute
-  landed (`isLocalAudioMuteInEffect`). `startProducingAudio` is single-flight
+  predecessor: commit the replacement at the user's newest mute intent
+  (iOS `localAudioIntentEnabled`, Android `localAudioTargetEnabled`), paused
+  and server-muted when muted, live and server-unmuted when an unmute landed
+  during the create (that unmute's late ack belongs to the predecessor and
+  changes nothing). `startProducingAudio` is single-flight
   (`audioStartTask`) so two starts never race a produce, and microphone tracks
   are created disabled and enabled only by a live commit.
+- Every in-flight or scheduled flag on the Android client is an owner token,
+  not a boolean (`takeInFlightToken()`): `audioStartOrEnableOwner`,
+  `audioBandwidthRefreshOwner`, `audioProducerRouteRecoveryOwner`,
+  `audioNoiseSuppressionChangeOwner`, `videoBandwidthRefreshOwner`,
+  `screenBandwidthRefreshOwner`, `audioRouteReapplyOwner`,
+  `audioCaptureRestartOwner` and `audioRouteChangeNotificationOwner`. Only the
+  call holding a token clears it, and only while `configurationGeneration`
+  still matches. Resets end all such work at once: a mute clears the
+  start/enable owner, `cleanup()` clears them all, and
+  `releaseCallAudioMode()` clears the three route debounces. Work that ends
+  without its token still runs `runPendingMicrophoneChanges()`, which checks
+  the guards itself. Mic state reports go through `notifyLocalAudioEnabled`,
+  silent while the bandwidth refresh token is held, so
+  `onLocalAudioEnabledChanged` is never swapped out. iOS gets the same from
+  single-flight flags restored only in the same session
+  (`audioBandwidthRefreshInFlight`, `screenBandwidthRefreshInFlight`,
+  `suppressLocalStateCallbacks`), `audioStartTask` identity and
+  `audioCaptureRestartToken`. Flags outside the client keep one owner too:
+  `CameraFacingCatalog.refreshQueued` is a cross-thread compare-and-set
+  cleared only by the probe it queued, and a `RetiredTransportReaper` entry
+  becomes ready only in its own lane's final step. A new guard belongs in
+  this list.
+- Android disposes retired mediasoup objects only through
+  `RetiredTransportReaper` (`retiredTransports`). A receive transport is
+  ready at once; a send transport and its Device are ready only after their
+  `SendTransportLane` ran the close as its final operation (`retireAfter`),
+  behind any produce still waiting for its ack. Disposal runs only while no
+  Device, transport or lane is live and every retired entry is ready (at the
+  next `configure()` or after 45 s idle), and then it disposes them all, so
+  a newer call's entry never goes ahead of an older call's unfinished lane.
+  Destroying mediasoup's per-Device factory unregisters its voiceengine JNI
+  natives class-wide, which would crash native work still running on any
+  lane. Never dispose a transport or Device directly, and never on a lane.
+  Creating a factory is as dangerous as destroying one, and `Device.load`
+  builds and destroys a temporary factory to probe codecs. So `configure()`
+  loads the Device at once only while no retired entry is waiting on its
+  lane; otherwise it defers the load (`deviceLoadJob`) until every lane has
+  finished, disposes the retired objects, then loads. Send and receive
+  transport creation wait for that load first (`awaitDeviceLoad`). A stuck
+  native close must never block joining, so that wait has a deadline
+  (`RetiredTransportReaper.LANE_DEADLINE_MILLIS`, 5 s; a session end already
+  cuts short any ack a lane waits on). After it, every entry still waiting is
+  abandoned: its close keeps running on its own lane thread, it stops holding
+  up the Device load and the disposal of other entries, it is disposed only
+  once its close finishes, and `onTeardownStuck` records
+  `media.teardownStuck.transport`. The new load then risks the factory
+  probe running beside that close; that trade was chosen over a call that
+  can never join again.
+- Android disposes every track it creates exactly once, through the field
+  that holds it, on every path that drops it. The microphone track
+  (`localAudioTrack`, and the route-recovery and noise-suppression
+  replacements) goes through `disposeAudioTrack`, after the lane's queued
+  work. The camera (`localVideoTrack`, `videoSource`, `videoCapturer`,
+  `surfaceTextureHelper`) goes through `releaseLocalCameraCapture()` and the
+  share (`screenVideoTrack` and the rest) through `releaseScreenCapture()`:
+  camera-off by the server, a superseded or failed start, stop share and
+  `cleanup()`. A camera switch keeps its track. A video track and its source
+  are disposed on the main thread, where renderers add and remove sinks,
+  after both the capturer has stopped and the lane has closed the producer.
+- Hang-up never waits on a capture thread. `SurfaceTextureHelper.dispose()`
+  and `ScreenCapturerAndroid.stopCapture()` block their caller on the
+  capture thread, which takes the shared EGL lock that tile rendering also
+  takes, so `CaptureTeardown` stops and disposes each capturer and helper
+  on a thread of its own (`CaptureTeardown.camera`, `CaptureTeardown.screen`).
+  A camera-off keeps its synchronous `stopCapture()` on the main thread,
+  because a restart must run after it; that call waits only while a camera
+  open is in progress.
+- A capture start never opens a device something else may still hold
+  (`awaitCaptureDeviceFree`): the camera start (which camera recovery and
+  rejoin go through), the camera switch and the share start. Each first
+  waits for its kind's earlier teardowns, up to
+  `CaptureTeardown.DEADLINE_MILLIS` (3 s). WebRTC's `stopCapture()` waits
+  while a camera open is pending, a hung driver never releases it, and a
+  healthy stop can take longer than the deadline, so past the deadline the
+  start records `media.teardownStuck.<kind>` (`onTeardownStuck`) and waits
+  up to `CaptureTeardown.DEVICE_WAIT_MILLIS` (5 s) more for the device to be
+  free (`awaitDeviceFreed`, whichever comes first): for a camera,
+  CameraManager reporting that camera id available (`CameraAvailability`,
+  an `AvailabilityCallback`) or the teardown finishing; for a share, the
+  teardown finishing. A device still held fails
+  the start visibly instead of opening it twice: a camera start marks the
+  call camera `inUseByAnotherClient` and throws a "device busy" error the
+  view model shows as "Another app is using your camera." with the camera
+  left off, and a share start fails into the share failure path. Tapping
+  again retries. So a device a stuck teardown still holds is never opened
+  again, and a start behind it adds no capture for another teardown thread
+  to strand. A second stuck thread of a kind needs the system to have
+  reported the device free in between. Camera names are CameraManager ids,
+  except on the Camera1 fallback, where only the finished teardown frees the
+  device, and the start opens as soon as it finishes.
+- A capture's texture helper is created off the main thread
+  (`CaptureTeardown.createHelper`, 2 s bound, one creation per kind at a
+  time), before its capturer is opened. `SurfaceTextureHelper.create` builds
+  an EGL context under the shared EGL lock, so a stalled swap anywhere can
+  hold it: past the bound the start fails, nothing has been opened, and a
+  helper that arrives late is disposed on its own thread. A start that
+  finds a creation still stuck fails at once instead of adding another.
+- Every capture operation holds a `CaptureClaim`: the call generation
+  (`configurationGeneration`, bumped by `cleanup()` and `configure()`), the
+  camera-off intent (`localVideoOffIntentGeneration`, camera operations
+  only) and, once it has one, its capture session. `holdsCapture(claim)` is
+  the one check, and it runs after every suspension point of a camera start,
+  camera switch and share start. Only an operation that still holds its
+  claim may write shared state: `activeCameraFacing` (except a switch result,
+  below), the capture fields, `LocalPreviewController`'s call camera
+  interruption, or a "device busy" failure. The device wait
+  (`awaitCaptureDeviceFree`) returns `free`, `busy` or `stale`. A stale
+  operation returns or throws "session replaced" without touching anything,
+  and only a holder calls `failCaptureDeviceBusy`. The desired camera is read
+  after the waits, never before: the camera start re-reads it
+  (`cameraToOpen()`) after the device wait and the helper creation, and waits
+  again for a newly chosen camera, so a flip during either opens the camera
+  the user chose. A flip during the produce ack only records the facing,
+  because the capturer is not live yet; the start applies it through the
+  normal switch once it has published (`applyCameraFacingChosenDuringStart`).
+  A camera switch whose facing a later flip already reverted does nothing.
+- A release follows the capture session, never the generation. A start owns
+  the `CaptureSession` it created until it publishes it (`published`, set
+  where it commits `videoProducer` or `screenProducer`); after that the call
+  owns it. A start that fails or turns stale releases its session only if
+  `cameraCapture` or `screenCapture` still holds that session, whatever the
+  generation (`clearLocalWebcamCaptureState`, `releaseScreenCapture`), and
+  leaves any other session alone. Every reconfigure leaves each capture with
+  an owner that can release it: `cleanup()` releases all of them, and
+  `configure()` releases every unpublished session at once
+  (`releaseUnpublishedCaptures`), because its start can no longer publish,
+  and hands each published one to the new session, whose stop, server close,
+  projection stop and `cleanup()` still release it. Releasing a share
+  releases its own consent and service too
+  (`ScreenCaptureManager.releaseConsent(grant)`). The case that broke:
+  a share started while the Device load waited on an old lane, then a
+  recovery `configure()` (the view model skips `cleanup()` while
+  `isConfigured` is false) left `screenCapture` set, and every later share
+  failed with "already starting or active".
+- A share request owns what it acquires from the moment its consent dialog
+  opens. `ScreenCaptureManager` numbers every consent it installs and gives
+  the grant id only to the request that asked (`requestConsent`). The client
+  starts a share from a named grant (`startScreenSharing(consentGrant:)`) and
+  its capture session keeps that grant. The view model's Android share flow
+  (`runConsentScreenShareToggle`, behind `ScreenShareConsentPort` so macOS
+  tests drive the same code with a fake) records the grant in a
+  `ScreenShareConsentHold` as soon as it arrives and clears it only when the
+  share goes live. Every other exit, stale or not, ends in
+  `releaseScreenShareHold`: it closes the client share that holds the grant
+  (`closeLocalScreenProducer(consentGrant:)`) and releases that grant's
+  consent, service and notification (`releaseConsent`). Stale means drop the
+  result and release your own grant, never another one. A release by grant
+  never resumes another request's waiters, and a newer request's start,
+  refusal, cancellation or late dialog result never clears an older grant's
+  consent or resets its host and service state (those reset when a consent is
+  installed, not when a request starts). A standalone capture service stop
+  from a grant release checks the grant again on delivery. A service instance
+  reports destruction only for the grant it foregrounded, so a delayed stop
+  or destroy cannot revoke a newer approval. The share phase ends consistent
+  with what is live on every exit: the Android toggle settles it when it
+  still owns the guard or when no newer toggle owns it
+  (`finishScreenShareToggle`). The case
+  that broke: during a muted quick rejoin with the Device load deferred,
+  recovery replaced the toggle while the consent dialog was open, both
+  recovery cleanups skipped the unconfigured client, and approving the dialog
+  started the share service and its notification while the call said
+  sharing was off. `ScreenShareConsentRequestTests` covers every exit before
+  the share goes live.
+- Every capture callback applies its effect through one function on the main
+  thread (`applyCaptureCallback`), which checks the callback's session at the
+  moment of the mutation (`isCurrentCapture`: still held in `cameraCapture`
+  or `screenCapture`, which the release clears, its capturer still the
+  installed one, and for a share its consent still the current one), not the
+  generation, so a session `configure()` handed over still hears its own
+  projection stop and camera events. That covers the projection stop, the
+  camera events handler (`cameraEvents(capture)`: open, error, disconnect)
+  and the camera switch's done and error, which records the facing the
+  camera reached even when the switch's own claim went stale. Never check on
+  the callback's thread and then act: an old projection stop passed its
+  check, waited on the share manager's lock, and then cleared the next
+  share's consent. A camera switch that resumes after its session ended
+  changes nothing, and the switch re-checks the session before it restarts
+  capture, so it never calls into a retired capturer. The capturer observer (`SessionCapturerObserver`) checks
+  the session on the capture thread itself, because frames are too frequent
+  to post and each session forwards only to its own source.
+- Renderers attach sinks through `VideoSinkAttachment`, and an attach skips
+  `addSink` on any track `VideoTrackLedger` has marked disposed. Every track a
+  renderer can be given goes through the ledger: local camera and share
+  tracks are disposed through `VideoTrackLedger.dispose`, and a remote
+  consumer's track is marked by `VideoTrackLedger.recordClosed(consumer)`
+  just before native code frees it: in `removeConsumer` (consumer close,
+  producer close, participant leave, stale consumer sweep) before
+  `Consumer.close()`, in `cleanup()` for every consumer on leave, and
+  first thing in `onTransportClose(consumer)`, which native `Transport.close()`
+  calls for each of its consumers, so a transport close is marked before its
+  main-thread removal runs. A new path that closes a consumer or disposes a
+  video track must go through the ledger. `addSink` on a disposed track
+  wraps the sink (a native wrapper and a global JNI reference) before it
+  throws, and a later `removeSink` throws before freeing it, so each such
+  attach leaked. The attachment still removes a sink only if adding it
+  succeeded and never throws on detach, for tracks disposed elsewhere.
+  `CameraFacingCatalog` numbers its scans and keeps a result only if no newer
+  scan has been stored, so a slow older scan cannot bring a vanished camera
+  back.
+- Every input that changes publish settings goes through
+  `publishSettingsChanged()` on Android (camera and share settings, video
+  quality), which bumps `mediaPublishSettingsRevision`. A video produce in
+  flight records the settings it encoded and replays the settings refresh
+  when the revision moved (`replayVideoSettingsRefreshIfChangedSince`); iOS
+  re-applies the newest profile at each commit point
+  (`reapplyLocalBandwidthProfile(ifChangedSince:)`). A new settings input
+  belongs here.
 - A failed mute fails closed on both platforms: `setAudioEnabled(false)`
   keeps the producer paused and the track silent, and the view model stays
   muted while showing the error.
@@ -399,10 +851,11 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   it: the unmute confirmation (it bypasses the guard via
   `allowCurrentMuteToggle`), the chat camera-on commit, the
   `enableOrStartLocalVideo` recreate fallback, the camera-switch PiP refresh
-  and the screen-share close. An orphaned screen-share toggle stops the
+  and the screen-share close. An orphaned iOS screen-share toggle stops the
   shared capture (and clears its end callback) only while no newer toggle
   owns the guard and no share is live
-  (`canOrphanedScreenShareToggleStopCapture()`). A toggle that still owns
+  (`canOrphanedScreenShareToggleStopCapture()`); an Android one releases its
+  own grant (above). A toggle that still owns
   its token keeps suppressing the `handleLocalProducerClosed` restart.
 - The newest local media intent wins (WP2-S1c, fixed 2026-10-24, covered by
   `LocalToggleGuardRecoveryTests`). A mute is never dropped or deferred: a

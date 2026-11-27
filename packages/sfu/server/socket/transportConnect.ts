@@ -26,8 +26,6 @@ export const connectWebRtcTransportOnce = async (
   if (isTerminalConnectState(transport.dtlsState)) {
     throw new Error(`Transport DTLS state is ${transport.dtlsState}`);
   }
-  // ICE can start DTLS before the signaling request supplies the peer's
-  // fingerprint. "connecting" therefore does not prove connect() ran.
   if (completedTransportConnects.has(transport) || transport.dtlsState === "connected") {
     return;
   }

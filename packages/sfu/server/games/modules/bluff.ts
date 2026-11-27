@@ -15,14 +15,6 @@ import {
   normalizeGeneratedKey,
 } from "../aiContent.js";
 
-/**
- * Bluff: a Fibbage-style game. Players see a prompt with a blank, secretly
- * write a fake answer, then everyone (looking at all the fakes plus the one real
- * answer) tries to pick the truth. You score for finding the truth and for
- * fooling others into picking your lie. This showcases a different VIEW again:
- * a free-text input phase followed by a dynamic pick-one list.
- */
-
 const WRITE_MS = 40_000;
 const CHOOSE_MS = 30_000;
 const REVEAL_MS = 9_000;
@@ -220,12 +212,6 @@ const loop = createRoundLoop<BluffState>({
   toResults: (state) => ({ ...state, phase: "results" }),
 });
 
-/**
- * Typed move contract. Decoded from the untrusted `GameMove` at the top of
- * `onMove`. The `text`/`optionId` validation is centralized here; rules that
- * need current state (does the option exist, is it your own bluff) stay in the
- * switch and keep their original error messages.
- */
 export type BluffMove =
   | { type: "start" }
   | { type: "submit"; text: string }
@@ -245,8 +231,6 @@ const decodeBluffMove = (move: GameMove): BluffMove => {
         text: requireString(payloadField(move.payload, "text"), "Write something"),
       };
     case "choose":
-      // A missing/non-string optionId used to fall through to the options
-      // lookup and throw "Invalid choice"; keep that exact message here.
       return {
         type: "choose",
         optionId: requireString(payloadField(move.payload, "optionId"), "Invalid choice"),
@@ -404,7 +388,6 @@ export const bluffModule: GameModule<BluffState> = {
       submittedCount: Object.keys(state.fakes).length,
       chosenCount: Object.keys(state.picks).length,
       totalPlayers: ctx.activePlayers.length,
-      // During choose, hand out text only - never the kind or author.
       options:
         state.phase === "choose"
           ? state.options.map((o) => ({ id: o.id, text: o.text }))

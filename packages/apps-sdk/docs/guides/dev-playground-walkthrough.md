@@ -54,7 +54,7 @@ clients from publishing defaults before their initial room sync.
 1. Start web host in dev: `pnpm -C apps/web dev`
 2. Join a meeting as admin
 3. Open `More options`
-4. Select `Open dev playground`
+4. Select `Present dev playground`
 
 ## Suggested Debug Flow
 
@@ -62,7 +62,7 @@ clients from publishing defaults before their initial room sync.
 2. Join from a second client and verify sync convergence.
 3. Toggle lock and verify non-admin read-only behavior.
 4. Add presence metadata and verify awareness state updates.
-5. Close and reopen app to validate lifecycle assumptions.
+5. Close and present the app again: its content should come back.
 
 ## Suggested Contributor Exercises
 

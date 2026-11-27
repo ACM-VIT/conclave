@@ -45,18 +45,6 @@ export type RenderedSchedulingEmail = {
   text: string;
 };
 
-/**
- * Conclave's scheduling email. A light confirmation that reads cleanly in real
- * inboxes (a dark slab renders heavy and gets wrapped in white by
- * Gmail/Outlook). Identity is carried by the orange accent (#F95F4A), PolySans
- * Bulky Wide display type, the `[ c0nclav3 ]` wordmark from the OpenGraph card,
- * and the calendar chip, not by a black background.
- *
- * Alignment is deliberate, not uniform: the framing (wordmark, headline, the
- * date hero, the CTA, the sign-off) is centered for balance, while the dense
- * summary panel is left-aligned so the details scan and give the eye a steady
- * anchor in the middle. Centered → left → centered creates the rhythm.
- */
 const palette = {
   page: "#f1f1f2",
   card: "#ffffff",
@@ -66,8 +54,8 @@ const palette = {
   ink: "#15151a",
   inkSoft: "#5d5d66",
   inkFaint: "#9a9aa2",
-  accent: color.accent, // #F95F4A
-  accentInk: "#d8462e", // deeper orange that stays legible on white
+  accent: color.accent,
+  accentInk: "#d8462e",
   onAccent: "#ffffff",
 } as const;
 
@@ -99,7 +87,6 @@ const styles: Record<string, CSSProperties> = {
     fontSize: "3px",
     backgroundColor: palette.accent,
   },
-  // ---- Framing: centered ----
   header: {
     padding: `${space.xl}px ${space.xl}px 0`,
     textAlign: "center",
@@ -134,7 +121,6 @@ const styles: Record<string, CSSProperties> = {
     textAlign: "center",
     maxWidth: "330px",
   },
-  // ---- Date hero: centered focal point ----
   hero: {
     padding: `${space.xl}px ${space.xl}px ${space.lg}px`,
     textAlign: "center",
@@ -193,7 +179,6 @@ const styles: Record<string, CSSProperties> = {
     lineHeight: "1.5",
     textAlign: "center",
   },
-  // ---- Summary panel: left-aligned data ----
   panelWrap: {
     padding: `0 ${space.xl}px`,
   },
@@ -222,7 +207,6 @@ const styles: Record<string, CSSProperties> = {
     fontSize: "14px",
     lineHeight: "1.45",
   },
-  // ---- Action + sign-off: centered ----
   action: {
     padding: `${space.xl}px ${space.xl}px ${space.lg}px`,
     textAlign: "center",

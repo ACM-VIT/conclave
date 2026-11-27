@@ -1,4 +1,5 @@
 import type { Socket } from "socket.io";
+import { APP_DOCUMENT_UPDATE_BUDGET } from "@conclave/apps-sdk/limits";
 
 /**
  * A small, dependency-free token-bucket rate limiter applied per-socket.
@@ -61,6 +62,7 @@ export const takeToken = (
   socket: Socket,
   key: string,
   options: TokenBucketOptions,
+  cost = 1,
 ): boolean => {
   const store = getBucketStore(socket);
   const nowMs = Date.now();
@@ -82,12 +84,31 @@ export const takeToken = (
     refill(bucket, nowMs);
   }
 
-  if (bucket.tokens >= 1) {
-    bucket.tokens -= 1;
+  if (bucket.tokens >= cost) {
+    bucket.tokens -= cost;
     return true;
   }
 
   return false;
+};
+
+export const refundToken = (socket: Socket, key: string, options: TokenBucketOptions): void => {
+  const bucket = getBucketStore(socket).get(key);
+  if (!bucket) return;
+  refill(bucket, Date.now());
+  bucket.tokens = Math.min(options.capacity, bucket.tokens + 1);
+};
+
+export const msUntilToken = (
+  socket: Socket,
+  key: string,
+  options: TokenBucketOptions,
+): number => {
+  const bucket = getBucketStore(socket).get(key);
+  if (!bucket) return 0;
+  refill(bucket, Date.now());
+  if (bucket.tokens >= 1) return 0;
+  return Math.ceil(((1 - bucket.tokens) / options.refillPerSec) * 1000);
 };
 
 /**
@@ -99,10 +120,15 @@ export const RATE_LIMITS = {
   aiModels: { capacity: 12, refillPerSec: 0.5 },
   // Awareness updates are the chattiest (cursor moves, presence). ~20/s sustained.
   appsAwareness: { capacity: 40, refillPerSec: 20 },
+  // Presenting, closing or clearing an app measures the document leaving the
+  // stage; hosts change the stage a few times a minute.
+  appsStage: { capacity: 10, refillPerSec: 1 },
   // Full Yjs sync can encode a large document; keep request bursts modest.
   appsYjsSync: { capacity: 10, refillPerSec: 2 },
   // Yjs document updates: bursty while typing, so allow a generous burst.
-  appsYjsUpdate: { capacity: 60, refillPerSec: 30 },
+  appsYjsUpdate: APP_DOCUMENT_UPDATE_BUDGET,
+  appsNoopCheck: { capacity: 20, refillPerSec: 10 },
+  appsRefusalLog: { capacity: 5, refillPerSec: 1 },
   // Chat messages: ~5/s sustained, small burst.
   chat: { capacity: 10, refillPerSec: 5 },
   // Image uploads are much heavier than text messages; authorize a small burst.
@@ -139,6 +165,8 @@ export const RATE_LIMITS = {
   producerTransportProfile: { capacity: 8, refillPerSec: 2 },
   // Producer allocation is expensive enough to reject rapid churn.
   mediaProduce: { capacity: 12, refillPerSec: 2 },
+  senderPacketCounts: { capacity: 6, refillPerSec: 1 },
+  ownPacketCounts: { capacity: 6, refillPerSec: 1 },
   // Capabilities are stable per WebRTC handler; permit one refinement/retry,
   // but prevent a client from repeatedly churning the room codec policy.
   mediaCapabilities: { capacity: 2, refillPerSec: 0.05 },
@@ -163,4 +191,11 @@ export const RATE_LIMITS = {
   gameMove: { capacity: 20, refillPerSec: 8 },
   // Game lifecycle (start/end/state): low frequency, admin-driven.
   gameControl: { capacity: 10, refillPerSec: 2 },
+  // Authority app actions. Each action also has its own per-person limit;
+  // this is the ceiling for one socket across every app and action.
+  appsAuthorityAct: { capacity: 60, refillPerSec: 20 },
+  // Capability and subscribe requests: once per join, reconnect or panel open.
+  appsAuthorityControl: { capacity: 20, refillPerSec: 4 },
+  // One-shot reads such as an export. They can encode up to a megabyte.
+  appsAuthorityQuery: { capacity: 6, refillPerSec: 1 },
 } as const satisfies Record<string, TokenBucketOptions>;

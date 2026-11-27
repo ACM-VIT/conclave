@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronUp,
   Hand,
+  Info,
   MessageCircleQuestion,
   Mic,
   MicOff,
@@ -19,6 +20,7 @@ import {
 import { memo, useEffect, useMemo, useState } from "react";
 import type { Socket } from "socket.io-client";
 import { Avatar } from "@conclave/ui-tokens/web";
+import { useConnectionRequest } from "../hooks/useConnectionRequest";
 import { useMeetVolume } from "../hooks/useMeetVolume";
 import type {
   Participant,
@@ -26,7 +28,15 @@ import type {
   WebinarQaEntry,
   WebinarQaModerateRequest,
 } from "../lib/types";
+import { hostDecisionLimitNotice } from "../lib/host-decision-limit";
 import { formatDisplayName, isSystemUserId } from "../lib/utils";
+import {
+  admitAllPendingUsers,
+  admitPendingUser,
+  denyPendingUser,
+} from "../lib/admissions";
+import PanelNoticeSlot from "./PanelNoticeSlot";
+import { QaModerationActions } from "./qa/QaPanel";
 
 interface ParticipantsPanelProps {
   participants: Map<string, Participant>;
@@ -52,15 +62,16 @@ interface ParticipantsPanelProps {
   ) => Promise<{ ok: boolean; error?: string }>;
   onPromoteWebinarAttendee?: (
     userId: string,
-  ) => Promise<{ ok: boolean; error?: string }>;
+  ) => Promise<{ ok: boolean; error?: string; code?: string }>;
   onDemoteWebinarParticipant?: (
     userId: string,
   ) => Promise<{ ok: boolean; error?: string }>;
+  webinarQaWaiting?: boolean;
+  webinarQaConnection?: unknown;
 }
 
 const ICON = 18;
 const STROKE = 1.75;
-const ADMIT_ALL_ACK_TIMEOUT_MS = 10000;
 
 const getAdminActionError = (
   response: unknown,
@@ -95,6 +106,8 @@ function ParticipantsPanel({
   onModerateWebinarQuestion,
   onPromoteWebinarAttendee,
   onDemoteWebinarParticipant,
+  webinarQaWaiting = false,
+  webinarQaConnection,
 }: ParticipantsPanelProps & {
   socket: Socket | null;
   isAdmin?: boolean | null;
@@ -138,7 +151,16 @@ function ParticipantsPanel({
   const [pendingKickUserId, setPendingKickUserId] = useState<string | null>(null);
   const [removingUserId, setRemovingUserId] = useState<string | null>(null);
   const [isAdmittingAll, setIsAdmittingAll] = useState(false);
-  const [hostActionError, setHostActionError] = useState<string | null>(null);
+  // What the host is told about its last action: an error, or a calm
+  // notice when the action could not be done and nothing changed.
+  const [hostActionMessage, setHostActionMessage] = useState<{
+    text: string;
+    calm: boolean;
+  } | null>(null);
+  const setHostActionError = (text: string | null) =>
+    setHostActionMessage(text ? { text, calm: false } : null);
+  const setHostActionNotice = (text: string) =>
+    setHostActionMessage({ text, calm: true });
   const [isQaSectionExpanded, setIsQaSectionExpanded] = useState(true);
   const [isAttendeeSectionExpanded, setIsAttendeeSectionExpanded] =
     useState(true);
@@ -159,21 +181,42 @@ function ParticipantsPanel({
         );
       });
   }, [webinarEnabled, webinarQaEntries]);
+  // A question a host hid stays here, after the open ones, so whoever
+  // moderates the webinar can bring it back.
+  const hostWebinarQuestions = useMemo(() => {
+    if (!webinarEnabled) return [];
+    const hidden = webinarQaEntries
+      .filter((entry) => entry.status === "dismissed")
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+    return [...openWebinarQuestions, ...hidden];
+  }, [openWebinarQuestions, webinarEnabled, webinarQaEntries]);
 
   const runWebinarAction = async (
     key: string,
-    action: () => Promise<{ ok: boolean; error?: string }>,
+    action: () => Promise<{ ok: boolean; error?: string; code?: string }>,
   ) => {
     setBusyWebinarActionKey(key);
     setHostActionError(null);
     try {
       const result = await action();
-      if (!result.ok) {
+      const notice = result.ok ? null : hostDecisionLimitNotice(result, "invite");
+      if (notice) {
+        setHostActionNotice(notice);
+      } else if (!result.ok) {
         setHostActionError(result.error ?? "Webinar action failed");
       }
     } finally {
       setBusyWebinarActionKey(null);
     }
+  };
+  const moderatingQa = useConnectionRequest(webinarQaConnection);
+  const moderateQuestion = async (
+    id: string,
+    action: () => Promise<{ ok: boolean; error?: string }>,
+  ) => {
+    setHostActionError(null);
+    const result = await moderatingQa.run(id, action);
+    if (result && !result.ok) setHostActionError(result.error ?? "Webinar action failed");
   };
   const effectiveHostUserId = hostUserId ?? (isAdmin ? currentUserId : null);
   const effectiveHostUserIds = new Set<string>(
@@ -216,18 +259,12 @@ function ParticipantsPanel({
     if (!socket || !isAdmin || isAdmittingAll) return;
     setHostActionError(null);
     setIsAdmittingAll(true);
-    socket
-      .timeout(ADMIT_ALL_ACK_TIMEOUT_MS)
-      .emit(
-        "admin:admitAllPending",
-        (timeoutError: Error | null, res: unknown) => {
-          setIsAdmittingAll(false);
-          const error = timeoutError
-            ? "Couldn’t admit everyone."
-            : getAdminActionError(res, "Couldn’t admit everyone.");
-          if (error) setHostActionError(error);
-        },
-      );
+    admitAllPendingUsers(socket, (outcome) => {
+      setIsAdmittingAll(false);
+      if (!outcome) return;
+      if (outcome.kind === "notice") setHostActionNotice(outcome.text);
+      else setHostActionError(outcome.text);
+    });
   };
 
   const handlePromoteHost = (targetUserId: string) => {
@@ -353,15 +390,25 @@ function ParticipantsPanel({
           <X size={ICON} strokeWidth={STROKE} />
         </button>
       </header>
+      <PanelNoticeSlot />
 
       {isAdmin && (
         <section className="border-b border-white/10 px-4 py-3">
           <h3 className="mb-2.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#71717a]">
             Host controls
           </h3>
-          {hostActionError && (
+          {hostActionMessage?.calm && (
+            <div
+              role="status"
+              className="mb-2.5 flex items-start gap-2 rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-[12px] text-[#fafafa]/80"
+            >
+              <Info size={14} strokeWidth={STROKE} className="mt-px shrink-0 text-[#fafafa]/60" />
+              <span>{hostActionMessage.text}</span>
+            </div>
+          )}
+          {hostActionMessage && !hostActionMessage.calm && (
             <div className="mb-2.5 rounded-md border border-[#ea4335]/25 bg-[#ea4335]/10 px-2.5 py-1.5 text-[12px] text-[#ea4335]">
-              {hostActionError}
+              {hostActionMessage.text}
             </div>
           )}
           <div className="flex gap-2">
@@ -437,15 +484,14 @@ function ParticipantsPanel({
                     <div className="flex shrink-0 items-center gap-1.5">
                       <button
                         type="button"
-                        onClick={() =>
-                          socket?.emit(
-                            "admitUser",
-                            { userId },
-                            (res: { success?: boolean; error?: string }) => {
-                              if (res?.error) onPendingUserStale?.(userId);
-                            },
-                          )
-                        }
+                        onClick={() => {
+                          if (socket) {
+                            admitPendingUser(socket, userId, {
+                              onStale: onPendingUserStale,
+                              onNotice: setHostActionNotice,
+                            });
+                          }
+                        }}
                         className={admitActionClass}
                         title="Admit to meeting"
                         aria-label={`Admit ${pendingName}`}
@@ -454,20 +500,19 @@ function ParticipantsPanel({
                       </button>
                       <button
                         type="button"
-                        onClick={() =>
-                          socket?.emit(
-                            "rejectUser",
-                            { userId },
-                            (res: { success?: boolean; error?: string }) => {
-                              if (res?.error) onPendingUserStale?.(userId);
-                            },
-                          )
-                        }
+                        onClick={() => {
+                          if (socket) {
+                            denyPendingUser(socket, userId, {
+                              onStale: onPendingUserStale,
+                              onNotice: setHostActionNotice,
+                            });
+                          }
+                        }}
                         className={neutralActionClass}
                         title="Deny entry"
-                        aria-label={`Reject ${pendingName}`}
+                        aria-label={`Deny ${pendingName}`}
                       >
-                        Reject
+                        Deny
                       </button>
                     </div>
                   </div>
@@ -584,94 +629,65 @@ function ParticipantsPanel({
           </button>
           {isQaSectionExpanded && (
             <div className="px-4 pb-3">
-              {openWebinarQuestions.length === 0 ? (
+              {hostWebinarQuestions.length === 0 ? (
                 <p className="text-[12px] leading-snug text-[#71717a]">
                   Attendee questions land here for you to answer live or
-                  dismiss.
+                  hide.
                 </p>
               ) : (
                 <div className="max-h-56 space-y-1.5 overflow-y-auto">
-                  {openWebinarQuestions.map((entry) => {
+                  {hostWebinarQuestions.map((entry) => {
                     const isAnswering = entry.status === "answering";
-                    const isAnswered = entry.status === "answered";
+                    const isHidden = entry.status === "dismissed";
                     return (
                       <div
                         key={entry.id}
+                        data-testid="webinar-host-question"
                         className={`rounded-lg border px-2.5 py-2 ${
                           isAnswering
                             ? "border-[#F95F4A]/40 bg-[#F95F4A]/[0.06]"
-                            : "border-white/10 bg-black/20"
+                            : isHidden
+                              ? "border-white/[0.06] bg-transparent"
+                              : "border-white/10 bg-black/20"
                         }`}
                       >
                         <div className="flex items-center justify-between gap-2">
-                          <span className="truncate text-[11.5px] font-medium text-[#a1a1aa]">
-                            {formatDisplayName(entry.displayName)}
+                          <span className="flex min-w-0 items-center gap-1.5">
+                            <span className="truncate text-[11.5px] font-medium text-[#a1a1aa]">
+                              {formatDisplayName(entry.displayName)}
+                            </span>
+                            {isHidden && (
+                              <span className="shrink-0 rounded-full border border-white/[0.12] px-2 py-0.5 text-[9.5px] font-medium uppercase tracking-[0.08em] text-[#fafafa]/50">
+                                Hidden
+                              </span>
+                            )}
                           </span>
                           <span className="inline-flex shrink-0 items-center gap-1 text-[11px] tabular-nums text-[#71717a]">
                             <ChevronUp size={12} strokeWidth={STROKE} />
                             {entry.upvotes}
                           </span>
                         </div>
-                        <p className="mt-1 text-[13px] leading-snug text-[#fafafa]">
+                        <p
+                          className={`mt-1 text-[13px] leading-snug ${
+                            isHidden ? "text-[#fafafa]/50" : "text-[#fafafa]"
+                          }`}
+                        >
                           {entry.question}
                         </p>
                         {onModerateWebinarQuestion && (
-                          <div className="mt-2 flex flex-wrap gap-1.5">
-                            {!isAnswering && !isAnswered && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  void runWebinarAction(
-                                    `qa-${entry.id}`,
-                                    () =>
-                                      onModerateWebinarQuestion({
-                                        id: entry.id,
-                                        action: "answering",
-                                      }),
-                                  )
-                                }
-                                disabled={busyWebinarActionKey === `qa-${entry.id}`}
-                                className={hostActionClass}
-                              >
-                                Answer live
-                              </button>
-                            )}
-                            {!isAnswered && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  void runWebinarAction(
-                                    `qa-${entry.id}`,
-                                    () =>
-                                      onModerateWebinarQuestion({
-                                        id: entry.id,
-                                        action: "answered",
-                                      }),
-                                  )
-                                }
-                                disabled={busyWebinarActionKey === `qa-${entry.id}`}
-                                className={neutralActionClass}
-                              >
-                                {isAnswering ? "Done" : "Mark answered"}
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() =>
-                                void runWebinarAction(
-                                  `qa-${entry.id}`,
-                                  () =>
-                                    onModerateWebinarQuestion({
-                                      id: entry.id,
-                                      action: "dismissed",
-                                    }),
+                          <div className="mt-2">
+                            <QaModerationActions
+                              status={entry.status}
+                              disabled={webinarQaWaiting || moderatingQa.busy === entry.id}
+                              onAction={(action) =>
+                                void moderateQuestion(entry.id, () =>
+                                  onModerateWebinarQuestion({
+                                    id: entry.id,
+                                    action,
+                                  }),
                                 )
                               }
-                              disabled={busyWebinarActionKey === `qa-${entry.id}`}
-                              className={neutralActionClass}
-                            >
-                              Dismiss
-                            </button>
+                            />
                           </div>
                         )}
                       </div>

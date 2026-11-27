@@ -1,0 +1,81 @@
+# Staging SFU: one instance on the production VM, run from a separate checkout
+# of the staging branch with its own .env (secret, Redis password, URLs).
+# Deploy it with:
+#   SFU_COMPOSE_FILE=docker-compose.sfu-staging.yml ./scripts/deploy-sfu.sh
+# Runbook: docs/ops/staging.md.
+# Every Redis variable the staging SFU reads points at staging's own Redis,
+# built from its password and port, so no REDIS_URL or SFU_REDIS_URL from the
+# shell or a production .env can reach it. The preflight refuses any other.
+x-staging-redis-url: &staging-redis-url "redis://:${STAGING_REDIS_PASSWORD:?set STAGING_REDIS_PASSWORD in .env}@127.0.0.1:${STAGING_REDIS_PORT:-6380}/0"
+
+services:
+  sfu-image:
+    image: conclave-staging-sfu-build
+    build:
+      context: .
+      dockerfile: packages/sfu/Dockerfile
+    profiles: ["build"]
+
+  sfu-staging:
+    extends:
+      file: docker-compose.sfu.yml
+      service: sfu-a
+    # Its own image name: sharing production's would let a staging deploy
+    # retag the image production's sfu-a starts from.
+    image: ${SFU_IMAGE_SFU_STAGING:-conclave-staging-sfu}
+    environment:
+      SFU_PORT: "${SFU_STAGING_PORT:-3033}"
+      SFU_CORS_ORIGINS: ${STAGING_SFU_CORS_ORIGINS:-https://staging.conclave.acmvit.in}
+      SFU_INSTANCE_ID: "sfu-staging"
+      SFU_PUBLIC_URL: ${SFU_STAGING_PUBLIC_URL:-}
+      SFU_REGION: ${SFU_REGION:-staging}
+      RTC_MIN_PORT: "${SFU_STAGING_RTC_MIN_PORT:-42001}"
+      RTC_MAX_PORT: "${SFU_STAGING_RTC_MAX_PORT:-42200}"
+      SFU_VERSION: "staging"
+      SFU_WORKER_COUNT: "1"
+      # Pinned so the firewall split in docs/ops/staging.md (public WebRTC on
+      # 42001-42004, relay-only RTP on 42005-42200) holds whatever the staging
+      # .env says.
+      SFU_WEBRTC_PORT_BUDGET: "4"
+      RECORDING_STORAGE_PATH: /var/lib/conclave/recordings
+      REDIS_URL: *staging-redis-url
+      SFU_REDIS_URL: *staging-redis-url
+      SFU_PERSISTENCE_REDIS_URL: *staging-redis-url
+      BROWSER_SERVICE_URL: "${STAGING_BROWSER_SERVICE_URL:?set STAGING_BROWSER_SERVICE_URL in .env to staging's own shared-browser service}"
+      TRANSCRIPT_WORKER_URL: "${STAGING_TRANSCRIPT_WORKER_URL:?set STAGING_TRANSCRIPT_WORKER_URL in .env to staging's own transcript worker}"
+    # Its own state directory, so a staging build can never open the
+    # production SQLite file.
+    volumes:
+      - ${STAGING_STATE_DIR:-/var/lib/conclave-staging}:/var/lib/conclave/recordings
+    # Staging shares the host with production calls, so it gets a fixed
+    # slice of it.
+    mem_limit: 768m
+    cpus: 0.75
+    depends_on:
+      - redis
+
+  # Staging's own Redis. Redis pub/sub ignores the database number, so a
+  # staging SFU on the production Redis would join production's socket.io
+  # channels even on another database.
+  redis:
+    image: redis:7.2
+    network_mode: "host"
+    environment:
+      REDIS_PASSWORD: "${STAGING_REDIS_PASSWORD:?set STAGING_REDIS_PASSWORD in .env}"
+      REDIS_PORT: "${STAGING_REDIS_PORT:-6380}"
+    # The password reaches redis-server as config on stdin, not as an
+    # argument any host user could read in the process list. The image's own
+    # entrypoint still drops to the redis user.
+    command:
+      - sh
+      - -c
+      - >-
+        printf 'requirepass "%s"\n' "$$(printf '%s' "$$REDIS_PASSWORD" | sed 's/[\\"]/\\&/g')" |
+        exec docker-entrypoint.sh redis-server - --port "$$REDIS_PORT" --bind 127.0.0.1 --unixsocket /tmp/redis.sock --unixsocketperm 700 --appendonly yes
+    # A sibling of the SFU's state dir, never inside it: whatever walks that
+    # dir (a restore's ownership fix, a backup's file archive) never reaches
+    # Redis's own files.
+    volumes:
+      - ${STAGING_REDIS_DIR:-/var/lib/conclave-staging-redis}:/data
+    mem_limit: 128m
+    restart: unless-stopped

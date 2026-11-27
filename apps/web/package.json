@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "cf:build": "opennextjs-cloudflare build && node scripts/prune-open-next-og.mjs",
+    "cf:build": "POSTHOG_SOURCEMAPS=upload opennextjs-cloudflare build && node scripts/prune-open-next-og.mjs && node scripts/upload-posthog-sourcemaps.mjs",
     "cf:preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
     "cf:deploy": "pnpm run cf:build && pnpm run cf:deploy:direct",
     "cf:deploy:direct": "wrangler deploy --config wrangler.jsonc --domain conclave.acmvit.in --autoconfig false",
@@ -18,13 +18,17 @@
     "transcript:typecheck": "tsc --noEmit -p transcript-worker/tsconfig.json",
     "analyze": "next experimental-analyze --output",
     "analyze:serve": "next experimental-analyze --serve",
-    "test:unit": "vitest run --dir test",
-    "test": "pnpm run test:unit",
+    "test:unit": "pnpm run test:unit-a && pnpm run test:unit-b",
+    "test:unit-a": "vitest run --dir test --exclude \"**/transcript-caption-oracle.test.ts\" --shard=1/2",
+    "test:unit-b": "vitest run --dir test --exclude \"**/transcript-caption-oracle.test.ts\" --shard=2/2",
+    "test:transcript-oracle": "vitest run test/transcript-caption-oracle.test.ts",
+    "test": "pnpm run test:unit && pnpm run test:transcript-oracle",
+    "test:outbox-model:extended": "OUTBOX_SIM_RUNS=10000 vitest run test/telemetry-outbox-model.test.ts",
     "typecheck": "next typegen && tsc --noEmit && pnpm run scheduling-email:typecheck && pnpm run transcript:typecheck",
     "sync:noise-suppressor": "node scripts/sync-noise-suppressor-assets.mjs",
     "sync:mediapipe": "node scripts/sync-mediapipe-assets.mjs",
     "start": "next start",
-    "lint": "eslint \"src/**/*.{ts,tsx}\""
+    "lint": "eslint ."
   },
   "dependencies": {
     "@conclave/ai": "workspace:*",
@@ -57,7 +61,8 @@
     "streamdown": "^2.8.0",
     "tailwind-merge": "^3.7.1",
     "use-stick-to-bottom": "^1.1.6",
-    "vaul": "^1.1.2"
+    "vaul": "^1.1.2",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261120.1",

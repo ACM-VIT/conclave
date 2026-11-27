@@ -51,7 +51,6 @@ describe("most likely to game", () => {
     expect(view.prompt).toBeNull();
     expect(view.answeredCount).toBe(0);
     expect(view.totalPlayers).toBe(3);
-    // The vote-target roster stays the full seat list.
     expect(view.players.map((entry) => entry.id)).toEqual(["host", "p2", "p3"]);
   });
 
@@ -72,7 +71,6 @@ describe("most likely to game", () => {
       { playerId: "p3", type: "vote", payload: { target: "host" } },
       context(2_000),
     );
-    // Every present player voted -> deadline collapses, tick reveals.
     state = mostLikelyToModule.onTick!(state, context(2_000));
 
     expect(mostLikelyToModule.getPhase(state)).toBe("reveal");
@@ -108,7 +106,6 @@ describe("most likely to game", () => {
   });
 
   it("advances early once every present player votes, ignoring an absent seat", () => {
-    // p3 holds a seat but is disconnected: only host and p2 are active.
     const active = players.filter((player) => player.id !== "p3");
 
     let state = mostLikelyToModule.onMove(
@@ -116,7 +113,6 @@ describe("most likely to game", () => {
       { playerId: "host", type: "vote", payload: { target: "p3" } },
       context(2_000, { activePlayers: active }),
     );
-    // Still open: not every present player has voted.
     expect(state.deadline).toBe(1_000 + 15_000);
 
     state = mostLikelyToModule.onMove(
@@ -124,8 +120,6 @@ describe("most likely to game", () => {
       { playerId: "p2", type: "vote", payload: { target: "p3" } },
       context(2_000, { activePlayers: active }),
     );
-    // Both present players voted -> deadline collapses to now. Under the old
-    // ctx.players logic (length 3) this would still sit at the full deadline.
     expect(state.deadline).toBe(2_000);
 
     const advanced = mostLikelyToModule.onTick!(

@@ -1,14 +1,16 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import MeetsClient from "./meets-client";
+import {
+  createGuestPassSession,
+  guestPassRequestFor,
+} from "./lib/guest-pass-session";
 import type { JoinMode } from "./lib/types";
 import type { RoomInfo } from "@/lib/sfu-types";
-import {
-  canonicalizeSfuClientId,
-  resolveBrowserSfuClientId,
-} from "@/lib/sfu-client-id";
-import { readResponseError } from "./lib/utils";
+import { resolveMeetingClientId } from "@/lib/sfu-client-id";
+import { requestJoinInfo } from "./lib/join-info";
+import { getOrCreateSessionId, readResponseError } from "./lib/utils";
 
 const reactionAssets = [
   "aura.gif",
@@ -19,37 +21,12 @@ const reactionAssets = [
   "yawn.gif",
 ];
 
-const readError = readResponseError;
-
-const defaultClientId = resolveBrowserSfuClientId();
-const JOIN_INFO_REQUEST_TIMEOUT_MS = 15000;
-
-const fetchJoinInfoWithTimeout = async (
-  init: RequestInit,
-): Promise<Response> => {
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(
-    () => controller.abort(),
-    JOIN_INFO_REQUEST_TIMEOUT_MS,
-  );
-  try {
-    return await fetch("/api/sfu/join", {
-      ...init,
-      signal: controller.signal,
-    });
-  } catch (error) {
-    if (controller.signal.aborted) {
-      throw new Error("Join info request timeout");
-    }
-    throw error;
-  } finally {
-    window.clearTimeout(timeoutId);
-  }
-};
-
 type MeetsClientPageProps = {
   initialRoomId?: string;
   forceJoinOnly?: boolean;
+  // A join may open the room when the code is known to be real (a scheduled
+  // meeting). Otherwise only hosts and tabs that were in the room create it.
+  allowRoomCreation?: boolean;
   bypassMediaPermissions?: boolean;
   sfuClientId?: string;
   joinMode?: JoinMode;
@@ -67,6 +44,7 @@ type MeetsClientPageProps = {
 export default function MeetsClientPage({
   initialRoomId,
   forceJoinOnly = false,
+  allowRoomCreation = false,
   bypassMediaPermissions = false,
   sfuClientId,
   joinMode = "meeting",
@@ -76,57 +54,40 @@ export default function MeetsClientPage({
   user,
   isAdmin = false,
 }: MeetsClientPageProps) {
+  const [guestPass] = useState(() =>
+    createGuestPassSession(guestPassRequestFor(user)),
+  );
+  useEffect(() => guestPass.pageLoaded(), [guestPass]);
   const defaultUser = user;
   const resolvedIsAdmin = isAdmin;
-  const resolvedClientId =
-    canonicalizeSfuClientId(sfuClientId) || defaultClientId;
+  const resolvedClientId = resolveMeetingClientId(sfuClientId);
   const usesRoomRouting = resolvedClientId === "conclave";
 
   const getJoinInfo = useCallback(
-    async (
+    (
       roomId: string,
       sessionId: string,
       options?: {
         user?: { id?: string; email?: string | null; name?: string | null };
         isHost?: boolean;
         joinMode?: JoinMode;
+        signal?: AbortSignal;
       }
-    ) => {
-      const resolvedUser = options?.user ?? defaultUser;
-      const isHost = Boolean(options?.isHost);
-      const resolvedJoinMode = options?.joinMode ?? joinMode;
-      const response = await fetchJoinInfoWithTimeout({
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-sfu-client": resolvedClientId,
-        },
-        body: JSON.stringify({
+    ) =>
+      guestPass.join((guestFields) =>
+        requestJoinInfo({
           roomId,
           sessionId,
-          user: resolvedUser,
-          isHost,
-          allowRoomCreation: forceJoinOnly,
+          user: options?.user ?? defaultUser,
+          isHost: Boolean(options?.isHost),
+          isKnownMeeting: allowRoomCreation,
           clientId: resolvedClientId,
-          joinMode: resolvedJoinMode,
+          joinMode: options?.joinMode ?? joinMode,
+          guestFields,
+          signal: options?.signal,
         }),
-      });
-
-      if (!response.ok) {
-        const error = new Error(await readError(response)) as Error & {
-          responseStatus?: number;
-        };
-        error.responseStatus = response.status;
-        throw error;
-      }
-
-      return (await response.json()) as {
-        token: string;
-        sfuUrl: string;
-        iceServers?: RTCIceServer[];
-      };
-    },
-    [forceJoinOnly, joinMode, defaultUser, resolvedClientId]
+      ),
+    [allowRoomCreation, joinMode, defaultUser, resolvedClientId, guestPass]
   );
 
   const getRooms = useCallback(async () => {
@@ -135,7 +96,7 @@ export default function MeetsClientPage({
       headers: { "x-sfu-client": resolvedClientId },
     });
     if (!response.ok) {
-      throw new Error(await readError(response));
+      throw new Error(await readResponseError(response));
     }
     const data = (await response.json()) as { rooms?: unknown };
     return (Array.isArray(data.rooms) ? data.rooms : []) as RoomInfo[];
@@ -145,15 +106,19 @@ export default function MeetsClientPage({
     const normalizedRoomId = roomId.trim();
     if (!normalizedRoomId) return null;
 
+    // The headcount is only for people in or let into the room; the server
+    // answers 403 to everyone else, which shows nothing.
+    const query = new URLSearchParams({ sessionId: getOrCreateSessionId() });
     const response = await fetch(
-      `/api/sfu/rooms/${encodeURIComponent(normalizedRoomId)}`,
+      `/api/sfu/rooms/${encodeURIComponent(normalizedRoomId)}?${query}`,
       {
         cache: "no-store",
         headers: { "x-sfu-client": resolvedClientId },
       },
     );
+    if (response.status === 403) return null;
     if (!response.ok) {
-      throw new Error(await readError(response));
+      throw new Error(await readResponseError(response));
     }
 
     const data = (await response.json()) as { room?: unknown };
@@ -174,6 +139,7 @@ export default function MeetsClientPage({
     <div className="w-full h-full min-h-[100dvh] bg-[#0a0a0b] overflow-auto relative">
       <MeetsClient
         initialRoomId={resolvedInitialRoomId}
+        clientId={resolvedClientId}
         enableRoomRouting={usesRoomRouting}
         forceJoinOnly={forceJoinOnly}
         bypassMediaPermissions={bypassMediaPermissions}

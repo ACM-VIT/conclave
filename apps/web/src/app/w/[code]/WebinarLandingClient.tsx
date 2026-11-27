@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, CalendarPlus, Check, Copy } from "lucide-react";
 import { useSession } from "@/lib/auth-client";
+import { buildWebinarPath } from "@/lib/meeting-links";
+import { webOrigin } from "@/lib/meeting-origin";
 import MeetsClientPage from "../../meets-client-page";
 
 const GUEST_USER_STORAGE_KEY = "conclave:guest-user";
@@ -65,6 +67,7 @@ export type PublicScheduledWebinar = {
 
 type Props = {
   webinarLinkCode: string;
+  clientId: string;
   initialWebinar: PublicScheduledWebinar | null;
 };
 
@@ -106,7 +109,7 @@ const formatStartString = (timestamp: number): string => {
   });
 };
 
-const buildGoogleCalendarUrl = (webinar: PublicScheduledWebinar): string => {
+const buildGoogleCalendarUrl = (webinar: PublicScheduledWebinar, shareUrl: string): string => {
   const startIso = new Date(webinar.scheduledStartAt)
     .toISOString()
     .replace(/[-:]/g, "")
@@ -119,8 +122,8 @@ const buildGoogleCalendarUrl = (webinar: PublicScheduledWebinar): string => {
     action: "TEMPLATE",
     text: webinar.title,
     dates: `${startIso}/${endIso}`,
-    details: `${webinar.description ?? ""}\n\nJoin: ${webinar.webinarLink}`,
-    location: webinar.webinarLink,
+    details: `${webinar.description ?? ""}\n\nJoin: ${shareUrl}`,
+    location: shareUrl,
   });
   return `https://calendar.google.com/calendar/render?${params.toString()}`;
 };
@@ -139,6 +142,7 @@ const StatusCard = ({ children }: { children: React.ReactNode }) => (
 
 export default function WebinarLandingClient({
   webinarLinkCode,
+  clientId,
   initialWebinar,
 }: Props) {
   const [webinar, setWebinar] = useState<PublicScheduledWebinar | null>(
@@ -178,17 +182,18 @@ export default function WebinarLandingClient({
   useEffect(() => {
     if (!webinar) return;
     if (webinar.status === "ended" || webinar.status === "cancelled") return;
+    const query = new URLSearchParams({ clientId });
     const refreshWebinar = async () => {
       try {
         const response = await fetch(
-          `/api/webinars/by-slug/${encodeURIComponent(webinar.linkSlug)}`,
+          `/api/webinars/by-slug/${encodeURIComponent(webinar.linkSlug)}?${query}`,
           { cache: "no-store" },
         );
         if (!response.ok) return;
         const data = (await response.json()) as {
           scheduledWebinar?: PublicScheduledWebinar | null;
         };
-        if (data?.scheduledWebinar) setWebinar(data.scheduledWebinar);
+        if (data?.scheduledWebinar?.clientId === clientId) setWebinar(data.scheduledWebinar);
       } catch {
       }
     };
@@ -196,7 +201,7 @@ export default function WebinarLandingClient({
       void refreshWebinar();
     }, 20_000);
     return () => window.clearInterval(interval);
-  }, [webinar]);
+  }, [clientId, webinar]);
 
   const isOpen = useMemo(() => {
     if (!webinar) return true;
@@ -279,7 +284,7 @@ export default function WebinarLandingClient({
         initialRoomId={webinarLinkCode}
         forceJoinOnly={true}
         bypassMediaPermissions={true}
-        sfuClientId={webinar?.clientId}
+        sfuClientId={clientId}
         joinMode="webinar_attendee"
         autoJoinOnMount={true}
         hideJoinUI={true}
@@ -318,10 +323,13 @@ export default function WebinarLandingClient({
   const earlyEntryWindowMs = (webinar.earlyEntryMinutes ?? 0) * 60 * 1000;
   const msToLobby = webinar.scheduledStartAt - earlyEntryWindowMs - now;
   const countdown = formatCountdown(msToStart);
+  const sharePath = buildWebinarPath({ slug: webinar.linkSlug, clientId });
+  const shareOrigin = webOrigin(webinar.webinarLink);
+  const shareUrl = sharePath && shareOrigin ? `${shareOrigin}${sharePath}` : null;
 
   const handleCopy = (): void => {
-    if (typeof navigator === "undefined" || !navigator.clipboard) return;
-    void navigator.clipboard.writeText(webinar.webinarLink).then(() => {
+    if (!shareUrl || typeof navigator === "undefined" || !navigator.clipboard) return;
+    void navigator.clipboard.writeText(shareUrl).then(() => {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1800);
     });
@@ -370,19 +378,22 @@ export default function WebinarLandingClient({
         ) : null}
 
         <div className="mt-8 flex flex-col gap-2.5">
-          <a
-            href={buildGoogleCalendarUrl(webinar)}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#F95F4A] text-[15px] font-medium text-white transition-[filter] duration-150 hover:brightness-[1.05]"
-          >
-            <CalendarPlus className="h-4 w-4" />
-            Add to calendar
-          </a>
+          {shareUrl ? (
+            <a
+              href={buildGoogleCalendarUrl(webinar, shareUrl)}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#F95F4A] text-[15px] font-medium text-white transition-[filter] duration-150 hover:brightness-[1.05]"
+            >
+              <CalendarPlus className="h-4 w-4" />
+              Add to calendar
+            </a>
+          ) : null}
           <button
             type="button"
             onClick={handleCopy}
-            className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] text-[15px] font-medium text-[#fafafa] transition-colors duration-150 hover:bg-white/[0.08]"
+            disabled={!shareUrl}
+            className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] text-[15px] font-medium text-[#fafafa] transition-colors duration-150 enabled:hover:bg-white/[0.08] disabled:opacity-40"
           >
             {copied ? (
               <Check className="h-4 w-4 text-[#F95F4A]" />

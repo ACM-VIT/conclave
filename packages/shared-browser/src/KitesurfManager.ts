@@ -141,10 +141,6 @@ export const validateAgentNavigationUrl = (value: string): URL => {
 
 const SEARCH_FORM_LANDMARK_SELECTOR = "search, [role='search']";
 
-// Keep this as a string rather than a transpiled callback. Development
-// runners such as tsx/esbuild can inject helpers (for example `__name`) into
-// function bodies; those helpers do not exist when Puppeteer serializes the
-// callback into the remote browser isolate.
 const AGENT_OBSERVATION_SCRIPT = `(() => {
     const MAX_TEXT_LENGTH = 12000;
     const MAX_ELEMENTS = 120;

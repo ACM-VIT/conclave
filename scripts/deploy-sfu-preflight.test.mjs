@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   SfuDeployPreflightError,
@@ -19,6 +25,8 @@ const makeService = ({
 }) => ({
   environment: {
     ANNOUNCED_IP: announcedIp,
+    NODE_ENV: "production",
+    SFU_CORS_ORIGINS: "https://conclave.example",
     RTC_MAX_PORT: String(maxPort),
     RTC_MIN_PORT: String(minPort),
     SFU_INSTANCE_ID: instanceId,
@@ -28,7 +36,10 @@ const makeService = ({
     SFU_REGION: region,
     SFU_REQUIRE_REDIS_ADAPTER: "1",
     SFU_SECRET: "test-secret-not-for-production",
+    CONCLAVE_SQLITE_PATH: "/var/lib/conclave/recordings/conclave.sqlite",
+    RECORDING_STORAGE_PATH: "/var/lib/conclave/recordings",
   },
+  volumes: [{ type: "bind", source: "/var/lib/conclave/recordings", target: "/var/lib/conclave/recordings" }],
 });
 
 const makeCompose = () => ({
@@ -110,6 +121,109 @@ test("config-only validates without performing a network request", async () => {
   assert.equal(fetched, false);
 });
 
+test("deploy preflight and SFU startup agree on configured RTC ports", () => {
+  const valid = [
+    ["40000", "40999"],
+    [" 00001 ", "65535"],
+  ];
+  const invalid = [
+    ["typo", "40999"],
+    ["40000", "typo"],
+    ["", "40999"],
+    ["40000", " "],
+    ["0x9c40", "40999"],
+    ["40000", "+40999"],
+    ["40000.0", "40999"],
+    ["0", "40999"],
+    ["40000", "65536"],
+    ["42000", "41000"],
+  ];
+  const cases = [...valid, ...invalid];
+  const startup = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+    const results = [];
+    for (const [index, [min, max]] of JSON.parse(process.argv[1]).entries()) {
+      process.env.RTC_MIN_PORT = min;
+      process.env.RTC_MAX_PORT = max;
+      try {
+        const { config } = await import("./config/config.ts?rtcCase=" + index);
+        results.push([config.workerSettings.rtcMinPort, config.workerSettings.rtcMaxPort]);
+      } catch (error) {
+        results.push(error.message);
+      }
+    }
+    console.log(JSON.stringify(results));
+  `, JSON.stringify(cases)], {
+    cwd: new URL("../packages/sfu/", import.meta.url),
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, NODE_ENV: "test", SFU_SECRET: "rtc-validation-fixture" },
+    encoding: "utf8",
+  });
+  assert.equal(startup.status, 0, startup.error?.message ?? startup.stderr);
+  const startupResults = JSON.parse(startup.stdout.trim().split("\n").at(-1));
+  assert.deepEqual(startupResults.slice(0, valid.length), valid.map(([min, max]) => [Number(min), Number(max)]));
+  for (const [index, [min, max]] of cases.entries()) {
+    const compose = makeCompose();
+    const service = "edge-dxb";
+    Object.assign(compose.services[service].environment, { RTC_MIN_PORT: min, RTC_MAX_PORT: max });
+    let preflightResult;
+    try {
+      const [{ rtcMinPort, rtcMaxPort }] = resolveSfuTargets({ compose, serviceNames: [service] });
+      preflightResult = [rtcMinPort, rtcMaxPort];
+    } catch (error) {
+      assert.ok(error instanceof SfuDeployPreflightError);
+      preflightResult = error.errors[0].slice(service.length + 2);
+    }
+    assert.deepEqual(startupResults[index], preflightResult, JSON.stringify([min, max]));
+  }
+  assert.ok(startupResults.slice(valid.length).every((result) => typeof result === "string"));
+});
+
+for (const name of ["SFU_WEBRTC_PORT_BUDGET", "SFU_WORKER_COUNT", "SFU_WORKER_HOST_INSTANCES", "SFU_APP_DOC_WORKERS"]) {
+  for (const invalid of ["", " ", "0", "-1", "1.5", "1e0", "bad"]) {
+    test(`config-only rejects ${name}=${JSON.stringify(invalid)}`, async () => {
+      const compose = makeCompose();
+      compose.services["edge-dxb"].environment[name] = invalid;
+
+      await assert.rejects(
+        runSfuDeployPreflight({ compose, configOnly: true }),
+        new RegExp(`edge-dxb: ${name} must be a positive integer`),
+      );
+    });
+  }
+}
+
+test("config-only rejects more workers than the public WebRTC budget", async () => {
+  const compose = makeCompose();
+  const env = compose.services["edge-dxb"].environment;
+  env.SFU_WORKER_COUNT = "5";
+  env.SFU_WEBRTC_PORT_BUDGET = "4";
+  await assert.rejects(
+    runSfuDeployPreflight({ compose, configOnly: true }),
+    /edge-dxb: SFU_WORKER_COUNT=5 exceeds the WebRTC port budget of 4/,
+  );
+});
+
+test("config-only preserves four ports for shared-browser RTP and RTCP", async () => {
+  const compose = makeCompose();
+  const env = compose.services["edge-dxb"].environment;
+  env.RTC_MAX_PORT = "40004";
+  env.SFU_WORKER_COUNT = "1";
+  env.SFU_WEBRTC_PORT_BUDGET = "4";
+  await runSfuDeployPreflight({ compose, configOnly: true });
+
+  env.SFU_WORKER_COUNT = "2";
+  await assert.rejects(
+    runSfuDeployPreflight({ compose, configOnly: true }),
+    /edge-dxb: SFU_WORKER_COUNT=2 exceeds the WebRTC port budget of 1/,
+  );
+
+  env.RTC_MAX_PORT = "40003";
+  env.SFU_WORKER_COUNT = null;
+  await assert.rejects(
+    runSfuDeployPreflight({ compose, configOnly: true }),
+    /edge-dxb: RTC_MIN_PORT.*4 plain RTP ports/,
+  );
+});
+
 test("static validation rejects every regional deployment invariant before probing", () => {
   const compose = makeCompose();
   const dxb = compose.services["edge-dxb"].environment;
@@ -149,6 +263,43 @@ test("overlapping RTC ranges are fatal on one announced IP", () => {
     () => resolveSfuTargets({ compose }),
     /RTC port ranges overlap/,
   );
+});
+
+test("a non-local SFU must announce a globally routable IP", () => {
+  const announce = (ip) => {
+    const compose = makeCompose();
+    const dxb = compose.services["edge-dxb"].environment;
+    dxb.SFU_PUBLIC_URL = "https://dxb.example.com";
+    dxb.ANNOUNCED_IP = ip;
+    try {
+      resolveSfuTargets({ compose, serviceNames: ["edge-dxb"] });
+      return true;
+    } catch (error) {
+      assert.match(error.message, /ANNOUNCED_IP must be a publicly routable IP/);
+      return false;
+    }
+  };
+  assert.equal(announce("2606:4700::1111"), true);
+  assert.equal(announce("::ffff:8.8.8.8"), true);
+  // 2::1 is 0002::1, outside the global unicast 2000::/3 block.
+  assert.equal(announce("2::1"), false);
+  assert.equal(announce("fd00::1"), false);
+  assert.equal(announce("::ffff:10.0.0.1"), false);
+});
+
+test("overlapping RTC ranges are fatal on one address however it is spelled", () => {
+  for (const [first, second] of [["8.8.8.8", "::ffff:8.8.8.8"], ["2606:4700::1111", "2606:4700:0:0::1111"]]) {
+    const compose = makeCompose();
+    const dxb = compose.services["edge-dxb"].environment;
+    const fra = compose.services["edge-fra"].environment;
+    dxb.SFU_PUBLIC_URL = "https://dxb.example.com";
+    fra.SFU_PUBLIC_URL = "https://fra.example.com";
+    dxb.ANNOUNCED_IP = first;
+    fra.ANNOUNCED_IP = second;
+    fra.RTC_MIN_PORT = dxb.RTC_MIN_PORT;
+    fra.RTC_MAX_PORT = dxb.RTC_MAX_PORT;
+    assert.throws(() => resolveSfuTargets({ compose }), /RTC port ranges overlap on 8\.8\.8\.8|RTC port ranges overlap on 2606:4700::1111/, `${first} vs ${second}`);
+  }
 });
 
 test("matching RTC ranges are allowed on different public IPs", () => {
@@ -212,5 +363,439 @@ test("a public route resolving to the wrong instance or region is fatal", async 
   await assert.rejects(
     runSfuDeployPreflight({ compose: makeCompose(), fetchImpl }),
     /public route returned instance.*public route returned region/s,
+  );
+});
+
+// The deploy scripts run this file directly; a checkout reached through a
+// symlink must still run the checks rather than exit 0 having done nothing.
+test("run through a symlinked path, the preflight still checks the config", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "conclave-preflight-"));
+  try {
+    const linked = path.join(root, "linked-scripts");
+    symlinkSync(import.meta.dirname, linked);
+    const run = (compose) =>
+      spawnSync(process.execPath, [path.join(linked, "deploy-sfu-preflight.mjs"), "--compose-json", "-", "--config-only"], {
+        input: JSON.stringify(compose),
+        encoding: "utf8",
+      });
+
+    const good = run(makeCompose());
+    assert.equal(good.status, 0, good.stderr);
+    assert.match(good.stdout, /SFU deployment preflight passed/);
+
+    const broken = makeCompose();
+    broken.services["edge-fra"].environment.SFU_SECRET = "development-secret";
+    const bad = run(broken);
+    assert.equal(bad.status, 1, bad.stdout);
+    assert.match(bad.stderr, /SFU_SECRET must be a non-default value/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// A compose file with its own Redis service, as staging's: the redis service
+// listens on 127.0.0.1:6380, and the SFU's Redis variables are as given.
+const withOwnRedis = (redisEnv) => {
+  const compose = makeCompose();
+  delete compose.services["edge-fra"];
+  Object.assign(compose.services["edge-dxb"].environment, redisEnv);
+  compose.services.redis = { image: "redis:7.2", environment: { REDIS_PORT: "6380" } };
+  return compose;
+};
+
+test("an SFU beside its own Redis must reach that Redis with every Redis variable", () => {
+  const own = "redis://:pw@127.0.0.1:6380/0";
+  assert.equal(
+    resolveSfuTargets({ compose: withOwnRedis({ REDIS_URL: own, SFU_REDIS_URL: own, SFU_PERSISTENCE_REDIS_URL: own }) }).length,
+    1,
+  );
+  // Sol's case: the runbook's REDIS_URL on 6380, with an SFU_REDIS_URL on
+  // production's 6379 inherited from the shell.
+  assert.throws(
+    () => resolveSfuTargets({ compose: withOwnRedis({ REDIS_URL: own, SFU_REDIS_URL: "redis://127.0.0.1:6379/0", SFU_PERSISTENCE_REDIS_URL: own }) }),
+    /edge-dxb: SFU_REDIS_URL points at 127\.0\.0\.1:6379, not this compose file's own Redis on 127\.0\.0\.1:6380/,
+  );
+  assert.throws(
+    () => resolveSfuTargets({ compose: withOwnRedis({ REDIS_URL: own, SFU_REDIS_URL: own }) }),
+    /edge-dxb: SFU_PERSISTENCE_REDIS_URL must be set to this compose file's own Redis on 127\.0\.0\.1:6380/,
+  );
+});
+
+const hasCompose = spawnSync("docker", ["compose", "version"], { stdio: "ignore" }).status === 0;
+
+test(
+  "staging's compose file gives its SFU staging's Redis whatever Redis URLs the shell holds",
+  { skip: !hasCompose && "needs docker compose" },
+  () => {
+    const root = path.join(import.meta.dirname, "..");
+    const render = (extra) =>
+      spawnSync("docker", ["compose", "-f", path.join(root, "docker-compose.sfu-staging.yml"), "config", "--format", "json"], {
+        cwd: mkdtempSync(path.join(tmpdir(), "staging-compose-")),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          COMPOSE_PROJECT_NAME: "conclave-staging",
+          STAGING_REDIS_PASSWORD: "staging-pw",
+          SFU_SECRET: "staging-secret",
+          ANNOUNCED_IP: "127.0.0.1",
+          SFU_STAGING_PUBLIC_URL: "http://localhost:3033",
+          SFU_REQUIRE_REDIS_ADAPTER: "1",
+          // Production's Redis, inherited from the shell.
+          REDIS_URL: "redis://127.0.0.1:6379/0",
+          SFU_REDIS_URL: "redis://127.0.0.1:6379/0",
+          SFU_PERSISTENCE_REDIS_URL: "redis://127.0.0.1:6379/0",
+          BROWSER_SERVICE_URL: "http://localhost:3040",
+          TRANSCRIPT_WORKER_URL: "http://localhost:8788",
+          ...extra,
+        },
+      });
+    for (const missing of ["STAGING_BROWSER_SERVICE_URL", "STAGING_TRANSCRIPT_WORKER_URL"]) {
+      const refused = render({ STAGING_BROWSER_SERVICE_URL: "https://browser.staging.example", STAGING_TRANSCRIPT_WORKER_URL: "https://transcripts.staging.example", [missing]: "" });
+      assert.notEqual(refused.status, 0, `staging renders without ${missing}`);
+      assert.match(refused.stderr, new RegExp(missing));
+    }
+    const rendered = render({ STAGING_BROWSER_SERVICE_URL: "https://browser.staging.example", STAGING_TRANSCRIPT_WORKER_URL: "https://transcripts.staging.example" });
+    assert.equal(rendered.status, 0, rendered.stderr);
+    const compose = JSON.parse(rendered.stdout);
+    const env = compose.services["sfu-staging"].environment;
+    for (const name of ["REDIS_URL", "SFU_REDIS_URL", "SFU_PERSISTENCE_REDIS_URL"]) {
+      assert.equal(env[name], "redis://:staging-pw@127.0.0.1:6380/0", name);
+    }
+    assert.equal(resolveSfuTargets({ compose, serviceNames: ["sfu-staging"] }).length, 1);
+    assert.notEqual(compose.services["sfu-staging"].image, "conclave-sfu-a", "staging never retags production's image");
+    assert.equal(env.BROWSER_SERVICE_URL, "https://browser.staging.example");
+    assert.equal(env.TRANSCRIPT_WORKER_URL, "https://transcripts.staging.example");
+  },
+);
+const composeWithRedis = (redisUrl) => {
+  const compose = makeCompose();
+  for (const service of Object.values(compose.services)) {
+    service.environment.SFU_REDIS_URL = redisUrl;
+  }
+  return compose;
+};
+
+const redisErrors = (redisUrl, options = {}) => {
+  try {
+    resolveSfuTargets({ compose: composeWithRedis(redisUrl), ...options });
+    return [];
+  } catch (error) {
+    assert.ok(error instanceof SfuDeployPreflightError);
+    return error.errors;
+  }
+};
+
+test("Redis on this host's loopback passes with or without credentials", () => {
+  for (const url of [
+    "redis://:prod-password@127.0.0.1:6379",
+    "redis://127.0.0.1:6379/0",
+    "redis://localhost:6379",
+    "redis://[::1]:6379",
+  ]) {
+    assert.deepEqual(redisErrors(url), [], url);
+  }
+});
+
+test("Redis off loopback must use TLS and credentials", () => {
+  assert.match(redisErrors("redis://user:secret@10.0.0.5:6379").join("\n"), /must use TLS/);
+  assert.match(redisErrors("rediss://10.0.0.5:6380").join("\n"), /require credentials/);
+  assert.match(redisErrors("redis://redis.internal:6379").join("\n"), /must use TLS[\s\S]*require credentials/);
+  assert.deepEqual(redisErrors("rediss://user:secret@10.0.0.5:6380"), []);
+  assert.deepEqual(redisErrors("rediss://:secret@redis.internal:6380"), []);
+});
+
+test("Redis at a public IP needs an explicit override", () => {
+  assert.match(redisErrors("rediss://user:secret@8.8.8.8:6380").join("\n"), /public IP 8\.8\.8\.8 is refused/);
+  assert.match(redisErrors("rediss://user:secret@[2606:4700::1111]:6380").join("\n"), /public IP/);
+  for (const mapped of ["[::ffff:8.8.8.8]", "[::ffff:808:808]", "[0:0:0:0:0:FFFF:8.8.8.8]"]) {
+    assert.match(redisErrors(`rediss://user:secret@${mapped}:6380`).join("\n"), /public IP/, mapped);
+  }
+  assert.deepEqual(redisErrors("rediss://user:secret@[::ffff:10.0.0.5]:6380"), []);
+  assert.deepEqual(redisErrors("redis://[::ffff:127.0.0.1]:6379"), []);
+  assert.deepEqual(redisErrors("rediss://user:secret@8.8.8.8:6380", { allowPublicRedis: true }), []);
+  assert.match(
+    redisErrors("redis://8.8.8.8:6379", { allowPublicRedis: true }).join("\n"),
+    /must use TLS[\s\S]*require credentials/,
+  );
+});
+
+test("the CLI refuses a public Redis unless SFU_DEPLOY_ALLOW_PUBLIC_REDIS=1", () => {
+  const script = fileURLToPath(new URL("./deploy-sfu-preflight.mjs", import.meta.url));
+  const run = (redisUrl, env = {}) =>
+    spawnSync(process.execPath, [script, "--compose-json", "-", "--config-only"], {
+      input: JSON.stringify(composeWithRedis(redisUrl)),
+      env: { PATH: process.env.PATH, ...env },
+      encoding: "utf8",
+    });
+
+  const prodShape = run("redis://:prod-password@127.0.0.1:6379");
+  assert.equal(prodShape.status, 0, prodShape.stderr);
+  assert.ok(!`${prodShape.stdout}${prodShape.stderr}`.includes("prod-password"));
+
+  const sentinel = randomBytes(12).toString("hex");
+  const publicRedis = run(`rediss://user:${sentinel}@8.8.8.8:6380`);
+  assert.equal(publicRedis.status, 1);
+  assert.match(publicRedis.stderr, /public IP/);
+  assert.ok(!publicRedis.stderr.includes(sentinel));
+
+  assert.equal(run("rediss://user:secret@8.8.8.8:6380", { SFU_DEPLOY_ALLOW_PUBLIC_REDIS: "1" }).status, 0);
+});
+
+const productionErrors = (environment) => {
+  const compose = makeCompose();
+  for (const service of Object.values(compose.services)) {
+    Object.assign(service.environment, environment);
+    for (const [key, value] of Object.entries(environment)) {
+      if (value === undefined) delete service.environment[key];
+    }
+  }
+  try {
+    resolveSfuTargets({ compose });
+    return [];
+  } catch (error) {
+    assert.ok(error instanceof SfuDeployPreflightError);
+    return error.errors;
+  }
+};
+
+test("SFU_SECRET must be a non-default value with no surrounding whitespace", () => {
+  for (const secret of [" development-secret ", "development-secret\n", "   "]) {
+    assert.match(productionErrors({ SFU_SECRET: secret }).join("\n"), /SFU_SECRET must be a non-default value/, JSON.stringify(secret));
+  }
+  // Startup refuses padding, and calendar token encryption hashes the raw value,
+  // so two SFUs that differ only by padding would encrypt with different keys.
+  assert.match(productionErrors({ SFU_SECRET: " shared-secret-value " }).join("\n"), /SFU_SECRET has leading or trailing whitespace/);
+  // Saved calendar tokens are encrypted with the padded value until SCHEDULING_TOKEN_SECRET holds it.
+  assert.match(
+    productionErrors({ SFU_SECRET: " shared-secret-value ", SCHEDULING_TOKEN_SECRET: undefined }).join("\n"),
+    /set SCHEDULING_TOKEN_SECRET to the exact current SFU_SECRET, padding included, before you trim SFU_SECRET/,
+  );
+  assert.doesNotMatch(
+    productionErrors({ SFU_SECRET: " shared-secret-value ", SCHEDULING_TOKEN_SECRET: " shared-secret-value " }).join("\n"),
+    /set SCHEDULING_TOKEN_SECRET/,
+  );
+  const compose = makeCompose();
+  compose.services["edge-dxb"].environment.SFU_SECRET = "shared-secret-value ";
+  compose.services["edge-fra"].environment.SFU_SECRET = "shared-secret-value";
+  assert.throws(() => resolveSfuTargets({ compose }), /edge-dxb: SFU_SECRET has leading or trailing whitespace/);
+});
+
+const composeMissing = spawnSync("docker", ["compose", "version"]).status !== 0;
+const composeSkip = composeMissing && process.env.CONCLAVE_REQUIRE_DOCKER !== "1"
+  ? "docker compose is not installed; pnpm test:deploy-compose renders the real compose file and fails without it"
+  : false;
+
+test("compose forwards SCHEDULING_TOKEN_SECRET to both SFUs, padding included", { skip: composeSkip }, () => {
+  const rendered = spawnSync("docker", ["compose", "--env-file", "/dev/null", "-f", "docker-compose.sfu.yml", "config", "--format", "json"], {
+    cwd: fileURLToPath(new URL("..", import.meta.url)),
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, ANNOUNCED_IP: "127.0.0.1", SFU_SECRET: "clean-secret-value", SCHEDULING_TOKEN_SECRET: "  padded-secret-value " },
+    encoding: "utf8",
+  });
+  assert.equal(rendered.status, 0, rendered.stderr);
+  const { services } = JSON.parse(rendered.stdout);
+  for (const name of ["sfu-a", "sfu-b"]) {
+    assert.equal(services[name].environment.SCHEDULING_TOKEN_SECRET, "  padded-secret-value ", name);
+  }
+});
+
+test("compose forwards the control-plane store choice and JSON path to both SFUs", { skip: composeSkip }, () => {
+  const render = (extra) => {
+    const rendered = spawnSync("docker", ["compose", "--env-file", "/dev/null", "-f", "docker-compose.sfu.yml", "config", "--format", "json"], {
+      cwd: fileURLToPath(new URL("..", import.meta.url)),
+      env: { PATH: process.env.PATH, HOME: process.env.HOME, ANNOUNCED_IP: "127.0.0.1", SFU_SECRET: "clean-secret-value", ...extra },
+      encoding: "utf8",
+    });
+    assert.equal(rendered.status, 0, rendered.stderr);
+    return JSON.parse(rendered.stdout).services;
+  };
+  const chosen = render({
+    CONTROL_PLANE_PERSISTENCE: "sqlite",
+    CONTROL_PLANE_JSON_PATH: "/var/lib/conclave/recordings/elsewhere.json",
+    RECORDING_STORAGE_PATH: "/srv/conclave/recordings",
+  });
+  const defaults = render({});
+  for (const name of ["sfu-a", "sfu-b"]) {
+    assert.equal(chosen[name].environment.CONTROL_PLANE_PERSISTENCE, "sqlite", name);
+    assert.equal(chosen[name].environment.CONTROL_PLANE_JSON_PATH, "/var/lib/conclave/recordings/elsewhere.json", name);
+    assert.equal(defaults[name].environment.CONTROL_PLANE_JSON_PATH, "/var/lib/conclave/recordings/control-plane.json", name);
+    assert.equal(chosen[name].environment.RECORDING_STORAGE_PATH, "/var/lib/conclave/recordings", name);
+    assert.ok(chosen[name].volumes.some(({ source, target }) =>
+      source === "/srv/conclave/recordings" && target === "/var/lib/conclave/recordings"), name);
+  }
+});
+
+const storePathErrors = (environment, volumes, workDir) => {
+  const compose = makeCompose();
+  for (const service of Object.values(compose.services)) {
+    Object.assign(service.environment, environment);
+    for (const [key, value] of Object.entries(environment)) {
+      if (value === undefined) delete service.environment[key];
+    }
+    if (volumes) service.volumes = volumes;
+    if (workDir) service.working_dir = workDir;
+  }
+  try {
+    resolveSfuTargets({ compose });
+    return [];
+  } catch (error) {
+    return error.errors.filter((message) => /writable volume mount|CONCLAVE_FALLBACK_IMPORT_DIR must name a directory/.test(message));
+  }
+};
+
+test("active SQLite and JSON paths must be on writable volume mounts", () => {
+  const sqlite = { CONTROL_PLANE_PERSISTENCE: "sqlite" };
+  assert.deepEqual(storePathErrors(sqlite), []);
+  // The image's read-only root: Sol's run exited 1 with this path.
+  assert.match(storePathErrors({ ...sqlite, CONCLAVE_SQLITE_PATH: "/var/lib/conclave/conclave.sqlite" }).join("\n"), /CONCLAVE_SQLITE_PATH resolves to \/var\/lib\/conclave\/conclave\.sqlite/);
+  // Without CONCLAVE_SQLITE_PATH the image default applies, which is off the volume.
+  assert.match(storePathErrors({ ...sqlite, CONCLAVE_SQLITE_PATH: undefined }).join("\n"), /not on a writable volume mount/);
+  assert.match(storePathErrors({ CONTROL_PLANE_PERSISTENCE: "json", CONTROL_PLANE_JSON_PATH: "/app/data/control-plane.json" }).join("\n"), /CONTROL_PLANE_JSON_PATH resolves to \/app\/data\/control-plane\.json/);
+  assert.deepEqual(storePathErrors({ CONTROL_PLANE_PERSISTENCE: "json" }), []);
+  assert.deepEqual(
+    storePathErrors({ SCHEDULING_PERSISTENCE: "json", SCHEDULED_MEETINGS_PERSISTENCE: "json", SCHEDULED_WEBINARS_PERSISTENCE: "json", CONCLAVE_SQLITE_PATH: "/tmp/unused.sqlite" }),
+    [],
+  );
+  assert.deepEqual(storePathErrors({ ...sqlite, SCHEDULED_WEBINARS_SQLITE_PATH: "/tmp/webinars.sqlite" }), []);
+  assert.match(
+    storePathErrors(sqlite, [{ type: "bind", source: "/srv/recordings", target: "/var/lib/conclave/recordings", read_only: true }]).join("\n"),
+    /not on a writable volume mount/,
+  );
+  assert.equal(storePathErrors({ ...sqlite, CONCLAVE_SQLITE_PATH: "/var/lib/conclave/conclave.sqlite" }).filter((message) => message.startsWith("edge-dxb")).length, 1);
+});
+
+test("explicit and inferred Redis do not require the image SQLite default on a writable mount", () => {
+  for (const persistence of [" Redis ", undefined]) {
+    const redis = { CONTROL_PLANE_PERSISTENCE: persistence };
+    assert.deepEqual(storePathErrors({ ...redis, CONCLAVE_SQLITE_PATH: undefined }), []);
+    assert.deepEqual(storePathErrors(redis), []);
+    assert.match(
+      storePathErrors({ ...redis, CONCLAVE_SQLITE_PATH: "/tmp/import.sqlite" }).join("\n"),
+      /CONCLAVE_SQLITE_PATH resolves to \/tmp\/import\.sqlite/,
+    );
+  }
+  assert.match(storePathErrors({
+    SCHEDULING_PERSISTENCE: "sqlite",
+    SCHEDULED_MEETINGS_PERSISTENCE: "sqlite",
+    SCHEDULED_WEBINARS_PERSISTENCE: "sqlite",
+    CONCLAVE_SQLITE_PATH: undefined,
+  }).join("\n"), /not on a writable volume mount/);
+});
+
+test("recovery data needs a writable mount even with a Redis control plane", () => {
+  const redis = { CONTROL_PLANE_PERSISTENCE: "redis", CONCLAVE_SQLITE_PATH: undefined };
+  assert.deepEqual(storePathErrors(redis), []);
+  const unmapped = storePathErrors({ ...redis, RECORDING_STORAGE_PATH: "/srv/conclave/recordings" });
+  assert.equal(unmapped.filter((message) => message.startsWith("edge-dxb")).length, 1);
+  assert.match(unmapped.join("\n"),
+    /SFU_ROOM_RECOVERY_PATH \(from RECORDING_STORAGE_PATH\) resolves to \/srv\/conclave\/recordings\/room-recovery/);
+  assert.match(
+    storePathErrors({ ...redis, SFU_ROOM_RECOVERY_PATH: "/srv/recovery" }).join("\n"),
+    /SFU_ROOM_RECOVERY_PATH resolves to \/srv\/recovery/,
+  );
+  assert.deepEqual(
+    storePathErrors({ ...redis, SFU_ROOM_RECOVERY_PATH: "/var/lib/conclave/recordings/recovery" }),
+    [],
+  );
+  assert.match(
+    storePathErrors(redis, [
+      { type: "bind", source: "/srv/recordings", target: "/var/lib/conclave/recordings" },
+      { type: "bind", source: "/srv/frozen", target: "/var/lib/conclave/recordings/room-recovery", read_only: true },
+    ]).join("\n"),
+    /SFU_ROOM_RECOVERY_PATH \(from RECORDING_STORAGE_PATH\) resolves to \/var\/lib\/conclave\/recordings\/room-recovery/,
+  );
+});
+
+test("does not require the configured recordings path when the deploy and recovery paths are writable", () => {
+  const recordings = { type: "bind", target: "/var/lib/conclave/recordings" };
+  const configured = "/srv/archive";
+  const frozen = { type: "bind", target: configured, read_only: true };
+  const redis = {
+    CONTROL_PLANE_PERSISTENCE: "redis",
+    CONCLAVE_SQLITE_PATH: undefined,
+    RECORDING_STORAGE_PATH: configured,
+  };
+  const recovery = "/srv/recovery";
+  const writable = { type: "bind", target: recovery };
+
+  for (const mounts of [[recordings, writable], [recordings, frozen, writable]]) {
+    assert.deepEqual(storePathErrors({ ...redis, SFU_ROOM_RECOVERY_PATH: recovery }, mounts), []);
+  }
+  assert.deepEqual(
+    storePathErrors(redis, [recordings, frozen, { type: "bind", target: configured + "/room-recovery" }]),
+    [],
+  );
+});
+
+test("validates the runtime's default recovery directory when both path variables are unset", () => {
+  const redis = {
+    CONTROL_PLANE_PERSISTENCE: "redis",
+    CONCLAVE_SQLITE_PATH: undefined,
+    RECORDING_STORAGE_PATH: undefined,
+  };
+  const recordings = { type: "bind", target: "/var/lib/conclave/recordings" };
+  assert.match(storePathErrors(redis, [recordings]).join("\n"),
+    /SFU_ROOM_RECOVERY_PATH resolves to \/app\/packages\/sfu\/data\/room-recovery/);
+  assert.deepEqual(storePathErrors(redis, [recordings, { type: "bind", target: "/app/packages/sfu/data" }]), []);
+});
+
+test("refuses a read-only deployment recordings mount even when recovery uses its own volume", () => {
+  const recordings = "/var/lib/conclave/recordings";
+  const recovery = "/srv/recovery";
+  const redis = {
+    CONTROL_PLANE_PERSISTENCE: "redis",
+    CONCLAVE_SQLITE_PATH: undefined,
+    SFU_ROOM_RECOVERY_PATH: recovery,
+    CONCLAVE_FALLBACK_IMPORT_DIR: "/srv/import",
+  };
+  const errors = storePathErrors(redis, [
+    { type: "bind", target: recordings, read_only: true },
+    { type: "bind", target: recovery },
+    { type: "bind", target: "/srv/import" },
+  ]);
+  assert.match(errors.join("\n"), /recordings ownership handoff.*writable volume mount/);
+});
+
+test("refuses a read-only fallback import directory even when recovery and recordings are writable", () => {
+  const recordings = "/var/lib/conclave/recordings";
+  const recovery = "/srv/recovery";
+  const redis = {
+    CONTROL_PLANE_PERSISTENCE: "redis",
+    CONCLAVE_SQLITE_PATH: undefined,
+    SFU_ROOM_RECOVERY_PATH: recovery,
+    CONCLAVE_FALLBACK_IMPORT_DIR: "/srv/import",
+  };
+  const volumes = [{ type: "bind", target: recordings }, { type: "bind", target: recovery }];
+  assert.match(storePathErrors(redis, [...volumes, { type: "bind", target: "/srv/import", read_only: true }]).join("\n"),
+    /CONCLAVE_FALLBACK_IMPORT_DIR resolves to \/srv\/import.*writable volume mount/);
+  assert.deepEqual(storePathErrors(redis, [...volumes, { type: "bind", target: "/srv/import" }]), []);
+  assert.deepEqual(storePathErrors({ ...redis, CONCLAVE_FALLBACK_IMPORT_DIR: "import" }, [
+    ...volumes, { type: "bind", target: "/srv/import" },
+  ], "/srv"), []);
+  for (const path of ["", " /srv/import "]) {
+    assert.match(storePathErrors({ ...redis, CONCLAVE_FALLBACK_IMPORT_DIR: path }, [
+      ...volumes, { type: "bind", target: "/srv/import" },
+    ]).join("\n"), /CONCLAVE_FALLBACK_IMPORT_DIR must name a directory/);
+  }
+  assert.match(storePathErrors({ ...redis, CONCLAVE_FALLBACK_IMPORT_DIR: undefined }, [
+    ...volumes, { type: "bind", target: recordings + "/json-fallback-import", read_only: true },
+  ]).join("\n"), /CONCLAVE_FALLBACK_IMPORT_DIR resolves to \/var\/lib\/conclave\/recordings\/json-fallback-import/);
+});
+
+test("SFU services must run in production mode", () => {
+  assert.match(productionErrors({ NODE_ENV: undefined }).join("\n"), /NODE_ENV must be production/);
+  assert.match(productionErrors({ NODE_ENV: "development" }).join("\n"), /NODE_ENV must be production/);
+});
+
+test("production mode needs the CORS allow-list the SFU checks at startup", () => {
+  assert.match(productionErrors({ SFU_CORS_ORIGINS: undefined }).join("\n"), /SFU_CORS_ORIGINS must list/);
+  assert.match(productionErrors({ SFU_CORS_ORIGINS: "*" }).join("\n"), /SFU_CORS_ORIGINS must list/);
+  assert.match(productionErrors({ SFU_CORS_ORIGINS: "conclave.example" }).join("\n"), /not an http\(s\) origin/);
+  assert.deepEqual(productionErrors({ SFU_CORS_ORIGINS: "https://conclave.example, https://admin.example" }), []);
+  assert.deepEqual(productionErrors({ SFU_CORS_ORIGINS: "*", SFU_ALLOW_OPEN_CORS: "1" }), []);
+  assert.deepEqual(productionErrors({ SFU_CORS_ORIGINS: undefined, SFU_ALLOW_OPEN_CORS: "1" }), []);
+  // The override allows a wildcard; the SFU still parses explicit entries and refuses bad ones.
+  assert.match(
+    productionErrors({ SFU_CORS_ORIGINS: "conclave.example", SFU_ALLOW_OPEN_CORS: "1" }).join("\n"),
+    /not an http\(s\) origin/,
   );
 });

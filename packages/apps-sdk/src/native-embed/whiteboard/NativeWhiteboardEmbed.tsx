@@ -8,6 +8,7 @@ import { DEFAULT_TOOL_SETTINGS } from "../../apps/whiteboard/shared/constants/to
 import { getWhiteboardRoot } from "../../apps/whiteboard/core/doc/index";
 import { getBoundsForElement } from "../../apps/whiteboard/core/model/geometry";
 import type { ToolKind, ToolSettings } from "../../apps/whiteboard/core/tools/engine";
+import { cutText } from "../../sdk/text";
 import {
   INK_COLORS,
   NATIVE_EMBED_LIMITS,
@@ -50,6 +51,12 @@ const useHostStatus = (session: NativeEmbedSession): HostStatus =>
     () => session.hostStatus,
   );
 
+const useSynced = (session: NativeEmbedSession): boolean =>
+  useSyncExternalStore(
+    useCallback((listener: () => void) => session.subscribe(listener), [session]),
+    () => session.isSynced,
+  );
+
 const centerOf = (points: Point[]): Point => {
   const sum = points.reduce((total, point) => ({ x: total.x + point.x, y: total.y + point.y }), { x: 0, y: 0 });
   return { x: sum.x / points.length, y: sum.y / points.length };
@@ -84,7 +91,8 @@ const exportPng = (canvas: HTMLCanvasElement | null): string | null => {
 export function NativeWhiteboardEmbed({ session }: { session: NativeEmbedSession }) {
   const { doc, awareness } = session;
   const host = useHostStatus(session);
-  const readOnly = host.readOnly;
+  const synced = useSynced(session);
+  const readOnly = host.readOnly || !synced;
   const [tool, setTool] = useState<ToolKind>("pen");
   const [settings, setSettings] = useState<ToolSettings>({ ...DEFAULT_TOOL_SETTINGS });
   const { viewport, panBy, zoomAt, resetViewport, fitBounds } = useViewport();
@@ -142,11 +150,11 @@ export function NativeWhiteboardEmbed({ session }: { session: NativeEmbedSession
       canUndo: !readOnly && canUndo,
       canRedo: !readOnly && canRedo,
       pageId: isValidIdentifier(activePage?.id) ? activePage.id : "",
-      pageName: (activePage?.name ?? "").slice(0, NATIVE_EMBED_LIMITS.pageName),
+      pageName: cutText(activePage?.name ?? "", NATIVE_EMBED_LIMITS.pageName),
       pages: pages
         .filter((page) => isValidIdentifier(page.id))
         .slice(0, NATIVE_EMBED_LIMITS.pages)
-        .map((page) => ({ id: page.id, name: page.name.slice(0, NATIVE_EMBED_LIMITS.pageName) })),
+        .map((page) => ({ id: page.id, name: cutText(page.name, NATIVE_EMBED_LIMITS.pageName) })),
       elementCount: elements.length,
       editorCount,
     }),
@@ -234,7 +242,7 @@ export function NativeWhiteboardEmbed({ session }: { session: NativeEmbedSession
           return { ok: true };
         case "renamePage": {
           const pageId = payloadString(payload, "pageId");
-          const name = payloadString(payload, "name").trim().slice(0, NATIVE_EMBED_LIMITS.pageName);
+          const name = cutText(payloadString(payload, "name").trim(), NATIVE_EMBED_LIMITS.pageName);
           if (!pages.some((page) => page.id === pageId) || name.length === 0) return { ok: false, error: "badRename" };
           renamePage(pageId, name);
           return { ok: true };
@@ -258,6 +266,8 @@ export function NativeWhiteboardEmbed({ session }: { session: NativeEmbedSession
         case "status":
         case "resync":
         case "close":
+        case "prepareToLeave":
+        case "savedSnapshot":
         case "addEntries":
         case "removeEntry":
         case "shuffle":
@@ -267,6 +277,7 @@ export function NativeWhiteboardEmbed({ session }: { session: NativeEmbedSession
         case "setRemoveWinner":
         case "setSounds":
         case "clearResults":
+        case "addOutcome":
         case "playNow":
         case "enqueue":
         case "request":
@@ -279,10 +290,7 @@ export function NativeWhiteboardEmbed({ session }: { session: NativeEmbedSession
           return { ok: false, error: "unknownCommand" };
       }
     };
-    session.setCommandHandler(handler);
-    return () => {
-      session.setCommandHandler(null);
-    };
+    session.start(handler);
   }, [session, status, readOnly, undoManager, pages, setActive, createPage, renamePage, deletePage, zoomToFit]);
 
   useEffect(() => {
@@ -455,7 +463,7 @@ function RemoteCursors({
           const name = record.user?.name;
           if (typeof x !== "number" || typeof y !== "number" || typeof name !== "string" || name.length === 0) continue;
           const color = typeof record.user?.color === "string" ? record.user.color : "#a1a1aa";
-          next.push({ clientId, color, name: name.slice(0, 40), x, y });
+          next.push({ clientId, color, name: cutText(name, 40), x, y });
         }
         setCursors(next);
       });

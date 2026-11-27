@@ -261,7 +261,6 @@ enum StageFixtureScript {
                          joinedAtMillis: joinedAtMillis)
     }
 
-    // swiftlint:disable:next cyclomatic_complexity
     static func inputs(for state: StageFixtureState) -> StageInputs {
         switch state {
         case .soloCameraOff, .soloCameraOffAlone:
@@ -902,7 +901,7 @@ final class StageFixtureSession {
         self.state = state
         self.pattern = pattern
         self.forceScreenReader = forceScreenReader
-        let owner = MeetingShellPresenter()
+        let owner = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         shell = owner
         let stagePresenter = StagePresenter(shell: owner)
         stage = stagePresenter

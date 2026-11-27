@@ -303,7 +303,8 @@ struct CHT7AssistantRowTests {
 
     @Test func aCompletedAnswerIsAnnouncedOnce() {
         let chat = Self.presenter([Self.answer("", input: ChatAssistantInput.make())])
-        chat.panelDidOpen(destination: .none, targetId: "")
+        chat.openPanel()
+        chat.panelDidAppear()
         chat.apply(Self.inputs([Self.answer("The agenda has three items. More", input: ChatAssistantInput.make())]), change: .assistant)
         #expect(chat.announcement?.kind != "newMessage", "an open panel announces the answer when it completes, not when it appears")
         chat.apply(Self.inputs([Self.answer("The agenda has three items. More", input: ChatAssistantInput.make(isDone: true))]),
@@ -321,6 +322,8 @@ struct CHT7AssistantRowTests {
         let chat = ChatPresenter()
         chat.now = { Self.base + clock.value }
         chat.apply(Self.inputs([Self.answer("", input: ChatAssistantInput.make())]), change: .messages)
+        chat.openPanel()
+        chat.panelDidAppear()
         let start = chat.tailGrowth
         var text = "A"
         for step in 1...6 {
@@ -365,7 +368,7 @@ struct CHT7AssistantRowTests {
     @Test func theBusyFixtureShowsEveryAssistantStateButApproval() async {
         await ChatFixtureTestGate.acquire()
         defer { ChatFixtureTestGate.release() }
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let driver = ChatFixtureDriver.installOnStage(state: .busy, shell: shell)
         #expect(shell.chat.rows.entry(for: "s-a1").assistant?.state == .thinking)
         #expect(shell.chat.rows.entry(for: "s-a2").assistant?.state == .streaming)

@@ -232,6 +232,7 @@ private enum SocketEvent {
     static let kicked = SfuServerEvent.kicked.rawValue
     static let roomClosed = SfuServerEvent.roomClosed.rawValue
     static let roomEnded = SfuServerEvent.roomEnded.rawValue
+    static let roomRecoveryPass = SfuServerEvent.roomRecoveryPass.rawValue
     static let serverRestarting = SfuServerEvent.serverRestarting.rawValue
     static let adminNotice = SfuServerEvent.adminNotice.rawValue
     static let adminMediaEnforced = SfuServerEvent.adminMediaEnforced.rawValue
@@ -249,6 +250,7 @@ private enum SocketEvent {
     static let webinarHandQueueChanged = SfuServerEvent.webinarHandQueueChanged.rawValue
     static let webinarPromoted = SfuServerEvent.webinarPromoted.rawValue
     static let webinarDemoted = SfuServerEvent.webinarDemoted.rawValue
+    static let webinarStageInviteUsed = SfuServerEvent.webinarStageInviteUsed.rawValue
     static let browserState = SfuServerEvent.browserState.rawValue
     static let browserClosed = SfuServerEvent.browserClosed.rawValue
     static let appsState = SfuServerEvent.appsState.rawValue
@@ -322,6 +324,7 @@ final class SocketIOManager {
     var onRoomClosed: ((RoomClosedNotification) -> Void)?
     var onRoomEnded: ((RoomEndedNotification) -> Void)?
     var onServerRestarting: ((ServerRestartingNotification) -> Void)?
+    var onRoomRecoveryPass: ((RoomRecoveryPassNotification) -> Void)?
     var onAdminNotice: ((AdminNoticeNotification) -> Void)?
     var onAdminHandsCleared: ((AdminHandsClearedNotification) -> Void)?
     var onAdminRoomStateChanged: ((AdminRoomStateChangedNotification) -> Void)?
@@ -335,6 +338,7 @@ final class SocketIOManager {
     var onWebinarHandQueueChanged: ((WebinarHandQueueChangedNotification) -> Void)?
     var onWebinarPromoted: ((WebinarPromotedNotification) -> Void)?
     var onWebinarDemoted: ((WebinarDemotedNotification) -> Void)?
+    var onWebinarStageInviteUsed: ((WebinarStageInviteUsedNotification) -> Void)?
     var onBrowserState: ((BrowserStateNotification) -> Void)?
     var onBrowserClosed: ((BrowserClosedNotification) -> Void)?
     var onAppsState: ((AppsStateNotification) -> Void)?
@@ -613,14 +617,16 @@ final class SocketIOManager {
         sessionId: String,
         displayName: String?,
         meetingInviteCode: String? = nil,
-        webinarInviteCode: String? = nil
+        webinarInviteCode: String? = nil,
+        roomRecoveryPass: String? = nil
     ) async throws -> JoinRoomResponse {
         let request = JoinRoomRequest(
             roomId: roomId,
             sessionId: sessionId,
             displayName: displayName,
             webinarInviteCode: webinarInviteCode,
-            meetingInviteCode: meetingInviteCode
+            meetingInviteCode: meetingInviteCode,
+            roomRecoveryPass: roomRecoveryPass
         )
 
         var followedRedirects = 0
@@ -1222,14 +1228,20 @@ final class SocketIOManager {
         return try JSONDecoder().decode(AppsStateNotification.self, from: data)
     }
 
-    func openApp(_ appId: String) async throws -> AppsOpenResponse {
-        let request = AppsOpenRequest(appId: appId)
+    func openApp(_ appId: String, expectedRevision: Int?, expectedRoomId: String?) async throws -> AppsOpenResponse {
+        let request = AppsOpenRequest(appId: appId, expectedRevision: expectedRevision, expectedRoomId: expectedRoomId)
         let data = try await emit(event: SocketEvent.appsOpen, payload: request)
         return try JSONDecoder().decode(AppsOpenResponse.self, from: data)
     }
 
-    func closeApp() async throws -> AppsCloseResponse {
-        let data = try await emitAckOnly(event: SocketEvent.appsClose)
+    func closeApp(expectedRevision: Int?, expectedRoomId: String?) async throws -> AppsCloseResponse {
+        let data: Data
+        if let expectedRevision {
+            let request = AppsCloseRequest(expectedRevision: expectedRevision, expectedRoomId: expectedRoomId)
+            data = try await emit(event: SocketEvent.appsClose, payload: request)
+        } else {
+            data = try await emitAckOnly(event: SocketEvent.appsClose)
+        }
         return try JSONDecoder().decode(AppsCloseResponse.self, from: data)
     }
 
@@ -2481,6 +2493,14 @@ final class SocketIOManager {
             self.onRoomEnded?(notification)
         }
 
+        socket.on(SocketEvent.roomRecoveryPass) { [weak self] data, _ in
+            guard let self, let first = data.first,
+                  self.socket === socket,
+                  let notification = self.decode(RoomRecoveryPassNotification.self, from: first),
+                  NativeRoomIdNormalizer.matches(notification.roomId, self.activeRoomId) else { return }
+            self.onRoomRecoveryPass?(notification)
+        }
+
         socket.on(SocketEvent.serverRestarting) { [weak self] data, _ in
             guard let self, let first = data.first,
                   self.socket === socket,
@@ -2591,6 +2611,14 @@ final class SocketIOManager {
                   let notification = self.decode(WebinarDemotedNotification.self, from: first),
                   self.eventRoomIdMatchesActiveOrPending(notification.roomId) else { return }
             self.onWebinarDemoted?(notification)
+        }
+
+        socket.on(SocketEvent.webinarStageInviteUsed) { [weak self] data, _ in
+            guard let self, let first = data.first,
+                  self.socket === socket,
+                  let notification = self.decode(WebinarStageInviteUsedNotification.self, from: first),
+                  self.eventRoomIdMatchesActiveOrPending(notification.roomId) else { return }
+            self.onWebinarStageInviteUsed?(notification)
         }
 
         socket.on(SocketEvent.browserState) { [weak self] data, _ in

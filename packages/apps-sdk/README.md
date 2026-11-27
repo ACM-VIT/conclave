@@ -85,7 +85,7 @@ const pollApp = defineApp({
 
 1. Define app with `defineApp(...)`.
 2. Add the definition to the host's `AppsProvider` list.
-3. Admin opens app via `useApps().openApp(appId)`.
+3. Admin presents app via `useApps().presentApp(appId)`.
 4. All clients receive `apps:state` with new `activeAppId`.
 5. Provider syncs Yjs doc + awareness for active app.
 6. App UI reads/writes doc with `useAppDoc(appId)`.
@@ -94,8 +94,21 @@ const pollApp = defineApp({
 
 Details: [docs/reference/socket-events-and-sync.md](./docs/reference/socket-events-and-sync.md)
 
+## Two Kinds of App
+
+| | Collaborative (Yjs doc) | Authority |
+| --- | --- | --- |
+| State lives | in every client and the SFU relay | on the SFU only |
+| Who can write | any eligible editor, anything | only what an action's rules allow |
+| Who can read | everyone, everything | each connection, only its own view |
+| Use it for | strokes, notes, shared playback | votes, hidden answers, draws, one-per-person rules |
+| Start with | `new:app <id>` | `new:app <id> --runtime authority` |
+
+An authority app has a contract in `core`, rules in `server` that only the SFU loads, and a panel in `web` that reads the app through `useAuthority(contract)`. See [Build an Authority App](./docs/guides/build-an-authority-app.md) and the [Authority Runtime](./docs/reference/authority-runtime.md) reference.
+
 ## Data Placement Rules
 
+- Put anything a participant must not forge or read in an authority app.
 - Put durable collaborative content in Yjs doc.
 - Put ephemeral cursor/selection/presence in awareness.
 - Put purely local UI state (open panels, hover state) in component state.

@@ -4,15 +4,15 @@ import { isRedisTransientError } from "./redisErrors.js";
 
 export type RedisPersistenceClient = RedisClientType;
 
-export const resolveRedisPersistenceUrl = (): string =>
-  process.env.SFU_PERSISTENCE_REDIS_URL?.trim() ||
-  process.env.SFU_REDIS_URL?.trim() ||
-  process.env.REDIS_URL?.trim() ||
+export const resolveRedisPersistenceUrl = (env: NodeJS.ProcessEnv = process.env): string =>
+  env.SFU_PERSISTENCE_REDIS_URL?.trim() ||
+  env.SFU_REDIS_URL?.trim() ||
+  env.REDIS_URL?.trim() ||
   "";
 
-export const resolveRedisPersistenceKeyPrefix = (): string =>
+export const resolveRedisPersistenceKeyPrefix = (env: NodeJS.ProcessEnv = process.env): string =>
   (
-    process.env.SFU_PERSISTENCE_REDIS_KEY_PREFIX?.trim() ||
+    env.SFU_PERSISTENCE_REDIS_KEY_PREFIX?.trim() ||
     "conclave:sfu:persistence"
   ).replace(/:+$/, "");
 

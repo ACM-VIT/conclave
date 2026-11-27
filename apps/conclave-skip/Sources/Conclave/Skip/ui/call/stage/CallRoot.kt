@@ -111,7 +111,26 @@ internal fun CallRoot(
                 provided()
             }
         }
+        if (activitySession != null) AppStageDiscardDialog(activitySession.appHost)
     }
+}
+
+@Composable
+private fun AppStageDiscardDialog(host: AppHostPresenter) {
+    val id = host.stageDiscardPromptId
+    if (id.isEmpty()) return
+    ConclaveDialog(
+        model = ConclaveDialogModel(
+            kind = ConclaveDialogKind.confirmation,
+            title = conclaveString("act_discard_unverified_title"),
+            message = conclaveString("act_discard_unverified_message"),
+            confirmTitle = conclaveString("act_discard_unverified_confirm"),
+            confirmRole = ConclaveDialogRole.destructive,
+        ),
+        identifier = "app.stageDiscard",
+        onConfirm = { host.resolveStageDiscardPrompt(id = id, confirmed = true) },
+        onDismiss = { host.resolveStageDiscardPrompt(id = id, confirmed = false) },
+    )
 }
 
 internal fun stageMinimizeToBackground() {

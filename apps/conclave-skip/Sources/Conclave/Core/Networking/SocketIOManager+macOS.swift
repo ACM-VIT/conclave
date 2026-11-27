@@ -24,6 +24,7 @@ final class SocketIOManager {
     var onRoomClosed: ((RoomClosedNotification) -> Void)?
     var onRoomEnded: ((RoomEndedNotification) -> Void)?
     var onServerRestarting: ((ServerRestartingNotification) -> Void)?
+    var onRoomRecoveryPass: ((RoomRecoveryPassNotification) -> Void)?
     var onAdminNotice: ((AdminNoticeNotification) -> Void)?
     var onAdminHandsCleared: ((AdminHandsClearedNotification) -> Void)?
     var onAdminRoomStateChanged: ((AdminRoomStateChangedNotification) -> Void)?
@@ -38,6 +39,7 @@ final class SocketIOManager {
     var onWebinarHandQueueChanged: ((WebinarHandQueueChangedNotification) -> Void)?
     var onWebinarPromoted: ((WebinarPromotedNotification) -> Void)?
     var onWebinarDemoted: ((WebinarDemotedNotification) -> Void)?
+    var onWebinarStageInviteUsed: ((WebinarStageInviteUsedNotification) -> Void)?
     var onBrowserState: ((BrowserStateNotification) -> Void)?
     var onBrowserClosed: ((BrowserClosedNotification) -> Void)?
     var onAppsState: ((AppsStateNotification) -> Void)?
@@ -109,7 +111,8 @@ final class SocketIOManager {
         sessionId: String,
         displayName: String?,
         meetingInviteCode: String? = nil,
-        webinarInviteCode: String? = nil
+        webinarInviteCode: String? = nil,
+        roomRecoveryPass: String? = nil
     ) async throws -> JoinRoomResponse {
         throw NSError(domain: "Conclave", code: -1, userInfo: [NSLocalizedDescriptionKey: "SocketIO not available on macOS"])
     }
@@ -320,10 +323,10 @@ final class SocketIOManager {
     func getAppsState() async throws -> AppsStateNotification {
         AppsStateNotification(activeAppId: nil, locked: false, roomId: nil)
     }
-    func openApp(_ appId: String) async throws -> AppsOpenResponse {
+    func openApp(_ appId: String, expectedRevision: Int?, expectedRoomId: String?) async throws -> AppsOpenResponse {
         AppsOpenResponse(success: true, activeAppId: appId, error: nil)
     }
-    func closeApp() async throws -> AppsCloseResponse {
+    func closeApp(expectedRevision: Int?, expectedRoomId: String?) async throws -> AppsCloseResponse {
         AppsCloseResponse(success: true, error: nil)
     }
     func setAppsLocked(_ locked: Bool) async throws -> AppsLockResponse {

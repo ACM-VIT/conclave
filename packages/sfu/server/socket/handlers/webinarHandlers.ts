@@ -17,11 +17,12 @@ import {
   setCustomWebinarLinkSlug,
   updateWebinarRoomConfig,
 } from "../../webinar.js";
-import type { ConnectionContext } from "../context.js";
+import type { Room } from "../../../config/classes/Room.js";
+import { forgetLostSeat, type ConnectionContext } from "../context.js";
 import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
 import { getRoomChannelId } from "../../rooms.js";
-import { getScheduledWebinarBySlug } from "../../scheduledWebinars.js";
+import { webinarBySlug } from "../../controlPlane/webinarCommands.js";
 
 const MAX_INVITE_CODE_LENGTH = 256;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
@@ -39,9 +40,10 @@ const normalizeInviteCode = (value: unknown): string | null => {
   return normalized;
 };
 
-const ensureAdminRoom = (
+const adminRoomOf = (
   context: ConnectionContext,
-): { roomId: string } | { error: string } => {
+): { room: Room } | { error: string } => {
+  forgetLostSeat(context);
   if (!context.currentRoom || !context.currentClient) {
     return { error: "Not in a room" };
   }
@@ -50,11 +52,29 @@ const ensureAdminRoom = (
     return { error: "Only admins can manage webinar settings" };
   }
 
+  return { room: context.currentRoom };
+};
+
+const ensureAdminRoom = (
+  context: ConnectionContext,
+): { room: Room } | { error: string } => {
+  const seat = adminRoomOf(context);
+  if ("error" in seat) return seat;
+
   if (!takeToken(context.socket, "webinar:admin", RATE_LIMITS.adminAction)) {
     return { error: "Too many admin requests; please retry shortly" };
   }
 
-  return { roomId: context.currentRoom.id };
+  return seat;
+};
+
+const stillAdminOf = (
+  context: ConnectionContext,
+  room: Room,
+): { room: Room } | { error: string } => {
+  const seat = adminRoomOf(context);
+  if ("error" in seat) return seat;
+  return seat.room === room ? seat : { error: "Not in a room" };
 };
 
 export const registerWebinarHandlers = (context: ConnectionContext): void => {
@@ -79,7 +99,7 @@ export const registerWebinarHandlers = (context: ConnectionContext): void => {
 
   socket.on(
     "webinar:updateConfig",
-    (
+    async (
       data: WebinarUpdateRequest,
       callback: (
         response:
@@ -92,12 +112,6 @@ export const registerWebinarHandlers = (context: ConnectionContext): void => {
         respond(callback, guard);
         return;
       }
-
-      const room = context.currentRoom!;
-      const webinarConfig = getOrCreateWebinarRoomConfig(
-        state.webinarConfigs,
-        room.channelId,
-      );
 
       try {
         const update = { ...(data ?? {}) };
@@ -116,6 +130,24 @@ export const registerWebinarHandlers = (context: ConnectionContext): void => {
             update.inviteCode = null;
           }
         }
+        const disablingWebinar = update.enabled === false;
+        const requestedLinkSlug =
+          !disablingWebinar && typeof update.linkSlug === "string"
+            ? update.linkSlug.trim()
+            : "";
+        const reservedBy = requestedLinkSlug
+          ? await state.controlPlane.read(webinarBySlug(requestedLinkSlug))
+          : null;
+        const seat = stillAdminOf(context, guard.room);
+        if ("error" in seat) {
+          respond(callback, seat);
+          return;
+        }
+        const room = seat.room;
+        const webinarConfig = getOrCreateWebinarRoomConfig(
+          state.webinarConfigs,
+          room.channelId,
+        );
         const {
           changed: baseChanged,
           linkVersionBumped,
@@ -124,16 +156,12 @@ export const registerWebinarHandlers = (context: ConnectionContext): void => {
           update,
         );
         let changed = baseChanged;
-        const disablingWebinar = update.enabled === false;
 
         if (
           !disablingWebinar &&
           Object.prototype.hasOwnProperty.call(update, "linkSlug")
         ) {
-          const rawLinkSlug =
-            typeof update.linkSlug === "string" ? update.linkSlug.trim() : "";
-
-          if (!rawLinkSlug) {
+          if (!requestedLinkSlug) {
             const cleared = clearWebinarLinkSlug({
               webinarConfig,
               webinarLinks: state.webinarLinks,
@@ -144,13 +172,6 @@ export const registerWebinarHandlers = (context: ConnectionContext): void => {
               webinarConfig.linkVersion += 1;
             }
           } else {
-            // A scheduled webinar's link code belongs to its room, even before
-            // (or after) the scheduler binds it; an ad-hoc room must not take
-            // it and receive that webinar's audience.
-            const reservedBy = getScheduledWebinarBySlug(
-              state.scheduledWebinars,
-              rawLinkSlug,
-            );
             if (
               reservedBy &&
               getRoomChannelId(reservedBy.clientId, reservedBy.roomId) !==
@@ -162,7 +183,7 @@ export const registerWebinarHandlers = (context: ConnectionContext): void => {
               webinarConfig,
               webinarLinks: state.webinarLinks,
               room,
-              slug: rawLinkSlug,
+              slug: requestedLinkSlug,
             });
             changed = changed || slugChanged;
             if (slugChanged) {

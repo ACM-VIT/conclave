@@ -22,6 +22,7 @@ struct ActivitiesPanel: View {
             ActivitiesRootList(session: session)
                 .navigationDestination(for: ActivitiesPage.self) { page in
                     ActivitiesPageView(page: page, session: session)
+                        .navigationBarTitleDisplayMode(.inline)
                 }
         }
 
@@ -33,6 +34,7 @@ struct ActivitiesPanel: View {
         .background {
             ActivitiesPanelLeaves(session: session, presentationID: presentation.request.presentationID, path: $path)
         }
+        .appStageDiscardPrompt(host: session.appHost)
         .accessibilityIdentifier("activities.panel")
     }
 
@@ -138,10 +140,11 @@ private struct ActivitiesRootList: View {
     }
 
     private func replaceMessage(_ s: ActivitiesSnapshot) -> String {
-        if s.nowPlayingItem(kind: .app)?.appId == "whiteboard" {
+        let effect = s.nowPlayingItem(kind: .app)?.closeEffect ?? AppCloseEffect.returnsToMeeting
+        if effect == AppCloseEffect.clearsBoard {
             return ConclaveStrings.format("The %@ board clears for everyone.", openAppName(s))
         }
-        return ConclaveStrings.text("Everyone returns to the meeting.")
+        return ActivitiesCopy.closeMessage(effect)
     }
 }
 

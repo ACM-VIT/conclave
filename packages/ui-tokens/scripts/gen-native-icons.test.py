@@ -21,9 +21,6 @@ g = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(g)
 MANIFEST = g.ROOT / g.ICON / 'manifest.json'
 
-
-# ---------------------------------------------------------------- archived semantics replay
-
 def archived_text(name):
     return json.loads((g.ROOT / g.EVIDENCE / name).read_bytes())['item']['text']
 
@@ -63,7 +60,6 @@ def replay_archived_semantics(index_concepts):
         for name in re.findall(r'`([^`]+)`', c['canonical_sf_cell']):
             if name.startswith('Button(') or name == 'AVRoutePickerView':
                 continue
-            # 0-59 replaced every canonical context with its reviewed contextual meaning.
             symbols.append({'name': name, 'context': contexts.get(cid, {}).get(
                 name, 'canonical ' + cid + ' use; exact literal takes precedence over generic fill convention')})
         for name, context, _, _ in extra_sf.get(cid, []):
@@ -94,7 +90,6 @@ def replay_archived_semantics(index_concepts):
                              'decision_id': decision, 'references': references,
                              'accessibility': {'label': label, 'value': avalue, 'role': arole,
                                                'icon_exposure': 'decorative_in_labeled_owner'}})
-        # Patch 0-59.
         for b in bindings:
             if cid == 'participants':
                 b['accessibility']['value'] = 'participant and waiting counts; open selection semantics recommended with D02'
@@ -115,7 +110,6 @@ def replay_archived_semantics(index_concepts):
             for b in bindings:
                 b['accessibility']['role'] = 'checkbox'
                 b['references'].append('S50:908')
-        # Patch 0-83.
         for b in bindings:
             if (cid, b['state']) in values:
                 b['accessibility']['value'] = values[(cid, b['state'])]
@@ -151,7 +145,6 @@ class ArchivedSemantics(unittest.TestCase):
         replay = replay_archived_semantics(vendored_index()['concepts'])
         self.assertEqual(manifest['decisions'], replay['decisions'])
         self.assertEqual(manifest['accessibility'], replay['accessibility'])
-        # Explicit length check instead of zip(strict=True), which needs Python 3.10 (macOS system python3 is 3.9).
         self.assertEqual(len(manifest['concepts']), len(replay['concepts']))
         for actual, expected in zip(manifest['concepts'], replay['concepts']):
             with self.subTest(concept=expected['id']):
@@ -159,7 +152,6 @@ class ArchivedSemantics(unittest.TestCase):
         self.assertEqual(sum(len(c['bindings']) for c in replay['concepts']), 58)
 
     def test_contract_semantics_spot_checks(self):
-        # Fixed expectations from the recovered contract's accessibility section, not from the replay.
         manifest = json.loads(MANIFEST.read_bytes())
         b = {f"{c['id']}.{x['state']}": x for c in manifest['concepts'] for x in c['bindings']}
         acc = {k: (v['accessibility']['label'], v['accessibility']['value'], v['accessibility']['role']) for k, v in b.items()}
@@ -183,7 +175,6 @@ class ArchivedSemantics(unittest.TestCase):
         self.assertIsNone(manifest['accessibility']['android_child_contentDescription'])
 
 
-# ---------------------------------------------------------------- converter semantics
 
 class PathSemantics(unittest.TestCase):
     def test_initial_relative_and_implicit_repetition(self):
@@ -202,7 +193,6 @@ class PathSemantics(unittest.TestCase):
                           ('Q', 50, 50, 60, 60), ('Z',), ('M', 60, 70), ('Q', 60, 70, 70, 70)])
         self.assertEqual(g.normalize('M10 -950Q20 -950 20 -940ZT30 -930'),
                          [('M', 10, 10), ('Q', 20, 10, 20, 20), ('Z',), ('Q', 10, 10, 30, 30)])
-        # H and V reset reflection exactly like L.
         self.assertEqual(g.normalize('M0 -960Q10 -960 10 -950H20T30 -950'),
                          [('M', 0, 0), ('Q', 10, 0, 10, 10), ('L', 20, 10), ('Q', 20, 10, 30, 10)])
 
@@ -229,7 +219,6 @@ class PathSemantics(unittest.TestCase):
         self.assertEqual(g.float_literal(F(1) + F(1, 2 ** 24), 'tie')[0], '1.0f')
         self.assertEqual(g.float_literal(F(1) + F(1, 2 ** 24) + F(1, 10 ** 80), 'above')[0], '1.00000012f')
         self.assertEqual(g.float_literal(F('-0'), 'zero')[0], '0.0f')
-        # Nearest binary32 to 1/10 is 13421773/2**27, so the exact error is 2/(10*2**27).
         self.assertEqual(g.float_literal(F('0.1'), 'tenth'), ('0.100000001f', F(1, 671088640)))
         with self.assertRaises(g.IconError):
             g.float_literal(F('1e100'), 'overflow')
@@ -264,7 +253,6 @@ class XMLProfile(unittest.TestCase):
             g.svg_path(b' ' * 131073)
 
     def test_only_xml_whitespace_may_separate_elements(self):
-        # XML S is space, tab, CR and LF. Other Unicode spaces are character data, although str.isspace() is true.
         raw = self.svg()
         for space in [' ', '\t', '\n', '\r\n', ' \t\r\n ']:
             for data in [raw.replace(b'<path', space.encode() + b'<path'), raw.replace(b'</svg>', space.encode() + b'</svg>')]:
@@ -281,8 +269,6 @@ class XMLProfile(unittest.TestCase):
                     self.assertEqual(caught.exception.details['reason'], 'text content forbidden')
 
 
-# These fixed specimens are hand-derived from the recovered mathematical contract.
-# The winding sampler inspects the resulting explicit lines; it is not another SVG normalizer.
 def line_winding(ops, point):
     x, y = point
     winding, current, start = 0, None, None
@@ -329,7 +315,6 @@ class IndependentGeometry(unittest.TestCase):
         ops = g.normalize(self.fixtures()[3]['path'])
         self.assertEqual(ops, [('M', 160, 480), ('Q', 320, 160, 480, 480), ('Q', 640, 800, 800, 480), ('L', 800, 800),
                                ('L', 160, 800), ('Z',)])
-        # Quadratic derivative gives t=(p0-p1)/(p0-2*p1+p2), independent of the parser.
         p0, p1, p2 = F(480), F(160), F(480)
         t = (p0 - p1) / (p0 - 2 * p1 + p2)
         self.assertEqual(t, F(1, 2))
@@ -337,7 +322,6 @@ class IndependentGeometry(unittest.TestCase):
         self.assertEqual((160 * F(72, 960), 320 * F(72, 960), 800 * F(72, 960)), (12, 24, 60))
 
 
-# ---------------------------------------------------------------- validation, outputs and drift
 
 def mutated(mutation):
     original = MANIFEST.read_bytes()
@@ -370,7 +354,6 @@ class ValidationAndDrift(unittest.TestCase):
         self.assertNotIn('xmark.bubble', merged['sf_literals'])
 
     def test_addition_receipts_axes_and_semantics_fail_closed_after_resealing(self):
-        # Recompute the outer hash to exercise the inner constraints, not just the seal.
         path = g.ROOT / g.ADDITIONS / 'manifest.json'
         original = json.loads(path.read_bytes())
         read = Path.read_bytes
@@ -412,10 +395,9 @@ class ValidationAndDrift(unittest.TestCase):
         a = next(a for a in m['artwork'] if a['id'] == 'auto_awesome.fill0')
         raw = (g.ROOT / g.ADDITIONS / a['local_path']).read_bytes()
         with self.assertRaises(g.IconError):
-            g.svg_path(raw, a['id'])  # the original font960 profile is still strict
+            g.svg_path(raw, a['id'])
         self.assertEqual(g.digest(raw), g.ADDITIVE_24PX[a['id']])
         ops = g.artwork_ops(g.ROOT, a)
-        # Independent first contour coordinates from the original 24px source.
         self.assertEqual(ops[:2], [('M', F(760), F(332)), ('Q', F(755), F(332), F(18738, 25), F(329))])
         self.assertEqual(ops[-2:], [('M', F(360), F(480)), ('Z',)])
         self.assertTrue(all(0 <= v <= 960 for op in ops for v in op[1:]))
@@ -628,8 +610,6 @@ class AppModuleDrawables(unittest.TestCase):
                 g.drawable_name(bad)
 
     def test_system_drawables_are_the_selected_material_artwork(self):
-        # Consistency, not an oracle: the drawable a notification or PiP action shows is the same converted
-        # geometry as the Compose ImageVector for that artwork, as plain 24 dp white single paths.
         for name, prop in [('conclave_mic_fill1', 'MicFill1'), ('conclave_mic_off_fill1', 'MicOffFill1'),
                            ('conclave_call_end_fill1', 'CallEndFill1'),
                            ('conclave_cancel_presentation_fill1', 'CancelPresentationFill1')]:
@@ -659,8 +639,6 @@ class AppModuleDrawables(unittest.TestCase):
             self.assertNotIn(letter, xml)
         self.assertEqual(xml_attr(xml, 'android:fillColor'), '#FFFFFFFF')
         self.assertNotIn('fillType', xml)
-        # The drawn diamond (curve extent of the parsed path, placed by the parsed group translation) spans the
-        # 20 dp live area of the 24 dp canvas with a 2 dp margin on every side.
         width, height = xml_attr(xml, 'android:width'), xml_attr(xml, 'android:height')
         self.assertEqual((width, height), ('24dp', '24dp'))
         size = F(width[:-2])
@@ -688,7 +666,6 @@ class AppModuleDrawables(unittest.TestCase):
                 self.assertEqual(scale, F(xml_attr(xml, 'android:scaleY')))
                 offset = F(xml_attr(xml, 'android:translateX'))
                 self.assertEqual(offset, F(xml_attr(xml, 'android:translateY')))
-                # The 400 unit diamond becomes 66 dp, centred: its tips touch the 66 dp safe-zone circle.
                 self.assertEqual(scale * 400, 66)
                 self.assertEqual(offset * 2 + 66, 108)
         self.assertEqual(xml_attr(layers['ic_launcher_monochrome'], 'android:fillColor'), '#FFFFFFFF')
@@ -697,8 +674,6 @@ class AppModuleDrawables(unittest.TestCase):
         self.assertEqual(len(brand['subpaths']), 5)
 
     def test_wordmark_stand_in_is_withheld(self):
-        # Review F3 and ISSUE 1: the icon mark is not a "Conclave" wordmark, so no output ships under that name
-        # and the S10 R2 plain-title fallback stays until owner-approved outlined lettering exists.
         self.assertNotIn(g.DRAWABLES / 'conclave_wordmark.xml', self.outputs)
         self.assertEqual([p for p in self.outputs if 'wordmark' in str(p).lower()], [])
         full = ''.join(g.parse_brand_mark((g.ROOT / g.BRAND_MARK).read_bytes())['subpaths'])
@@ -863,7 +838,6 @@ class DarwinBrandAssets(unittest.TestCase):
                 self.assertEqual((xml_attr(svg, 'width'), xml_attr(svg, 'viewBox')), ('1024', '0 0 1024 1024'))
                 offset_x, offset_y, scale = (F(n) for n in re.fullmatch(
                     r'translate\(([0-9.]+) ([0-9.]+)\) scale\(([0-9.]+)\)', xml_attr(svg, 'transform')).groups())
-                # The 400 unit mark becomes today's 860 px diamond, centred on the 1024 px canvas.
                 self.assertEqual((offset_x, scale * 400, offset_x * 2 + scale * 400), (offset_y, 860, 1024))
 
     def test_callkit_template_is_the_letterless_diamond_vector(self):
@@ -873,12 +847,10 @@ class DarwinBrandAssets(unittest.TestCase):
         self.assertEqual(xml_attr(svg, 'd'), diamond)
         for letter in self.brand['subpaths'][1:]:
             self.assertNotIn(letter, svg)
-        # Template art: the system draws alpha only, so the path keeps SVG's default paint (no color, one color).
         self.assertNotIn('fill', svg)
         self.assertNotRegex(svg.lower(), r'gradient|stroke|opacity')
         self.assertEqual((xml_attr(svg, 'width'), xml_attr(svg, 'height')), ('40', '40'))
         self.assertEqual(xml_attr(svg, 'viewBox'), '0 0 400 400')
-        # S70 11 c: the diamond fills the 40 pt square.
         (left, right), (top, bottom) = curve_extent(diamond)
         for low, high in [(left, right), (top, bottom)]:
             self.assertLess(abs(low), F(1, 100))
@@ -917,7 +889,6 @@ class DarwinBrandAssets(unittest.TestCase):
                 (root / rel).write_bytes(b'x')
                 with self.assertRaises(g.IconError):
                     g.publish(root, g.generate(root), check=True)
-
 
 class FinderMetadata(unittest.TestCase):
     """Review D3: a Finder .DS_Store is never an input or an output, so it cannot fail validation or drift."""

@@ -1,14 +1,15 @@
 import type { Server as SocketIOServer } from "socket.io";
 import { Logger } from "../utilities/loggers.js";
+import { notifyAuthorityPolicy } from "./apps/authority/index.js";
 import { getRoomChannelId } from "./rooms.js";
 import type { ScheduledWebinar } from "../types.js";
-import {
-  hasWebinarEnded,
-  isWithinEarlyEntryWindow,
-  persistScheduledWebinarChanges,
-} from "./scheduledWebinars.js";
+import { isConcludedWebinar, isWithinEarlyEntryWindow } from "./scheduledWebinars.js";
+import { advanceWebinars, openWebinars, webinarsByIds, type WebinarSchedule } from "./controlPlane/webinarCommands.js";
+import type { Query } from "./controlPlane/tx.js";
 import type { SfuState } from "./state.js";
+import { emitWebinarAttendeeCountChanged, emitWebinarConfigChanged } from "./webinarNotifications.js";
 import {
+  clearWebinarLinkSlug,
   getOrCreateWebinarRoomConfig,
   normalizeHostEmail,
   setCustomWebinarLinkSlug,
@@ -25,6 +26,8 @@ type ScheduledRoomControls = {
   maxAttendees: number;
   waitingRoomEnabled: boolean;
   qaEnabled: boolean;
+  inviteCodeHash: string | null | undefined;
+  linkSlug: string;
 };
 
 /**
@@ -32,12 +35,12 @@ type ScheduledRoomControls = {
  * re-applied on every panelist join, on the scheduler tick and on schedule
  * edits; only values the schedule itself changed since then are copied
  * again, so a host's live lock, Q&A toggle or attendee cap is not reverted
- * by the next join.
+ * by the next join. A delayed result cannot replace a newer revision.
  */
-const appliedScheduleControls = new WeakMap<
-  WebinarRoomConfig,
-  ScheduledRoomControls
->();
+const appliedSchedule = new WeakMap<WebinarRoomConfig, {
+  rev: number;
+  controls: ScheduledRoomControls | null;
+}>();
 
 const isTerminalWebinarStatus = (status: ScheduledWebinar["status"]): boolean =>
   status === "ended" || status === "cancelled";
@@ -45,17 +48,19 @@ const isTerminalWebinarStatus = (status: ScheduledWebinar["status"]): boolean =>
 const applyScheduledRoomControls = (
   webinarConfig: WebinarRoomConfig,
   webinar: ScheduledWebinar,
-): void => {
+): { previous: ScheduledRoomControls | undefined; next: ScheduledRoomControls } => {
   const next: ScheduledRoomControls = {
     status: webinar.status,
     publicAccess: webinar.publicAccess,
     maxAttendees: webinar.maxAttendees,
     waitingRoomEnabled: webinar.waitingRoomEnabled,
     qaEnabled: webinar.qaEnabled,
+    inviteCodeHash: webinar.requiresInviteCode ? webinar.inviteCodeHash ?? undefined : null,
+    linkSlug: webinar.linkSlug,
   };
   const previous =
     webinarConfig.scheduledWebinarId === webinar.id
-      ? appliedScheduleControls.get(webinarConfig)
+      ? appliedSchedule.get(webinarConfig)?.controls ?? undefined
       : undefined;
 
   const wasOpen = previous ? !isTerminalWebinarStatus(previous.status) : false;
@@ -64,7 +69,7 @@ const applyScheduledRoomControls = (
     // First application, or the schedule was reopened: open the room.
     webinarConfig.enabled = true;
     webinarConfig.locked = false;
-  } else if (!isOpen) {
+  } else if (!isOpen && previous?.status !== next.status) {
     // Ended or cancelled schedules lock the room, as the /end and /cancel
     // routes and the scheduler tick do.
     webinarConfig.locked = true;
@@ -85,45 +90,24 @@ const applyScheduledRoomControls = (
   if (!previous || previous.qaEnabled !== next.qaEnabled) {
     webinarConfig.qaEnabled = next.qaEnabled;
   }
-  appliedScheduleControls.set(webinarConfig, next);
-};
-
-const recordScheduledWebinarEnded = (
-  webinarConfig: WebinarRoomConfig,
-  webinar: ScheduledWebinar,
-): void => {
-  webinarConfig.locked = true;
-  const applied = appliedScheduleControls.get(webinarConfig);
-  if (applied && webinarConfig.scheduledWebinarId === webinar.id) {
-    appliedScheduleControls.set(webinarConfig, {
-      ...applied,
-      status: webinar.status,
-    });
+  if (next.inviteCodeHash !== undefined && (!previous || previous.inviteCodeHash !== next.inviteCodeHash)) {
+    setWebinarInviteCodeHash(webinarConfig, next.inviteCodeHash);
   }
+  return { previous, next };
 };
 
 const applyScheduledWebinarToConfig = (
   state: SfuState,
+  channelId: string,
+  webinarConfig: WebinarRoomConfig,
   webinar: ScheduledWebinar,
-  inviteCodeHash: string | null,
-): WebinarRoomConfig => {
-  const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
-  const webinarConfig = getOrCreateWebinarRoomConfig(
-    state.webinarConfigs,
-    channelId,
-  );
-
-  applyScheduledRoomControls(webinarConfig, webinar);
+  rev: number,
+): void => {
+  const { previous, next } = applyScheduledRoomControls(webinarConfig, webinar);
   webinarConfig.scheduledWebinarId = webinar.id;
-  if (inviteCodeHash !== null) {
-    setWebinarInviteCodeHash(webinarConfig, inviteCodeHash);
-  }
-  if (!webinarConfig.inviteCodeHash && !webinar.requiresInviteCode) {
-    setWebinarInviteCodeHash(webinarConfig, null);
-  }
 
-  const previousLinkSlug = webinarConfig.linkSlug;
-  if (previousLinkSlug !== webinar.linkSlug) {
+  const scheduleSlugChanged = !previous || previous.linkSlug !== webinar.linkSlug;
+  if (scheduleSlugChanged && webinarConfig.linkSlug !== webinar.linkSlug) {
     try {
       setCustomWebinarLinkSlug({
         webinarConfig,
@@ -136,6 +120,7 @@ const applyScheduledWebinarToConfig = (
         slug: webinar.linkSlug,
       });
     } catch (error) {
+      next.linkSlug = previous?.linkSlug ?? "";
       Logger.warn(
         `Failed to bind webinar link slug ${webinar.linkSlug}: ${(error as Error).message}`,
       );
@@ -150,76 +135,178 @@ const applyScheduledWebinarToConfig = (
     nextForcedHosts.add(normalizeHostEmail(cohost.email));
   }
   webinarConfig.forcedHostEmails = nextForcedHosts;
-
-  return webinarConfig;
+  appliedSchedule.set(webinarConfig, { rev, controls: next });
 };
 
-export const ensureWebinarRoomConfig = (
+const releaseRemovedSchedule = (
   state: SfuState,
-  webinar: ScheduledWebinar,
-  inviteCodeHash: string | null = null,
-): WebinarRoomConfig =>
-  applyScheduledWebinarToConfig(state, webinar, inviteCodeHash);
+  channelId: string,
+  webinarConfig: WebinarRoomConfig,
+): void => {
+  clearWebinarLinkSlug({
+    webinarConfig,
+    webinarLinks: state.webinarLinks,
+    roomChannelId: channelId,
+  });
+  webinarConfig.enabled = false;
+  webinarConfig.forcedHostEmails = new Set();
+  webinarConfig.scheduledWebinarId = null;
+};
 
-const advanceScheduledWebinars = (
+export type WebinarConfigNotify = (channelId: string) => void;
+
+const deferredRoomNotices = new WeakSet<WebinarRoomConfig>();
+
+export const deferWebinarRoomNotice = (state: SfuState, channelId: string): void => {
+  const config = state.webinarConfigs.get(channelId);
+  if (config) deferredRoomNotices.add(config);
+};
+
+export const takeDeferredWebinarRoomNotice = (state: SfuState, channelId: string): boolean => {
+  const config = state.webinarConfigs.get(channelId);
+  return config !== undefined && deferredRoomNotices.delete(config);
+};
+
+export const notifyRoomConfig =
+  (state: SfuState, getIo: () => SocketIOServer | null): WebinarConfigNotify =>
+  (channelId) => {
+    const io = getIo();
+    const room = state.rooms.get(channelId);
+    if (!io || !room) return;
+    emitWebinarConfigChanged(io, state, room);
+    emitWebinarAttendeeCountChanged(io, state, room);
+  };
+
+const settingsOf = (config: WebinarRoomConfig | undefined): string =>
+  config ? JSON.stringify({ ...config, forcedHostEmails: [...config.forcedHostEmails].sort() }) : "";
+
+const channelOf = (webinar: Pick<ScheduledWebinar, "clientId" | "roomId">): string =>
+  getRoomChannelId(webinar.clientId, webinar.roomId);
+
+const settleWebinarRoom = (
   state: SfuState,
-  io: SocketIOServer | null,
-  now = Date.now(),
-): number => {
-  let changed = 0;
-  const changedWebinars: ScheduledWebinar[] = [];
-  for (const webinar of state.scheduledWebinars.byId.values()) {
-    if (webinar.status === "cancelled") continue;
+  channelId: string,
+  update: { id: string; rev: number; value: ScheduledWebinar | null },
+  notify: WebinarConfigNotify,
+): void => {
+  const current = state.webinarConfigs.get(channelId);
+  const { id, rev, value } = update;
+  if (value ? channelOf(value) !== channelId : current?.scheduledWebinarId !== id) return;
+  if (current && rev < (appliedSchedule.get(current)?.rev ?? -1)) return;
+  const before = settingsOf(current);
+  const config = current ?? getOrCreateWebinarRoomConfig(state.webinarConfigs, channelId);
+  if (value) {
+    applyScheduledWebinarToConfig(state, channelId, config, value, rev);
+  } else {
+    releaseRemovedSchedule(state, channelId, config);
+    appliedSchedule.set(config, { rev, controls: null });
+  }
+  const changed = settingsOf(config) !== before;
+  if (changed) notifyAuthorityPolicy(state, channelId);
+  const deferred = takeDeferredWebinarRoomNotice(state, channelId);
+  if (changed || deferred) notify(channelId);
+};
 
-    if (webinar.status === "scheduled" && isWithinEarlyEntryWindow(webinar, now)) {
-      applyScheduledWebinarToConfig(state, webinar, null);
-      if (now >= webinar.scheduledStartAt) {
-        webinar.status = "live";
-        if (!webinar.liveStartedAt) {
-          webinar.liveStartedAt = now;
-        }
-        webinar.updatedAt = now;
-        changedWebinars.push(webinar);
-        changed += 1;
-      }
-    } else if (webinar.status === "live" && hasWebinarEnded(webinar, now)) {
-      webinar.status = "ended";
-      webinar.endedAt = now;
-      webinar.updatedAt = now;
-      changedWebinars.push(webinar);
-      const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
-      const cfg = state.webinarConfigs.get(channelId);
-      if (cfg) {
-        recordScheduledWebinarEnded(cfg, webinar);
-      }
-      void io;
-      changed += 1;
+export const invalidateWebinarPublicationReads = (state: SfuState): void => {
+  state.webinarPublicationEpoch += 1;
+};
+
+const readForPublication = async <T, R>(
+  state: SfuState,
+  query: Query<T>,
+  publish: (result: T) => R,
+): Promise<R> => {
+  while (true) {
+    const publicationEpoch = state.webinarPublicationEpoch;
+    const result = await state.controlPlane.read(query);
+    // A concluded or deleted webinar may have no room config to retain its revision.
+    if (publicationEpoch === state.webinarPublicationEpoch) return publish(result);
+  }
+};
+
+export const readWebinarScheduleForJoin = <T>(
+  state: SfuState,
+  query: Query<WebinarSchedule | null>,
+  notify: WebinarConfigNotify,
+  use: (schedule: WebinarSchedule | null) => { result: T; publish: boolean },
+): Promise<T> =>
+  readForPublication(state, query, (schedule) => {
+    const { result, publish } = use(schedule);
+    if (schedule && publish) {
+      settleWebinarRoom(state, channelOf(schedule.value), { id: schedule.value.id, ...schedule }, notify);
+    }
+    return result;
+  });
+
+const reconcileWebinarRooms = (
+  state: SfuState,
+  roomsByWebinar: ReadonlyMap<string, string>,
+  notify: WebinarConfigNotify,
+): Promise<void> =>
+  readForPublication(state, webinarsByIds([...roomsByWebinar.keys()]), (records) => {
+    for (const [id, channelId] of roomsByWebinar) {
+      const record = records.get(id);
+      if (!record) continue;
+      if (record.value === null) invalidateWebinarPublicationReads(state);
+      settleWebinarRoom(state, channelId, { id, ...record }, notify);
+    }
+  });
+
+export const refreshWebinarRoomConfig = (
+  state: SfuState,
+  webinar: Pick<ScheduledWebinar, "id" | "clientId" | "roomId">,
+  notify: WebinarConfigNotify,
+): Promise<void> => reconcileWebinarRooms(state, new Map([[webinar.id, channelOf(webinar)]]), notify);
+
+export const publishDeletedWebinar = (
+  state: SfuState,
+  webinar: Pick<ScheduledWebinar, "id" | "clientId" | "roomId">,
+  rev: number,
+  notify: WebinarConfigNotify,
+): void => {
+  invalidateWebinarPublicationReads(state);
+  settleWebinarRoom(state, channelOf(webinar), { id: webinar.id, rev, value: null }, notify);
+};
+
+export const advanceScheduledWebinars = async (
+  state: SfuState,
+  now: number,
+  notify: WebinarConfigNotify,
+): Promise<ScheduledWebinar[]> => {
+  const advanced = await state.controlPlane.commit(advanceWebinars);
+  const changed = advanced.ok ? advanced.value : [];
+  if (changed.some(isConcludedWebinar)) invalidateWebinarPublicationReads(state);
+  const roomsByWebinar = new Map<string, string>();
+  for (const webinar of changed) {
+    const channelId = channelOf(webinar);
+    if (webinar.status === "live" || state.webinarConfigs.has(channelId)) {
+      roomsByWebinar.set(webinar.id, channelId);
     }
   }
-
-  if (changed > 0 && state.scheduledWebinarPersistence) {
-    persistScheduledWebinarChanges(
-      state.scheduledWebinars,
-      state.scheduledWebinarPersistence,
-      changedWebinars,
-    );
+  for (const { value: webinar } of await state.controlPlane.read(openWebinars)) {
+    if (webinar.status === "live" || (webinar.status === "scheduled" && isWithinEarlyEntryWindow(webinar, now))) {
+      roomsByWebinar.set(webinar.id, channelOf(webinar));
+    }
   }
-
+  for (const [channelId, { scheduledWebinarId: id }] of state.webinarConfigs) {
+    if (id && !roomsByWebinar.has(id)) roomsByWebinar.set(id, channelId);
+  }
+  if (roomsByWebinar.size > 0) {
+    await reconcileWebinarRooms(state, roomsByWebinar, notify);
+  }
   return changed;
 };
 
 export const startScheduledWebinarTimer = (
   state: SfuState,
-  getIo: () => SocketIOServer | null,
+  notify: WebinarConfigNotify,
   intervalMs = DEFAULT_TICK_MS,
 ): void => {
   if (state.scheduledWebinarTimer) return;
   state.scheduledWebinarTimer = setInterval(() => {
-    try {
-      advanceScheduledWebinars(state, getIo(), Date.now());
-    } catch (error) {
+    advanceScheduledWebinars(state, Date.now(), notify).catch((error) => {
       Logger.error("scheduled webinar tick failed", error);
-    }
+    });
   }, intervalMs);
   if (state.scheduledWebinarTimer.unref) {
     state.scheduledWebinarTimer.unref();

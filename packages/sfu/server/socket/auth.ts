@@ -14,11 +14,22 @@ export type SfuAuthPayload = JwtPayload & {
   userId?: string;
   name?: string;
   sessionId?: string;
+  /**
+   * The guest claims: the pass proof behind a guest `userId`, the room the
+   * token was issued for, and the seats the same browser holds under its
+   * other passes. They are read only through `parseGuestJoinClaims`
+   * (`@conclave/meeting-core/guest-join-claims`), which says what each one
+   * is and refuses a token whose guest claims are malformed.
+   */
+  guestProof?: unknown;
+  guestRoom?: unknown;
+  guestWas?: unknown;
   isHost?: boolean;
   isAdmin?: boolean;
   isForcedHost?: boolean;
   isSuperAdmin?: boolean;
   allowRoomCreation?: boolean;
+  createsCode?: boolean;
 };
 
 const isSfuAuthPayload = (

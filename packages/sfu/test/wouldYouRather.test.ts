@@ -9,8 +9,6 @@ const players: GamePlayer[] = [
   { id: "p3", name: "Robin" },
 ];
 
-// Identity shuffle keeps the prompt bank order: the first prompt is
-// { a: "Be able to fly", b: "Be invisible" }.
 const rng: GameRng = {
   next: () => 0,
   int: () => 0,
@@ -73,7 +71,6 @@ describe("would you rather game", () => {
       { playerId: "p3", type: "choose", payload: { option: 0 } },
       context(2_000),
     );
-    // Every present player chose -> deadline collapses, tick reveals.
     state = wouldYouRatherModule.onTick!(state, context(2_000));
 
     expect(wouldYouRatherModule.getPhase(state)).toBe("reveal");
@@ -109,7 +106,6 @@ describe("would you rather game", () => {
   });
 
   it("advances early once every present player picks, ignoring an absent seat", () => {
-    // p3 holds a seat but is disconnected: only host and p2 are active.
     const active = players.filter((player) => player.id !== "p3");
 
     let state = wouldYouRatherModule.onMove(
@@ -117,7 +113,6 @@ describe("would you rather game", () => {
       { playerId: "host", type: "choose", payload: { option: 0 } },
       context(2_000, { activePlayers: active }),
     );
-    // Still open: not every present player has chosen.
     expect(state.deadline).toBe(1_000 + 15_000);
 
     state = wouldYouRatherModule.onMove(
@@ -125,8 +120,6 @@ describe("would you rather game", () => {
       { playerId: "p2", type: "choose", payload: { option: 1 } },
       context(2_000, { activePlayers: active }),
     );
-    // Both present players chose -> deadline collapses to now. Under the old
-    // ctx.players logic (length 3) this would still sit at the full deadline.
     expect(state.deadline).toBe(2_000);
 
     const advanced = wouldYouRatherModule.onTick!(

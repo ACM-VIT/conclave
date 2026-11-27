@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { color } from "@conclave/ui-tokens";
+import { buildMeetingPath } from "../../lib/meeting-links";
 import { ChatSpectator } from "./ChatSpectator";
 import { ParticipantRow } from "./ParticipantRow";
 import { TranscriptSpectator } from "./TranscriptSpectator";
@@ -81,6 +82,7 @@ export function RoomView({
     "This meeting has been ended by the host.",
   );
   const [copied, setCopied] = useState(false);
+  const meetingPath = buildMeetingPath({ roomCode: room.id, clientId: room.clientId });
 
   useEffect(() => {
     if (!copied) return;
@@ -183,15 +185,17 @@ export function RoomView({
           <button
             type="button"
             className={btnSecondary}
+            disabled={!meetingPath}
             onClick={() => {
+              if (!meetingPath) return;
               void navigator.clipboard
-                ?.writeText(`${window.location.origin}/${encodeURIComponent(room.id)}`)
+                ?.writeText(`${window.location.origin}${meetingPath}`)
                 .then(() => setCopied(true))
                 .catch(() => {});
             }}
-            title="Copy the meeting link"
+            title={meetingPath ? "Copy the meeting link" : "This room ID cannot be shared as a link"}
           >
-            {copied ? "Copied" : "Copy link"}
+            {copied ? "Copied" : meetingPath ? "Copy link" : "No shareable link"}
           </button>
           <ConfirmButton
             label="End room"

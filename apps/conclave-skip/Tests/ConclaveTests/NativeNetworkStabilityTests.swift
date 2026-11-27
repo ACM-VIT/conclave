@@ -97,7 +97,7 @@ struct NativeNetworkStabilityTests {
     }
 
     @MainActor @Test func quietOneOnOneStagePromotesItsMainInsteadOfUsingThumbnailQuality() {
-        let stage = StagePresenter(shell: MeetingShellPresenter())
+        let stage = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         stage.setViewport(StagePoliciesTests.iphone17e)
         let inputs = StageFixtureScript.base(count: 2)
         stage.apply(inputs)
@@ -111,7 +111,7 @@ struct NativeNetworkStabilityTests {
 
     @MainActor @Test func focusFollowsTheDisplayedMainThroughSpeakerHysteresisAndSilence() {
         var clock = 50_000.0
-        let stage = StagePresenter(shell: MeetingShellPresenter())
+        let stage = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         stage.now = { clock }
         stage.sleep = { _ in try? await Task.sleep(nanoseconds: 60_000_000_000) }
         stage.setViewport(StagePoliciesTests.iphone17e)

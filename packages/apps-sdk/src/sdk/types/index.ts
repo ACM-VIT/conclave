@@ -9,24 +9,71 @@ export type AppUser = {
 };
 
 export type AppsState = {
+  /** The app presented on the room's stage. Only hosts change it. */
   activeAppId: string | null;
   locked: boolean;
+  roomId?: string;
+  notInRoom?: true;
+  /**
+   * Bumped by every change to this state. Null on an older SFU, which
+   * erases an app's document when it leaves the stage and cannot clear one.
+   */
+  revision: number | null;
+  /** Apps off the stage whose document the room keeps. */
+  savedAppIds: string[];
+  /**
+   * The presented app's document. A new number means the room started it
+   * over, so a local copy of the earlier one is stale. Null when nothing is
+   * presented, or on an older SFU.
+   */
+  docGeneration: number | null;
 };
 
 export type AppsSyncPayload = {
   appId: string;
   syncMessage: Uint8Array;
+  canRetry?: boolean;
+  wholeChanges?: true;
 };
 
 export type AppsSyncResponse = {
   syncMessage: Uint8Array;
   stateVector?: Uint8Array;
   awarenessUpdate?: Uint8Array;
+  stagesParts?: true;
+  takesUpdateLists?: true;
 };
 
-export type AppsUpdatePayload = {
+export type AppsSyncError = {
+  error: string;
+  retryable?: true;
+  retryAfterMs?: number;
+};
+
+export type AppSyncStatus = "idle" | "syncing" | "synced" | "failed";
+
+export type AppDocuments = {
+  version: number;
+  doc: (appId: string) => Y.Doc;
+  awareness: (appId: string) => Awareness;
+  writeOnce: (appId: string, key: string, write: (doc: Y.Doc) => void) => void;
+};
+
+export type AppsUpdatePart = {
+  id: string;
+  index: number;
+  count: number;
+};
+
+export type AppsUpdatePayload = { appId: string; replicaId?: string } & (
+  | { update: Uint8Array; part?: AppsUpdatePart }
+  | { updates: Uint8Array[] }
+);
+
+export type AppsRefusedPayload = {
   appId: string;
-  update: Uint8Array;
+  replicaId: string;
+  reason: string;
 };
 
 export type AppsAwarenessPayload = {
@@ -35,41 +82,92 @@ export type AppsAwarenessPayload = {
   clientId?: number;
 };
 
+/** Why the SFU refused a stage command. */
+export type AppsStageErrorCode = "stale_revision" | "room_full";
+
 export type AppsOpenPayload = {
   appId: string;
-  options?: Record<string, unknown>;
+  expectedRevision?: number;
+  expectedRoomId?: string;
 };
 
 export type AppsOpenResponse = {
   success: boolean;
   activeAppId?: string;
   error?: string;
+  code?: AppsStageErrorCode;
+};
+
+export type AppsClosePayload = {
+  expectedRevision: number;
+  expectedRoomId?: string;
 };
 
 export type AppsCloseResponse = {
   success: boolean;
   error?: string;
+  code?: AppsStageErrorCode;
+};
+
+export type AppsDiscardPayload = {
+  appId: string;
+  expectedRevision: number;
+};
+
+export type AppsDiscardResponse = {
+  success: boolean;
+  error?: string;
+  code?: AppsStageErrorCode;
 };
 
 export type AppsLockPayload = {
   locked: boolean;
+  expectedRevision?: number;
 };
 
 export type AppsLockResponse = {
   success: boolean;
   locked?: boolean;
   error?: string;
+  code?: AppsStageErrorCode;
 };
+
+/**
+ * How a stage command went. `roomFull`: the room keeps as many app documents
+ * as it can, so a host clears one before presenting another. `staleStage`:
+ * the stage changed first. `failed`: anything else, such as no permission,
+ * a rate limit, a timeout or an older SFU.
+ */
+export type AppsCommandResult =
+  | { ok: true }
+  | { ok: false; reason: "roomFull" | "staleStage" | "failed" };
 
 export type AppsContextValue = {
   state: AppsState;
   apps: ConclaveApp[];
-  openApp: (appId: string, options?: Record<string, unknown>) => Promise<boolean>;
-  closeApp: () => Promise<boolean>;
-  setLocked: (locked: boolean) => Promise<boolean>;
+  /** Presents an app on the room's stage. Hosts only. */
+  presentApp: (appId: string) => Promise<AppsCommandResult>;
+  /** Takes the presented app off the stage. The room keeps its document unless `revision` is null. */
+  closeApp: () => Promise<AppsCommandResult>;
+  /** Erases an app's document for everyone. Fails on an older SFU. */
+  clearApp: (appId: string) => Promise<AppsCommandResult>;
+  setLocked: (locked: boolean) => Promise<AppsCommandResult>;
   refreshState: () => void;
   getDoc: (appId: string) => Y.Doc;
   getAwareness: (appId: string) => Awareness;
+  syncStatus: AppSyncStatus;
+  retrySync: () => void;
+  documents: AppDocuments;
+  rejectedChangeAt: number | null;
+  rejectedChangeReason: string | null;
+  isRebuilding: boolean;
+  /**
+   * Changes with every new local copy of the presented app's document. Hosts
+   * mount the app only when `syncStatus` is `synced`, keyed by this, so an app
+   * never edits a copy the room has not filled yet or one the provider dropped.
+   */
+  presentedDocKey: string | null;
+  rejectedChange: { at: number; reason: string } | null;
   user?: AppUser;
   participants?: AppUser[];
   isAdmin?: boolean;

@@ -5,10 +5,6 @@ import {
 } from "../src/participant-reducer";
 import type { Participant } from "../src/types";
 
-/**
- * A MediaStream stand-in. The reducer never calls methods on the stream — it
- * only stores/compares the reference — so an opaque object is faithful.
- */
 const fakeStream = (id: string): MediaStream => ({ id }) as unknown as MediaStream;
 
 const empty = () => new Map<string, Participant>();
@@ -43,8 +39,6 @@ describe("participantReducer — ADD_PARTICIPANT (join)", () => {
       userId: "a",
     });
     const p = next.get("a")!;
-    // No producers means no media: a joiner who never turns their camera on
-    // never produces, so nothing would ever correct an optimistic "on" flag.
     expect(p).toMatchObject({
       userId: "a",
       isMuted: true,
@@ -63,7 +57,7 @@ describe("participantReducer — ADD_PARTICIPANT (join)", () => {
       type: "ADD_PARTICIPANT",
       userId: "a",
     });
-    expect(next).toBe(state); // identity preserved → memoized consumers skip
+    expect(next).toBe(state);
   });
 
   it("clears isLeaving when a leaving participant re-joins", () => {

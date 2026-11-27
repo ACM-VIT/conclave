@@ -1,16 +1,6 @@
 import tseslint from "typescript-eslint";
+import conclave from "./scripts/quality/comments/eslint-plugin.mjs";
 
-// Lint policy for the TypeScript workspace packages (apps/web has its own
-// config with the same philosophy). Deliberately cherry-picked: every rule
-// here catches a bug class or a genuine smell — no broad stylistic presets,
-// which would flood a codebase this size with noise.
-//
-// Everything is an error: the packages are clean on all of these, so they
-// gate regressions in CI. Untrusted network input (express req.body, socket
-// payloads, fetched JSON) is narrowed once at the boundary via
-// packages/sfu/utilities/untrusted.ts instead of flowing through as `any`.
-
-// Syntax-level rules — no type information needed.
 const baseRules = {
   eqeqeq: ["error", "smart"],
   "no-var": "error",
@@ -30,8 +20,6 @@ const baseRules = {
   ],
 };
 
-// Type-aware rules — the async bug classes tsc and grep cannot see. A dropped
-// promise in the SFU is a silent failure or an unhandled rejection in prod.
 const typedRules = {
   "@typescript-eslint/no-floating-promises": ["error", { ignoreVoid: true }],
   "@typescript-eslint/no-misused-promises": [
@@ -54,10 +42,27 @@ const typedRules = {
 
 export default tseslint.config(
   {
-    ignores: ["**/dist/**", "**/node_modules/**", "apps/**"],
+    ignores: [
+      "**/dist/**",
+      "**/node_modules/**",
+      "**/.build/**",
+      "artifacts/**",
+      "coverage/**",
+      "apps/*",
+      "!apps/conclave-skip/",
+      "apps/conclave-skip/*",
+      "!apps/conclave-skip/Tests/",
+      "apps/conclave-skip/Tests/*",
+      "!apps/conclave-skip/Tests/Rig/",
+    ],
   },
   {
-    // Packages with a tsconfig — full type-aware linting.
+    files: ["**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"],
+    languageOptions: { parser: tseslint.parser },
+    plugins: { conclave },
+    rules: { "conclave/no-comments": "error" },
+  },
+  {
     files: [
       "packages/sfu/**/*.{ts,tsx}",
       "packages/ai/**/*.ts",
@@ -77,8 +82,6 @@ export default tseslint.config(
     rules: { ...baseRules, ...typedRules },
   },
   {
-    // ui-tokens has no tsconfig (source-consumed tokens + primitives):
-    // syntax-level rules only.
     files: ["packages/ui-tokens/src/**/*.{ts,tsx}"],
     languageOptions: { parser: tseslint.parser },
     plugins: { "@typescript-eslint": tseslint.plugin },

@@ -19,10 +19,6 @@ import {
   type SupportedGridSize,
 } from "../zipSolver.js";
 
-/* ------------------------------------------------------------------ */
-/*  Types                                                              */
-/* ------------------------------------------------------------------ */
-
 type PlayerOutcome = "win" | "timeout";
 
 type PlayerBoard = {
@@ -75,33 +71,24 @@ const decodeZipMove = (move: GameMove): ZipMove => {
   }
 };
 
-/* ------------------------------------------------------------------ */
-/*  Scoring                                                            */
-/* ------------------------------------------------------------------ */
 
 const SOLVE_BASE = 100;
 const HINT_PENALTY = 15;
 const HINT_COOLDOWN_MS = 3_000;
 const MIN_SOLVE_SCORE = 10;
 const SPEED_BONUS_MAX = 50;
-const SPEED_DIVISOR = 3000; // ms per point lost
+const SPEED_DIVISOR = 3000;
 
 const roundScore = (board: PlayerBoard, roundStartedAt: number): number => {
   if (board.outcome !== "win" || board.solvedAt == null) return 0;
 
-  // Base minus hint penalty.
   const base = Math.max(MIN_SOLVE_SCORE, SOLVE_BASE - board.hintsUsed * HINT_PENALTY);
 
-  // Speed bonus: full bonus for instant solve, decreasing linearly.
   const solveTimeMs = Math.max(0, board.solvedAt - roundStartedAt);
   const speedBonus = Math.max(0, SPEED_BONUS_MAX - Math.floor(solveTimeMs / SPEED_DIVISOR));
 
   return base + speedBonus;
 };
-
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                            */
-/* ------------------------------------------------------------------ */
 
 const winnerName = (ctx: GameContext, winnerId: string | null): string | null => {
   if (!winnerId) return null;
@@ -112,10 +99,8 @@ const computeWinnerId = (state: ZipState): string | null => {
   const winners = Object.entries(state.players)
     .filter(([, board]) => board.outcome === "win" && board.solvedAt != null)
     .sort(([, a], [, b]) => {
-      // Fewest hints first.
       const hints = a.hintsUsed - b.hintsUsed;
       if (hints !== 0) return hints;
-      // Then fastest time.
       return (a.solvedAt ?? Infinity) - (b.solvedAt ?? Infinity);
     });
   return winners[0]?.[0] ?? null;
@@ -241,9 +226,6 @@ const buildPuzzleForValidation = (state: ZipState): GeneratedPuzzle => ({
   anchorCount: 0,
 });
 
-/* ------------------------------------------------------------------ */
-/*  Module                                                             */
-/* ------------------------------------------------------------------ */
 
 export const zipModule: GameModule<ZipState> = {
   id: "zip",
@@ -359,17 +341,14 @@ export const zipModule: GameModule<ZipState> = {
           throw new GameMoveError("Path is longer than this puzzle allows");
         }
 
-        // The client sends the full updated path. Validate it from scratch.
         const puzzle = buildPuzzleForValidation(state);
 
-        // Validate the path is a valid prefix.
         const firstCell = cells[0];
         const expectedStart = getFirstAnchor(puzzle);
         if (firstCell !== expectedStart) {
           throw new GameMoveError("Path must start at anchor 1");
         }
 
-        // Validate each step.
         for (let i = 1; i < cells.length; i++) {
           const result = validateMove(cells.slice(0, i), cells[i], puzzle);
           if (!result.valid) {
@@ -382,7 +361,6 @@ export const zipModule: GameModule<ZipState> = {
           path: cells,
         };
 
-        // Check for win.
         const totalValidCells = state.gridSize * state.gridSize - state.deadCells.length;
         if (cells.length === totalValidCells) {
           const winCheck = validateCompletePath(cells, puzzle);
@@ -435,7 +413,6 @@ export const zipModule: GameModule<ZipState> = {
           hintAvailableAt: ctx.now + HINT_COOLDOWN_MS,
         };
 
-        // Check for win after hint.
         const totalValidCells = state.gridSize * state.gridSize - state.deadCells.length;
         if (newPath.length === totalValidCells) {
           const winCheck = validateCompletePath(newPath, puzzle);
@@ -511,7 +488,6 @@ export const zipModule: GameModule<ZipState> = {
       return withTimeoutResults(state);
     }
 
-    // Early completion: all players finished.
     if (allPlayersFinished(state, ctx)) {
       return {
         ...state,
@@ -548,7 +524,6 @@ export const zipModule: GameModule<ZipState> = {
           if (hints !== 0) return hints;
           return (a.solvedAt ?? Infinity) - (b.solvedAt ?? Infinity);
         }
-        // Sort by progress.
         return b.cellsFilled - a.cellsFilled;
       });
 

@@ -96,6 +96,29 @@ struct ACT7AppHostTests {
         }
     }
 
+    @Test func aWheelNameCutAtAnEmojiReachesIOSAsAStatusItCanParse() throws {
+        let data = try Data(contentsOf: act7RepoRoot().appendingPathComponent("packages/apps-sdk/src/native-embed/contract-fixtures.json"))
+        let fixtures = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let scope = try #require(fixtures["scope"] as? [String: Any])
+        let expectation = AppBridgeExpectation(origin: try #require(fixtures["expectedOrigin"] as? String),
+                                               callSessionId: try #require(scope["callSessionId"] as? String),
+                                               appSessionId: try #require(scope["appSessionId"] as? String))
+        let cases = try #require(fixtures["embedToNative"] as? [[String: Any]])
+        func raw(_ prefix: String) throws -> String {
+            let item = try #require(cases.first { ($0["name"] as? String ?? "").hasPrefix(prefix) })
+            return try #require(item["raw"] as? String)
+        }
+        let sent = try raw("wheel status holding half an emoji")
+        let now = try raw("wheel status with the half emoji dropped")
+        #expect(throws: (any Error).self) { try JSONSerialization.jsonObject(with: Data(sent.utf8)) }
+        #expect(AppBridgeCodec.decode(raw: sent, origin: expectation.origin, isMainFrame: true, expectation: expectation).rejection == .malformed)
+        let parsed = try #require(try JSONSerialization.jsonObject(with: Data(now.utf8)) as? [String: Any])
+        let app = try #require((parsed["payload"] as? [String: Any])?["app"] as? [String: Any])
+        let label = try #require((app["entries"] as? [[String: Any]])?.first?["label"] as? String)
+        #expect(label == String(repeating: "A", count: 47))
+        #expect(AppBridgeCodec.decode(raw: now, origin: expectation.origin, isMainFrame: true, expectation: expectation).rejection == .none)
+    }
+
     @Test func protocolPiecesAreStrict() {
         #expect(AppBridgeCodec.isValidIdentifier("app-1a2b:3.c_d"))
         #expect(!AppBridgeCodec.isValidIdentifier("app 1"))
@@ -162,6 +185,45 @@ struct ACT7AppHostTests {
             #expect(AppBridgeRejection(rawValue: entry) != nil, "a rejection log entry carries content: \(entry)")
             #expect(!entry.contains("s3cr3t") && !entry.contains("AQID"))
         }
+    }
+
+    @Test func wheelConfirmationReadsTheRoomWithoutResettingTheReadyRenderer() async throws {
+        let wire = Wire()
+        let relay = session(wire, appId: "wheel")
+        #expect(ready(relay) == .none)
+        await settle { relay.snapshotDelivered }
+        let before = wire.events.count
+        let request = envelope(relay, "sync", ["stateVector": "AQ==", "purpose": "wheel-add-confirmation"],
+                               requestId: "wheel-confirm-1")
+        #expect(relay.receiveFromEmbed(raw: request, origin: AppBridgeProtocol.iosOrigin, isMainFrame: true) == .none)
+        #expect(relay.snapshotDelivered)
+        await settle { wire.syncs.count == 2 && wire.types().last == "snapshot" }
+        let response = try #require(wire.delivered.last)
+        let snapshot = try #require(AppBridgeCodec.jsonObject(response))
+        #expect(snapshot["requestId"] as? String == "wheel-confirm-1")
+        #expect((snapshot["payload"] as? [String: Any])?["syncMessage"] as? String == "AQI=")
+        #expect(wire.syncs == [Data([0]), Data([1])])
+        #expect(wire.events.count == before)
+        #expect(relay.snapshotDelivered && relay.isReady)
+    }
+
+    @Test(arguments: ["disconnect", "switch", "offline"])
+    func aWheelConfirmationCannotSyncAfterItsConnectionOrSessionEnds(_ exit: String) async {
+        let wire = Wire()
+        let relay = session(wire, appId: "wheel")
+        #expect(ready(relay) == .none)
+        await settle { relay.snapshotDelivered }
+        #expect(wire.syncs == [Data([0])])
+        if exit == "offline" { relay.setConnection(live: false) }
+
+        let request = envelope(relay, "sync", ["stateVector": "AQ==", "purpose": "wheel-add-confirmation"],
+                               requestId: "wheel-confirm-1")
+        #expect(relay.receiveFromEmbed(raw: request, origin: AppBridgeProtocol.iosOrigin, isMainFrame: true) == .none)
+        if exit == "disconnect" { relay.setConnection(live: false) }
+        if exit == "switch" { relay.begin(appId: "whiteboard", callSessionId: Self.call, isReadOnly: false) }
+
+        await settle { wire.syncs.count > 1 }
+        #expect(wire.syncs == [Data([0])])
     }
 
     @Test func readyGetsHostStatusThenTheSnapshotThenBufferedRoomBytes() async throws {
@@ -278,6 +340,107 @@ struct ACT7AppHostTests {
         #expect(relay.appSessionId.isEmpty && relay.lifecycle == .idle && relay.rejectionCount == 0)
     }
 
+    @Test func leaveWaitsForTheEmbedToCheckTheRoomSnapshot() async throws {
+        let wire = Wire()
+        let relay = session(wire)
+        relay.sleep = { _ in try? await Task.sleep(nanoseconds: 1_000_000_000) }
+        #expect(ready(relay) == .none)
+        await settle { relay.snapshotDelivered }
+
+        let leave = Task { @MainActor in await relay.prepareToLeave() }
+        await settle { wire.types().last == "prepareToLeave" }
+        let requestId = try #require(wire.delivered.last.flatMap(AppBridgeCodec.jsonObject)?["requestId"] as? String)
+        #expect(relay.receiveFromEmbed(raw: envelope(relay, "verifySaved", [:], requestId: requestId),
+                                       origin: AppBridgeProtocol.iosOrigin, isMainFrame: true) == .none)
+        await settle { wire.types().last == "savedSnapshot" }
+        #expect(wire.syncs == [Data([0]), Data([0])])
+        #expect(relay.snapshotDelivered && relay.isReady)
+        #expect(relay.receiveFromEmbed(raw: envelope(relay, "ack", ["ok": true], requestId: requestId),
+                                       origin: AppBridgeProtocol.iosOrigin, isMainFrame: true) == .none)
+        #expect(await leave.value)
+    }
+
+    @Test func leaveTimesOutAndReplacementRejectsTheOldBridgeAck() async throws {
+        let wire = Wire()
+        let relay = session(wire)
+        #expect(ready(relay) == .none)
+        #expect(!(await relay.prepareToLeave()))
+        #expect(relay.appId == "whiteboard")
+
+        relay.sleep = { _ in try? await Task.sleep(nanoseconds: 1_000_000_000) }
+        let leave = Task { @MainActor in await relay.prepareToLeave() }
+        let count = wire.delivered.count
+        await settle { wire.delivered.count > count && wire.types().last == "prepareToLeave" }
+        let requestId = try #require(wire.delivered.last.flatMap(AppBridgeCodec.jsonObject)?["requestId"] as? String)
+        let oldAck = envelope(relay, "ack", ["ok": true], requestId: requestId)
+        relay.begin(appId: "wheel", callSessionId: "different-call", isReadOnly: false)
+        #expect(!(await leave.value))
+        #expect(relay.receiveFromEmbed(raw: oldAck, origin: AppBridgeProtocol.iosOrigin, isMainFrame: true) == .notAttached)
+        #expect(relay.appId == "wheel")
+    }
+
+    @Test func aCleanRendererFailureDoesNotBlockChangingTheRoomStage() async {
+        let wire = Wire()
+        let (presenter, relay) = host(wire, inputs: AppHostInputs.make(callSession: 1, appId: "whiteboard", isHost: true))
+        let mount = relay.bridgeGeneration
+        #expect(ready(relay) == .none)
+        #expect(presenter.model.phase == .ready)
+        relay.embedFailed(appSessionId: relay.appSessionId, issue: .rendererGone, mount: mount)
+        #expect(presenter.model.phase == .failed)
+        #expect(await relay.prepareToLeave())
+        #expect(!wire.types().contains("prepareToLeave"))
+        let id = relay.appSessionId
+        presenter.retry()
+        #expect(relay.attachBridge(appSessionId: id) { _ in })
+        relay.acceptPrimedSnapshot(wire.syncResponse, appSessionId: id)
+        #expect(ready(relay) == .none)
+        #expect(presenter.model.phase == .ready)
+    }
+
+    @Test func aFreshRendererCannotCertifyEditsLostByItsPredecessor() async {
+        let wire = Wire()
+        let relay = session(wire)
+        let id = relay.appSessionId
+        let mount = relay.bridgeGeneration
+        #expect(ready(relay) == .none)
+        let dirty = envelope(relay, "editsPending", [:], requestId: "e-edit")
+        #expect(relay.receiveFromEmbed(raw: dirty, origin: AppBridgeProtocol.iosOrigin, isMainFrame: true, mount: mount) == .none)
+        relay.embedFailed(appSessionId: id, issue: .rendererGone, mount: mount)
+        #expect(!(await relay.prepareToLeave()))
+        #expect(relay.attachBridge(appSessionId: id) { _ in })
+        #expect(ready(relay) == .none)
+        let staleAck = envelope(relay, "ack", ["ok": true], requestId: "n-1")
+        #expect(relay.receiveFromEmbed(raw: staleAck, origin: AppBridgeProtocol.iosOrigin, isMainFrame: true, mount: mount) == .notAttached)
+        #expect(!(await relay.prepareToLeave()))
+
+        relay.end()
+        relay.begin(appId: "whiteboard", callSessionId: "next-call", isReadOnly: false)
+        #expect(await relay.prepareToLeave(), "A new call does not inherit the previous app's lost edits.")
+    }
+
+    @Test func aDiscardDecisionDoesNotCoverEditsLostByALaterRenderer() async throws {
+        let wire = Wire()
+        let relay = session(wire)
+        let id = relay.appSessionId
+        let firstMount = relay.bridgeGeneration
+        #expect(ready(relay) == .none)
+        let edit = envelope(relay, "editsPending", [:], requestId: "e-edit")
+        #expect(relay.receiveFromEmbed(raw: edit, origin: AppBridgeProtocol.iosOrigin, isMainFrame: true, mount: firstMount) == .none)
+        relay.embedFailed(appSessionId: id, issue: .rendererGone, mount: firstMount)
+        let firstLoss = try #require(relay.lostRendererEdits)
+
+        #expect(relay.attachBridge(appSessionId: id) { _ in })
+        let nextMount = relay.bridgeGeneration
+        #expect(ready(relay) == .none)
+        #expect(relay.receiveFromEmbed(raw: edit, origin: AppBridgeProtocol.iosOrigin, isMainFrame: true, mount: nextMount) == .none)
+        relay.embedFailed(appSessionId: id, issue: .rendererGone, mount: nextMount)
+        let nextLoss = try #require(relay.lostRendererEdits)
+        #expect(!relay.discardLostRendererEdits(firstLoss))
+        #expect(!(await relay.prepareToLeave()))
+        #expect(relay.discardLostRendererEdits(nextLoss))
+        #expect(await relay.prepareToLeave())
+    }
+
     @Test func movedHelpersKeepTheViewModelGuards() async throws {
         let wire = Wire()
         let relay = session(wire)
@@ -301,7 +464,7 @@ struct ACT7AppHostTests {
     }
 
     @Test func aCursorFloodPublishesNothingObservable() async {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "room-a"
         viewModel.state.connectionState = ConnectionState.joined
@@ -403,6 +566,19 @@ struct ACT7AppHostTests {
         _ = relay.receiveFromEmbed(raw: envelope(relay, "ack", ["ok": true, "pngBase64": "iVBORw0KGgo="], requestId: export),
                                    origin: AppBridgeProtocol.iosOrigin, isMainFrame: true)
         #expect(presenter.toolbar.exportSequence == 1 && presenter.takeExport() == "iVBORw0KGgo=" && presenter.takeExport().isEmpty)
+    }
+
+    @Test func aDetachedEmbedSettlesToolbarCommandsAndTakesNoNewOnes() {
+        let wire = Wire()
+        let (presenter, relay) = host(wire, inputs: AppHostInputs.make(callSession: 1, appId: "whiteboard", isHost: true))
+        #expect(ready(relay) == .none)
+        #expect(presenter.perform(.setTool, value: "eraser") == .dispatched && presenter.perform(.export) == .dispatched)
+        #expect(presenter.toolbar.isPending(.setTool) && presenter.toolbar.isPending(.export))
+        relay.detachBridge(appSessionId: relay.appSessionId)
+        #expect(presenter.model.phase == .opening, "the card stops saying the board is ready")
+        #expect(presenter.toolbar.pendingKinds.isEmpty, "a page that is gone answers nothing, so nothing waits on it")
+        let sent = wire.delivered.count
+        #expect(presenter.perform(.setTool, value: "laser") == .explained && wire.delivered.count == sent)
     }
 
     @Test func readOnlyPeopleGetNoEditCommandsAndTheViewOnlyTag() {

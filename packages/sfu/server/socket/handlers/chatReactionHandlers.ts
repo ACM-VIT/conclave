@@ -38,15 +38,11 @@ export const registerChatReactionHandlers = (
 
         const isAdmin = context.currentClient instanceof Admin;
 
-        // Reacting is a chat write, so it honours the chat lock like every
-        // other write in chatHandlers...
         if (context.currentRoom.isChatLocked && !isAdmin) {
           respond(callback, { error: "Chat is locked by the host" });
           return;
         }
 
-        // ...and it rides the same kill-switch as floating reactions, so hosts
-        // have one mental model for "reactions off".
         if (context.currentRoom.isReactionsDisabled && !isAdmin) {
           respond(callback, { error: "Reactions disabled by host" });
           return;
@@ -92,8 +88,6 @@ export const registerChatReactionHandlers = (
           roomId: context.currentRoom.id,
         };
 
-        // Everyone else gets the broadcast; the reactor gets the same
-        // authoritative set back through the ack, so both paths agree.
         socket
           .to(context.currentRoom.channelId)
           .emit("chat:reactionChanged", notification);

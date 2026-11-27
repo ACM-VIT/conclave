@@ -57,9 +57,12 @@ const resolveLogLevel = (): LogLevel => {
   return process.env.NODE_ENV === "production" ? "warn" : "info";
 };
 
-const activeLogLevel = resolveLogLevel();
+// Read at the first log, not as this module loads: a module can import the
+// logger before the settings have loaded the SFU's .env files.
+let activeLogLevel: LogLevel | null = null;
 
 const shouldLog = (level: LogLevel) => {
+  activeLogLevel ??= resolveLogLevel();
   return levelOrder[level] <= levelOrder[activeLogLevel];
 };
 

@@ -61,11 +61,6 @@ export function normalizeMeasurementWindow(value) {
 const SAMPLER_BEGIN_MINIMUM_EVALUATION_TIMEOUT_MS = 10_000;
 const SAMPLER_BEGIN_POST_BARRIER_ALLOWANCE_MS = 10_000;
 
-/**
- * Keep Runtime.evaluate alive while beginSamplerWindow waits for the shared
- * epoch. Dynamic-network runs intentionally arm 15 seconds before that epoch,
- * so a fixed 10 second CDP timeout would abort an otherwise healthy sampler.
- */
 export function resolveSamplerBeginEvaluationTimeoutMs(
   measurementWindow,
   nowEpochMs = Date.now(),
@@ -85,11 +80,6 @@ export function resolveSamplerBeginEvaluationTimeoutMs(
   );
 }
 
-/**
- * Return how many compositor-presented frames elapsed between two
- * requestVideoFrameCallback observations. A reset, missing value, or duplicate
- * counter represents only the current callback.
- */
 export function calculatePresentedFrameDelta(current, previous) {
   if (
     Number.isFinite(current) &&
@@ -101,7 +91,6 @@ export function calculatePresentedFrameDelta(current, previous) {
   return 1;
 }
 
-/** Require an exact, monotonic cumulative-counter baseline. */
 export function calculateStrictCounterDelta(current, previous) {
   if (!Number.isFinite(current) || !Number.isFinite(previous)) {
     return { valid: false, reset: false, delta: null };
@@ -112,12 +101,6 @@ export function calculateStrictCounterDelta(current, previous) {
   return { valid: true, reset: false, delta: current - previous };
 }
 
-/**
- * Expand a rolling marker into the full source sequence used since the exact
- * measurement reset. Normal forward motion, including a modulus wrap, is
- * exact. A backwards or implausibly large jump is marked ambiguous and only
- * re-anchored near elapsed source time so later frames can recover safely.
- */
 export function resolveRollingMarkerSequence({
   previousSourceSequence = null,
   markerSequence,
@@ -183,11 +166,6 @@ export function resolveRollingMarkerSequence({
   };
 }
 
-/**
- * Resolve the concrete capture settings a deterministic camera can satisfy.
- * Numeric constraints follow getUserMedia semantics: a bare number is ideal,
- * while exact/min/max values are mandatory.
- */
 export function resolveSyntheticVideoCaptureSettings(
   constraints = true,
   {
@@ -305,18 +283,12 @@ export function resolveSyntheticVideoCaptureSettings(
   };
 }
 
-/** Return the first capture property that requires opening a new source. */
 export function getSyntheticCaptureReopenConstraint(current, next) {
   return ["width", "height", "frameRate"].find(
     (name) => current?.[name] !== next?.[name],
   ) ?? null;
 }
 
-/**
- * Reference-counted lifecycle for synthetic sources. A settings change opens a
- * replacement before retiring the previous source, so the old capture can
- * remain live until its last cloned track is released.
- */
 export function createSyntheticSourceLifecycle({
   createSource,
   stopSource,
@@ -447,15 +419,6 @@ export function createSyntheticSourceLifecycle({
   };
 }
 
-/**
- * Build a script intended for CDP Page.addScriptToEvaluateOnNewDocument.
- *
- * The script always installs the sampler and RTCPeerConnection registry. When
- * enableSyntheticCamera is true it also replaces getUserMedia camera capture
- * with a deterministic canvas track. enableSyntheticAudio independently
- * replaces requested microphone capture with a zero-valued MediaStream track
- * that is never connected to speakers.
- */
 export function buildFixtureInjectionScript({
   enableSyntheticCamera = false,
   enableSyntheticAudio = true,
@@ -494,7 +457,6 @@ export function buildFixtureInjectionScript({
   return `;(${installBrowserQualityHarness.toString()})(${JSON.stringify(config)}, (${calculatePresentedFrameDelta.toString()}), (${calculateStrictCounterDelta.toString()}), (${resolveRollingMarkerSequence.toString()}), (${resolveSyntheticVideoCaptureSettings.toString()}), (${getSyntheticCaptureReopenConstraint.toString()}), (${createSyntheticSourceLifecycle.toString()}), (${createVisualMetricToolkit.toString()}), (${buildAlignedWindowObservationTargets.toString()}), ${VIDEO_QUALITY_MARKER_SEQUENCE_MODULUS}, ${CAPTURE_TO_DISPLAY_LATENCY_VERSION});`;
 }
 
-/** Prepare a remote-video sampler without opening its measurement window. */
 export function buildArmSamplerExpression({
   mode = "visual",
   sampleIntervalMs = 450,
@@ -612,11 +574,8 @@ export function buildArmSamplerExpression({
   })()`;
 }
 
-// Kept as a source-compatible alias for external diagnostics. It now arms the
-// sampler; callers must explicitly open one shared window with the builder below.
 export const buildStartSamplerExpression = buildArmSamplerExpression;
 
-/** Open an already-armed sampler on the shared authoritative epoch. */
 export function buildBeginSamplerExpression(measurementWindow) {
   const normalized = normalizeMeasurementWindow(measurementWindow);
   return `(() => {
@@ -626,7 +585,6 @@ export function buildBeginSamplerExpression(measurementWindow) {
   })()`;
 }
 
-/** Build an awaitable expression that stops the sampler and returns its report. */
 export function buildStopSamplerExpression(measurementWindow) {
   const normalized = normalizeMeasurementWindow(measurementWindow);
   return `(() => {
@@ -668,11 +626,6 @@ function installBrowserQualityHarness(
   const MAX_ANALYSIS_WIDTH = 640;
   const PATH_OBSERVATION_INTERVAL_MS = 500;
   const PATH_TERMINAL_LEAD_MS = 50;
-  // A completed 500ms path sample remains authoritative when Chrome's main
-  // thread briefly slips, provided it stays inside the same 150ms boundary
-  // authority used by the immutable measurement window. Counter windows keep
-  // an additional 500ms guard around every network mutation, so this cannot
-  // move a counter sample across a transition boundary.
   const MAX_PATH_TICK_LATENESS_MS = MAX_WINDOW_BOUNDARY_SKEW_MS;
   const MARKER_ANALYSIS_WIDTH = 256;
   const MARKER_ROW_HEIGHT = 8;
@@ -1006,8 +959,6 @@ function installBrowserQualityHarness(
       context.fillRect(left, top, sceneWidth, sceneHeight);
     }
 
-    // Window, shelves, plant leaves, and soft background edges exercise the
-    // kind of low-frequency structure and chroma transitions found in calls.
     if (!photographicBackground) {
       context.fillStyle = sceneId === 2 ? "#3b3c55" : "rgba(227,242,245,0.72)";
       context.fillRect(width * 0.62, height * 0.13, width * 0.28, height * 0.31);
@@ -1096,7 +1047,6 @@ function installBrowserQualityHarness(
     context.arc(headX, headY + height * 0.07, width * 0.035, 0.16, Math.PI - 0.16);
     context.stroke();
 
-    // A gesturing hand crosses textured background and face edges.
     const handX = width * (0.52 + Math.sin(phase * 1.35) * 0.065);
     const handY = height * (0.61 + Math.cos(phase * 1.1) * 0.055);
     context.fillStyle = skin;
@@ -1116,8 +1066,6 @@ function installBrowserQualityHarness(
       context.stroke();
     }
 
-    // Temporally correlated low-light sensor texture: the pattern updates in
-    // four-frame groups instead of becoming an unrealistic white-noise codec tax.
     if (sceneId === 2) {
       const noiseFrame = Math.floor(sceneFrame / 4);
       const cellsX = 18;
@@ -1241,9 +1189,6 @@ function installBrowserQualityHarness(
     if (fixture.manualFrames) {
       const availableAtEpochMs = performanceEpochMs();
       try {
-        // Keep the authoritative epoch immediately adjacent to requestFrame.
-        // Recording it only after success avoids claiming a source frame that
-        // the capture track rejected.
         fixture.track.requestFrame();
       } catch {
         fixture.requestFrameFailureCount += 1;
@@ -1309,9 +1254,6 @@ function installBrowserQualityHarness(
       renderDurations: [initialRenderDurationMs],
       renderIntervals: [],
       sourceFrameTimeline: [],
-      // A replacement capture source is a new generation on the same exact
-      // measurement timeline. Carry the shared epoch forward so its frames can
-      // be joined to visual and rVFC evidence without rewriting timestamps.
       sourceTimelineResetAtEpochMs: runtime.fixtureTimelineResetAtEpochMs,
       requestFrameFailureCount: 0,
     };
@@ -2655,7 +2597,6 @@ function installBrowserQualityHarness(
     state.lastDecodedSourceSequence = resolved.sourceSequence;
     if (resolved.ambiguous) {
       state.markerSequenceAmbiguityCount += 1;
-      // Cadence deltas cannot bridge an ambiguous reset or large jump.
       state.lastMarkerId = null;
       state.lastMarkerAdvanceAt = null;
       state.presentedFramesSinceLastMarker = 0;
@@ -3604,9 +3545,6 @@ function installBrowserQualityHarness(
       1,
       state.presentedFramesSinceLastMarker,
     );
-    // A busy sampler can miss rVFC callbacks even while the compositor keeps
-    // presenting frames. Normalize that callback gap unless we directly
-    // observed the same source marker being presented repeatedly.
     const visibleAdvanceGap =
       state.duplicateCallbacksSinceMarkerAdvance > 0
         ? advanceGap
@@ -3740,9 +3678,6 @@ function installBrowserQualityHarness(
         0,
         elapsedScheduleSlots - 1,
       );
-      // Preserve one cadence anchored at sampler start. Scheduling relative to
-      // this callback would accumulate normal rVFC jitter and systematically
-      // leave a larger unmeasured fixture phase near the end of the run.
       state.nextVisualSampleAt +=
         elapsedScheduleSlots * state.sampleIntervalMs;
       if (snapshot) {
@@ -3791,9 +3726,6 @@ function installBrowserQualityHarness(
             generation !== state.videoGeneration
           ) return;
           state.frameCallbackId = null;
-          // Arm the next one-shot callback before visual analysis. Otherwise a
-          // synchronous SSIM sample creates an avoidable registration gap and
-          // headless compositor cadence becomes noisier than the media path.
           next();
           handleVideoFrame(state, now, metadata);
         });
@@ -4426,9 +4358,6 @@ function installBrowserQualityHarness(
         0,
         stoppedAtPerformance - lastPresentedAt,
       );
-      // The stop time right-censors the next frame. Only treat the partial
-      // terminal interval as a visible gap once it independently crosses the
-      // same freeze threshold used for completed frame intervals.
       if (terminalSilenceMs > state.freezeThresholdMs) {
         state.frameGaps.push(terminalSilenceMs);
         state.longestGapMs = Math.max(
@@ -4531,8 +4460,6 @@ function installBrowserQualityHarness(
         state.pathObservationSkippedTickCount += 1;
       }
     }
-    // The terminal media-path observation owns the receiver's one end
-    // snapshot. Reuse it here so two full getStats traversals never overlap.
     collectTerminalPeerConnectionStats(state);
   }
 
@@ -4588,8 +4515,6 @@ function installBrowserQualityHarness(
       measurementWindow.startedAtEpochMs - performance.timeOrigin;
     state.startedPerformanceEpochMs = measurementWindow.startedAtEpochMs;
     state.nextVisualSampleAt = state.startedPerformanceAt;
-    // Install the actual frame/path schedules synchronously at the barrier;
-    // the asynchronous RTC snapshot must not delay visible-frame observation.
     scheduleFrameCallbacks(state);
     state.videoWatcherTimer = setInterval(() => {
       if (state.stopped || state.windowClosed) return;
@@ -5187,7 +5112,6 @@ function installBrowserQualityHarness(
       return { ...runtime.config };
     },
     armSampler,
-    // Compatibility name with arm-only semantics; opening a window is explicit.
     startSampler: armSampler,
     beginSamplerWindow,
     stopSampler,

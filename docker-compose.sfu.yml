@@ -1,22 +1,57 @@
+x-sfu-hardening: &sfu-hardening
+  # The image runs as the unprivileged node user. mediasoup binds only ports
+  # above 1024 on the host network, so the SFU needs no Linux capabilities.
+  # The root filesystem is read-only; tsx caches compiled sources in /tmp, and
+  # the recordings volume is the only persistent writable path.
+  read_only: true
+  tmpfs:
+    - /tmp
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
 services:
-  sfu-a:
+  sfu-image:
+    image: conclave-sfu-build
     build:
       context: .
       dockerfile: packages/sfu/Dockerfile
+    profiles: ["build"]
+
+  sfu-a:
+    <<: *sfu-hardening
+    # Named here, so the image deploy-sfu.sh tags is the one compose starts
+    # whatever compose's own naming (COMPOSE_COMPATIBILITY uses underscores).
+    # deploy-sfu.sh sets SFU_IMAGE_SFU_A on every start: a candidate runs under its
+    # own tag, and conclave-sfu-a only ever names a build that passed.
+    image: ${SFU_IMAGE_SFU_A:-conclave-sfu-a}
+    pull_policy: never
     network_mode: "host"
     environment:
-      SFU_PORT: "3031"
+      SFU_PORT: "${SFU_A_PORT:-3031}"
+      NODE_ENV: production
+      SFU_CORS_ORIGINS: ${SFU_CORS_ORIGINS:-https://conclave.acmvit.in}
+      SFU_ALLOW_OPEN_CORS: ${SFU_ALLOW_OPEN_CORS:-}
+      SFU_LOG_LEVEL: ${SFU_LOG_LEVEL:-}
       SFU_INSTANCE_ID: "sfu-a"
+      SFU_DEPLOY_ID: ${SFU_DEPLOY_ID:-}
       SFU_PUBLIC_URL: ${SFU_A_PUBLIC_URL:-}
       SFU_REGION: ${SFU_A_REGION:-${SFU_REGION:-local}}
       SFU_SECRET: ${SFU_SECRET}
+      SCHEDULING_TOKEN_SECRET: ${SCHEDULING_TOKEN_SECRET:-}
       TRANSCRIPT_WORKER_URL: ${TRANSCRIPT_WORKER_URL:-http://localhost:8788}
-      SFU_DRAINING: "false"
-      RTC_MIN_PORT: "40000"
-      RTC_MAX_PORT: "41000"
+      SFU_DRAINING: "${SFU_START_DRAINING:-false}"
+      RTC_MIN_PORT: "${SFU_A_RTC_MIN_PORT:-40000}"
+      RTC_MAX_PORT: "${SFU_A_RTC_MAX_PORT:-41000}"
       ANNOUNCED_IP: ${ANNOUNCED_IP}
       PLAIN_TRANSPORT_ANNOUNCED_IP: ${PLAIN_TRANSPORT_ANNOUNCED_IP:-${ANNOUNCED_IP}}
       SFU_VERSION: "v1"
+      SFU_WORKER_COUNT:
+      SFU_WORKER_HOST_INSTANCES: "${SFU_WORKER_HOST_INSTANCES-2}"
+      SFU_WEBRTC_PORT_BUDGET: "${SFU_WEBRTC_PORT_BUDGET-4}"
+      SFU_APP_DOC_WORKERS:
+      SFU_APP_DOC_DEADLINE_MS:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       CLOUDFLARE_AI_GATEWAY_OPENAI_URL: ${CLOUDFLARE_AI_GATEWAY_OPENAI_URL:-}
@@ -25,6 +60,7 @@ services:
       CLOUDFLARE_AI_GATEWAY_ANTHROPIC_URL: ${CLOUDFLARE_AI_GATEWAY_ANTHROPIC_URL:-}
       CLOUDFLARE_AI_API_KEY: ${CLOUDFLARE_AI_API_KEY:-}
       TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+      SFU_APPS_AUTHORITY_ENABLED: ${SFU_APPS_AUTHORITY_ENABLED:-}
       SFU_GAME_DECISIONS_ENABLED: ${SFU_GAME_DECISIONS_ENABLED:-}
       SFU_GAME_AI_MODEL: ${SFU_GAME_AI_MODEL:-}
       SFU_GAME_AI_ENABLED: ${SFU_GAME_AI_ENABLED:-}
@@ -52,30 +88,47 @@ services:
       BROWSER_SERVICE_URL: ${BROWSER_SERVICE_URL:-http://localhost:3040}
       BROWSER_SERVICE_TOKEN: ${BROWSER_SERVICE_TOKEN:-}
       BROWSER_SERVICE_TIMEOUT_MS: ${BROWSER_SERVICE_TIMEOUT_MS:-5000}
-      RECORDING_STORAGE_PATH: ${RECORDING_STORAGE_PATH:-/var/lib/conclave/recordings}
+      RECORDING_STORAGE_PATH: /var/lib/conclave/recordings
       CONCLAVE_SQLITE_PATH: ${CONCLAVE_SQLITE_PATH:-/var/lib/conclave/recordings/conclave.sqlite}
+      CONTROL_PLANE_PERSISTENCE: ${CONTROL_PLANE_PERSISTENCE:-}
+      CONTROL_PLANE_JSON_PATH: ${CONTROL_PLANE_JSON_PATH:-/var/lib/conclave/recordings/control-plane.json}
     volumes:
       - ${RECORDING_STORAGE_PATH:-/var/lib/conclave/recordings}:/var/lib/conclave/recordings
-    restart: unless-stopped
+    restart: ${SFU_RESTART_POLICY:-unless-stopped}
 
   sfu-b:
-    build:
-      context: .
-      dockerfile: packages/sfu/Dockerfile
+    <<: *sfu-hardening
+    # Named here, so the image deploy-sfu.sh tags is the one compose starts
+    # whatever compose's own naming (COMPOSE_COMPATIBILITY uses underscores).
+    # deploy-sfu.sh sets SFU_IMAGE_SFU_B on every start: a candidate runs under its
+    # own tag, and conclave-sfu-b only ever names a build that passed.
+    image: ${SFU_IMAGE_SFU_B:-conclave-sfu-b}
+    pull_policy: never
     network_mode: "host"
     environment:
-      SFU_PORT: "3032"
+      SFU_PORT: "${SFU_B_PORT:-3032}"
+      NODE_ENV: production
+      SFU_CORS_ORIGINS: ${SFU_CORS_ORIGINS:-https://conclave.acmvit.in}
+      SFU_ALLOW_OPEN_CORS: ${SFU_ALLOW_OPEN_CORS:-}
+      SFU_LOG_LEVEL: ${SFU_LOG_LEVEL:-}
       SFU_INSTANCE_ID: "sfu-b"
+      SFU_DEPLOY_ID: ${SFU_DEPLOY_ID:-}
       SFU_PUBLIC_URL: ${SFU_B_PUBLIC_URL:-}
       SFU_REGION: ${SFU_B_REGION:-${SFU_REGION:-local}}
       SFU_SECRET: ${SFU_SECRET}
+      SCHEDULING_TOKEN_SECRET: ${SCHEDULING_TOKEN_SECRET:-}
       TRANSCRIPT_WORKER_URL: ${TRANSCRIPT_WORKER_URL:-http://localhost:8788}
-      SFU_DRAINING: "false"
-      RTC_MIN_PORT: "41001"
-      RTC_MAX_PORT: "42000"
+      SFU_DRAINING: "${SFU_START_DRAINING:-false}"
+      RTC_MIN_PORT: "${SFU_B_RTC_MIN_PORT:-41001}"
+      RTC_MAX_PORT: "${SFU_B_RTC_MAX_PORT:-42000}"
       ANNOUNCED_IP: ${ANNOUNCED_IP}
       PLAIN_TRANSPORT_ANNOUNCED_IP: ${PLAIN_TRANSPORT_ANNOUNCED_IP:-${ANNOUNCED_IP}}
       SFU_VERSION: "v2"
+      SFU_WORKER_COUNT:
+      SFU_WORKER_HOST_INSTANCES: "${SFU_WORKER_HOST_INSTANCES-2}"
+      SFU_WEBRTC_PORT_BUDGET: "${SFU_WEBRTC_PORT_BUDGET-4}"
+      SFU_APP_DOC_WORKERS:
+      SFU_APP_DOC_DEADLINE_MS:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       CLOUDFLARE_AI_GATEWAY_OPENAI_URL: ${CLOUDFLARE_AI_GATEWAY_OPENAI_URL:-}
@@ -84,6 +137,7 @@ services:
       CLOUDFLARE_AI_GATEWAY_ANTHROPIC_URL: ${CLOUDFLARE_AI_GATEWAY_ANTHROPIC_URL:-}
       CLOUDFLARE_AI_API_KEY: ${CLOUDFLARE_AI_API_KEY:-}
       TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+      SFU_APPS_AUTHORITY_ENABLED: ${SFU_APPS_AUTHORITY_ENABLED:-}
       SFU_GAME_DECISIONS_ENABLED: ${SFU_GAME_DECISIONS_ENABLED:-}
       SFU_GAME_AI_MODEL: ${SFU_GAME_AI_MODEL:-}
       SFU_GAME_AI_ENABLED: ${SFU_GAME_AI_ENABLED:-}
@@ -111,8 +165,10 @@ services:
       BROWSER_SERVICE_URL: ${BROWSER_SERVICE_URL:-http://localhost:3040}
       BROWSER_SERVICE_TOKEN: ${BROWSER_SERVICE_TOKEN:-}
       BROWSER_SERVICE_TIMEOUT_MS: ${BROWSER_SERVICE_TIMEOUT_MS:-5000}
-      RECORDING_STORAGE_PATH: ${RECORDING_STORAGE_PATH:-/var/lib/conclave/recordings}
+      RECORDING_STORAGE_PATH: /var/lib/conclave/recordings
       CONCLAVE_SQLITE_PATH: ${CONCLAVE_SQLITE_PATH:-/var/lib/conclave/recordings/conclave.sqlite}
+      CONTROL_PLANE_PERSISTENCE: ${CONTROL_PLANE_PERSISTENCE:-}
+      CONTROL_PLANE_JSON_PATH: ${CONTROL_PLANE_JSON_PATH:-/var/lib/conclave/recordings/control-plane.json}
     volumes:
       - ${RECORDING_STORAGE_PATH:-/var/lib/conclave/recordings}:/var/lib/conclave/recordings
-    restart: unless-stopped
+    restart: ${SFU_RESTART_POLICY:-unless-stopped}

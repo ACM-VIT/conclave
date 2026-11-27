@@ -63,11 +63,6 @@ const validateClock = (clock, label, failures) => {
   }
 };
 
-/**
- * Join source-frame availability to compositor presentation by the unique
- * rolling marker sequence. Any ambiguity or missing clock authority invalidates
- * the harness instead of turning a repeated fixture phase into false latency.
- */
 export function summarizeCaptureToDisplayLatency({
   sourceEvidence,
   presentationEvidence,
@@ -343,11 +338,6 @@ export function summarizeCaptureToDisplayLatency({
       );
     }
   }
-  // rVFC may coalesce notifications while `presentedFrames` proves that the
-  // compositor continued presenting. Latency can only be joined for callbacks
-  // that actually ran, so callback matches are the sample-coverage authority;
-  // temporal window coverage independently prevents a sparse cluster from
-  // masquerading as a full-window distribution.
   const requiredSampleCount = Number.isInteger(callbackCount)
     ? Math.max(4, Math.ceil(callbackCount * minimumSampleCoverage))
     : null;

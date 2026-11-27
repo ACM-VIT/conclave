@@ -7,14 +7,6 @@ import {
 import { numberOption } from "../config.js";
 import { allActivePlayersActed } from "../roundLoop.js";
 
-/**
- * Reaction: a reflex arena. Each round the panel waits ("do not tap"), then
- * flips to "TAP" at a random moment. Fastest valid tap wins; tapping early is a
- * fault. Reaction time is measured from the server-authoritative go moment and
- * the server receive time, with a small server-owned latency allowance so
- * clients cannot forge the clock.
- */
-
 const TOTAL_ROUNDS = 5;
 const MIN_ARM_MS = 1_500;
 const MAX_ARM_MS = 5_000;
@@ -62,11 +54,6 @@ const scoreboard = (state: ReactionState, ctx: GameContext) =>
     .map((p) => ({ id: p.id, name: p.name, score: state.scores[p.id] ?? 0 }))
     .sort((a, b) => b.score - a.score);
 
-/**
- * Typed move contract. Decoded from the untrusted `GameMove` at the top of
- * `onMove`. Reaction moves carry no payload, so the decoder only narrows the
- * type and rejects unknown moves.
- */
 export type ReactionMove =
   | { type: "start" }
   | { type: "tap" }

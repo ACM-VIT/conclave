@@ -1,48 +1,15 @@
 import { AI_GENERATION_LIMITS } from "@conclave/ai/limits";
 import { AI_DEFAULT_MODELS, getProviderApiKey, getResponseProvider, readAiEnvironment, resolveConfiguredResponseModel } from "@conclave/ai/models";
-import dotenv from "dotenv";
-import path from "path";
-import { existsSync } from "fs";
 import { createHash } from "crypto";
-import { fileURLToPath } from "url";
 import type { RouterRtpCodecCapability } from "mediasoup/types";
+import { analyticsSettings } from "../server/analytics/settings.js";
 import { resolveConfiguredSfuRegion } from "../server/regions.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const sfuPackageRoot = path.resolve(__dirname, "..");
-const repoRoot = path.resolve(sfuPackageRoot, "..", "..");
-const webAppRoot = path.resolve(repoRoot, "apps", "web");
-
-// First match wins (dotenv default does not override existing process.env vars).
-// Order: most-specific (sfu package) -> shared web app (matches Next.js) -> repo root.
-// This keeps local dev in sync without forcing the user to maintain duplicate secrets.
-const envCandidates = [
-  path.join(sfuPackageRoot, ".env.local"),
-  path.join(sfuPackageRoot, ".env"),
-  path.join(webAppRoot, ".env.local"),
-  path.join(webAppRoot, ".env"),
-  path.join(repoRoot, ".env.local"),
-  path.join(repoRoot, ".env"),
-];
-
-const initialSecretFromProcess = process.env.SFU_SECRET;
-const loadedEnvFiles: string[] = [];
-let secretSource: string = initialSecretFromProcess
-  ? "process.env (set before SFU bootstrap)"
-  : "fallback literal";
-
-for (const envPath of envCandidates) {
-  if (existsSync(envPath)) {
-    const beforeSecret = process.env.SFU_SECRET;
-    dotenv.config({ path: envPath });
-    loadedEnvFiles.push(envPath);
-    if (!beforeSecret && process.env.SFU_SECRET) {
-      secretSource = envPath;
-    }
-  }
-}
+import { loadedEnvFiles, secretSource } from "./env.js";
+import { readRtcPortRange, readWorkerSizing } from "./workerSettings.mjs";
 
 const sfuSecret = resolveSfuSecret();
+// False when running on the public development fallback.
+const sfuSecretConfigured = sfuSecret !== "development-secret";
 const sfuSecretFingerprint = (() => {
   const value = sfuSecret;
   return createHash("sha256").update(value).digest("hex").slice(0, 12);
@@ -119,8 +86,16 @@ export const resolveWebRtcTransportProtocolPolicy = (
   });
 };
 
+function paddedSfuSecretMessage(schedulingTokenSecret: string | undefined): string {
+  return schedulingTokenSecret
+    ? "SFU_SECRET has leading or trailing whitespace. Remove it; SCHEDULING_TOKEN_SECRET keeps saved calendar tokens readable."
+    : "SFU_SECRET has leading or trailing whitespace. Saved calendar tokens are encrypted with the padded value, so first set SCHEDULING_TOKEN_SECRET to the exact current SFU_SECRET, padding included, before you trim SFU_SECRET.";
+}
+
 function resolveSfuSecret(): string {
-  const configured = process.env.SFU_SECRET?.trim();
+  const raw = process.env.SFU_SECRET;
+  const configured = raw?.trim();
+  if (raw && raw !== configured) throw new Error(paddedSfuSecretMessage(process.env.SCHEDULING_TOKEN_SECRET));
   if (configured && configured !== "development-secret") {
     return configured;
   }
@@ -156,6 +131,8 @@ type ClientPolicy = {
   allowHostJoin: boolean;
   useWaitingRoom: boolean;
   allowDisplayNameUpdate: boolean;
+  // New rooms start locked, so anyone the host has not let in knocks.
+  knockByDefault: boolean;
 };
 
 const defaultClientPolicies: Record<string, ClientPolicy> = {
@@ -166,28 +143,32 @@ const defaultClientPolicies: Record<string, ClientPolicy> = {
     allowHostJoin: false,
     useWaitingRoom: false,
     allowDisplayNameUpdate: true,
+    knockByDefault: true,
   },
   public: {
     allowNonHostRoomCreation: false,
     allowHostJoin: false,
     useWaitingRoom: false,
     allowDisplayNameUpdate: true,
+    knockByDefault: true,
   },
   conclave: {
     allowNonHostRoomCreation: false,
     allowHostJoin: false,
     useWaitingRoom: false,
     allowDisplayNameUpdate: true,
+    knockByDefault: true,
   },
   internal: {
     allowNonHostRoomCreation: false,
     allowHostJoin: true,
     useWaitingRoom: true,
     allowDisplayNameUpdate: false,
+    knockByDefault: false,
   },
 };
 
-const normalizeClientPolicies = (
+export const normalizeClientPolicies = (
   value: string | undefined,
 ): Record<string, ClientPolicy> => {
   if (!value) return defaultClientPolicies;
@@ -219,6 +200,10 @@ const normalizeClientPolicies = (
           typeof policyInput.allowDisplayNameUpdate === "boolean"
             ? policyInput.allowDisplayNameUpdate
             : base.allowDisplayNameUpdate,
+        knockByDefault:
+          typeof policyInput.knockByDefault === "boolean"
+            ? policyInput.knockByDefault
+            : base.knockByDefault,
       };
     }
     return next;
@@ -271,39 +256,15 @@ const gameAiWebSearchContextSize = ((): "low" | "medium" | "high" => {
 const transcriptRelayDisabled =
   process.env.SFU_TRANSCRIPT_RELAY_ENABLED === "0" ||
   process.env.SFU_TRANSCRIPT_RELAY_ENABLED?.toLowerCase() === "false";
-// Product analytics (PostHog). Strictly opt-in: with no project key set, the
-// block is `enabled: false`, no client is ever constructed, and nothing is
-// sent (zero overhead). Never hardcode a key — it comes from the environment.
-const posthogProjectApiKey =
-  process.env.SFU_POSTHOG_KEY?.trim() ||
-  process.env.SFU_POSTHOG_PROJECT_API_KEY?.trim() ||
-  "";
-const posthogDisabled =
-  process.env.SFU_POSTHOG_ENABLED === "0" ||
-  process.env.SFU_POSTHOG_ENABLED?.toLowerCase() === "false";
-// Default to the PostHog EU cloud ingestion host (region-correct for this
-// deployment). Override with SFU_POSTHOG_HOST for self-hosted / US cloud.
-const posthogHost =
-  process.env.SFU_POSTHOG_HOST?.trim() || "https://eu.i.posthog.com";
 const instancePublicUrl =
   process.env.SFU_PUBLIC_URL?.trim() ||
   process.env.SFU_INSTANCE_URL?.trim() ||
   process.env.SFU_URL?.trim() ||
   "";
-const rtcMinPort = toNumber(process.env.RTC_MIN_PORT, 40000, {
-  integer: true,
-  min: 1,
-  max: 65535,
+const { rtcMinPort, rtcMaxPort } = readRtcPortRange(process.env, {
+  RTC_MIN_PORT: "40000",
+  RTC_MAX_PORT: "49999",
 });
-const parsedRtcMaxPort = toNumber(process.env.RTC_MAX_PORT, 49999, {
-  integer: true,
-  min: 1,
-  max: 65535,
-});
-const rtcMaxPort = parsedRtcMaxPort >= rtcMinPort ? parsedRtcMaxPort : rtcMinPort;
-if (parsedRtcMaxPort < rtcMinPort) {
-  console.warn("[SFU] RTC_MAX_PORT is lower than RTC_MIN_PORT; using a single-port range.");
-}
 const webRtcTransportProtocolPolicy =
   resolveWebRtcTransportProtocolPolicy();
 
@@ -362,17 +323,26 @@ const routerMediaCodecs: RouterRtpCodecCapability[] = [
 
 export const config = {
   webcamVp9Enabled: process.env.SFU_WEBCAM_VP9_ENABLED === "1",
+  // Server-authoritative in-call apps. Off by default: with it off the only
+  // authority event answered is the capability request, as unsupported, so
+  // clients hide the apps that need it at once. Read once at startup:
+  // changing it needs a restart.
+  appsAuthority: {
+    enabled: toBoolean(process.env.SFU_APPS_AUTHORITY_ENABLED),
+  },
   port: toNumber(process.env.SFU_PORT || process.env.PORT, 3031, {
     integer: true,
     min: 1,
     max: 65535,
   }),
   instanceId: process.env.SFU_INSTANCE_ID || `sfu-${process.pid}`,
+  deployId: process.env.SFU_DEPLOY_ID?.trim() || null,
   instancePublicUrl,
   region: resolveConfiguredSfuRegion(process.env.SFU_REGION),
   version: process.env.SFU_VERSION || "dev",
   draining: toBoolean(process.env.SFU_DRAINING),
   sfuSecret,
+  sfuSecretConfigured,
   clientPolicies,
   openAi: {
     apiKey: openAiApiKey,
@@ -409,39 +379,19 @@ export const config = {
     webSearchEnabled: !gameAiWebSearchDisabled,
     webSearchContextSize: gameAiWebSearchContextSize,
   },
-  analytics: {
-    // Enabled ONLY when a project key is present (and not explicitly disabled).
-    // When false, the analytics module constructs nothing and sends nothing.
-    enabled: !posthogDisabled && Boolean(posthogProjectApiKey),
-    projectApiKey: posthogProjectApiKey,
-    host: posthogHost,
-    // Batch tuning. A game meeting is long-lived and low-volume, so flush on a
-    // small batch or a short interval to keep events fresh without chattiness.
-    flushAt: toNumber(process.env.SFU_POSTHOG_FLUSH_AT, 20, {
-      integer: true,
-      min: 1,
-      max: 1000,
-    }),
-    flushIntervalMs: toNumber(process.env.SFU_POSTHOG_FLUSH_INTERVAL_MS, 10000, {
-      integer: true,
-      min: 0,
-      max: 300000,
-    }),
-    // Bounded time to flush buffered events on graceful shutdown.
-    shutdownTimeoutMs: toNumber(
-      process.env.SFU_POSTHOG_SHUTDOWN_TIMEOUT_MS,
-      5000,
-      { integer: true, min: 0, max: 60000 },
-    ),
-  },
+  analytics: analyticsSettings,
   transcriptRelay: {
     enabled: !transcriptRelayDisabled,
   },
-  workerSettings: {
-    workerCount: toNumber(process.env.SFU_WORKER_COUNT, 0, {
+  appDocuments: {
+    deadlineMs: toNumber(process.env.SFU_APP_DOC_DEADLINE_MS, 500, {
       integer: true,
-      min: 0,
+      min: 10,
+      max: 60_000,
     }),
+  },
+  workerSettings: {
+    ...readWorkerSizing(process.env),
     rtcMinPort,
     rtcMaxPort,
     logLevel: "warn" as WorkerLogLevel,
@@ -460,6 +410,28 @@ export const config = {
   adminCleanupTimeout: toNumber(process.env.ADMIN_CLEANUP_TIMEOUT, 120000, {
     min: 1000,
   }),
+  // How many passes and keys one room keeps lobby decisions for (see
+  // `AdmissionLedger`). A refusal is kept past it.
+  lobbyDecisionRecordLimit: toNumber(
+    process.env.SFU_LOBBY_DECISION_RECORD_LIMIT,
+    5000,
+    { integer: true, min: 1 },
+  ),
+  // The most requests to be let in that one room keeps waiting at once,
+  // and the most seats in a meeting (webinar attendees have their own
+  // limit). A join past either is refused and the room records nothing.
+  guestAppIdentityLimit: toNumber(process.env.SFU_GUEST_APP_IDENTITY_LIMIT, 5000, {
+    integer: true,
+    min: 1,
+  }),
+  waitingRequestLimit: toNumber(process.env.SFU_WAITING_REQUEST_LIMIT, 1000, {
+    integer: true,
+    min: 1,
+  }),
+  meetingSeatLimit: toNumber(process.env.SFU_MEETING_SEAT_LIMIT, 1000, {
+    integer: true,
+    min: 1,
+  }),
   socket: {
     pingIntervalMs: toNumber(
       process.env.SFU_SOCKET_PING_INTERVAL_MS,
@@ -471,11 +443,6 @@ export const config = {
     }),
     disconnectGraceMs: toNumber(
       process.env.SFU_SOCKET_DISCONNECT_GRACE_MS,
-      BACKGROUND_SOCKET_RECOVERY_WINDOW_MS,
-      { min: 0 },
-    ),
-    recoveryMaxDisconnectionMs: toNumber(
-      process.env.SFU_SOCKET_RECOVERY_MAX_MS,
       BACKGROUND_SOCKET_RECOVERY_WINDOW_MS,
       { min: 0 },
     ),

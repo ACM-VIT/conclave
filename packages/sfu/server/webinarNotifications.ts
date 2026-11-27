@@ -1,4 +1,5 @@
 import type { Server as SocketIOServer } from "socket.io";
+import type { Client } from "../config/classes/Client.js";
 import type { Room } from "../config/classes/Room.js";
 import type {
   WebinarAttendeeCountChangedNotification,
@@ -8,7 +9,11 @@ import type {
   WebinarLinkResponse,
   WebinarQaChangedNotification,
   WebinarQaEntry,
+  WebinarQaSnapshot,
 } from "../types.js";
+import { emitToHosts } from "./admin/hostOnlyEvents.js";
+import { peekRoomAuthority, socketPressure } from "./apps/authority/index.js";
+import { DEFAULT_AUTHORITY_LIMITS } from "./apps/authority/limits.js";
 import type { SfuState } from "./state.js";
 import {
   ensureWebinarLinkSlug,
@@ -43,6 +48,98 @@ export const getWebinarConfigSnapshot = (
   return toWebinarConfigSnapshot(webinarConfig, attendeeCount);
 };
 
+/**
+ * Clients sent the room's webinar Q&A list on the old events since the room
+ * last became a webinar. Every grant of Q&A comes with a list, so no client
+ * is left to build one from changes alone.
+ */
+const listedForQa = new WeakSet<Client>();
+
+/**
+ * Whether the old Q&A events are the room's own book. A process that runs
+ * the Q&A app keeps one book in the app, and its adapter sends those lists.
+ */
+const oldEventsAreTheBook = (state: SfuState): boolean =>
+  !state.appsAuthority?.modules.some((module) => module.contract.id === "qa");
+
+/** Sends one client the room's webinar Q&A as their role reads it. */
+const qaListCanQueue = (client: Client): boolean => {
+  const { packets, bytes } = socketPressure(client.socket);
+  return packets < DEFAULT_AUTHORITY_LIMITS.socketSoftPackets &&
+    bytes < DEFAULT_AUTHORITY_LIMITS.socketSoftBytes;
+};
+
+const sendWebinarQaList = (room: Room, client: Client): void => {
+  client.socket.emit("webinar:qaSnapshot", {
+    roomId: room.id,
+    entries: room.getWebinarQaSnapshotFor(client.id, room.isAdminClient(client)),
+  } satisfies WebinarQaSnapshot);
+  listedForQa.add(client);
+};
+
+/**
+ * How many clients one turn of the event loop sends a whole webinar Q&A
+ * list to when a room becomes a webinar. A list is the room's questions as
+ * one person reads them, and a webinar can hold thousands of people, so the
+ * room keeps answering between slices.
+ */
+export const WEBINAR_QA_LISTS_PER_TURN = 100;
+
+/** Rooms whose clients are being sent their lists, a slice a turn. */
+const listing = new WeakSet<Room>();
+
+/**
+ * Sends every client of a webinar who holds no list yet its list, a slice a
+ * turn. Each turn reads again who still needs one, so a seat that joined
+ * meanwhile, and was sent its own, is not sent another.
+ */
+const listInTurns = (state: SfuState, room: Room): void => {
+  if (listing.has(room)) return;
+  listing.add(room);
+  const turn = (): void => {
+    const live = state.rooms.get(room.channelId) === room;
+    if (!live || !state.webinarConfigs.get(room.channelId)?.enabled) {
+      listing.delete(room);
+      return;
+    }
+    let sent = 0;
+    let waitingForDrain = false;
+    for (const client of room.clients.values()) {
+      if (listedForQa.has(client)) continue;
+      if (sent === WEBINAR_QA_LISTS_PER_TURN) {
+        setImmediate(turn);
+        return;
+      }
+      if (!qaListCanQueue(client)) {
+        waitingForDrain = true;
+        continue;
+      }
+      sendWebinarQaList(room, client);
+      sent += 1;
+    }
+    if (waitingForDrain) {
+      setTimeout(turn, DEFAULT_AUTHORITY_LIMITS.lagRecheckMs).unref();
+    } else {
+      listing.delete(room);
+    }
+  };
+  turn();
+};
+
+/**
+ * Sends a client the list after joining a webinar or changing host privileges.
+ */
+export const grantWebinarQaList = (state: SfuState, room: Room, client: Client): void => {
+  if (!oldEventsAreTheBook(state)) return;
+  if (!state.webinarConfigs.get(room.channelId)?.enabled) return;
+  if (qaListCanQueue(client)) {
+    sendWebinarQaList(room, client);
+  } else {
+    listedForQa.delete(client);
+    listInTurns(state, room);
+  }
+};
+
 export const emitWebinarConfigChanged = (
   io: SocketIOServer,
   state: SfuState,
@@ -52,6 +149,16 @@ export const emitWebinarConfigChanged = (
     "webinar:configChanged",
     getWebinarConfigSnapshot(state, room),
   );
+  // Webinar mode and the Q&A switch decide what authority apps show to whom.
+  peekRoomAuthority(room)?.policyChanged();
+  // A room that has just become a webinar grants its Q&A to everyone in it.
+  if (oldEventsAreTheBook(state)) {
+    if (state.webinarConfigs.get(room.channelId)?.enabled) {
+      listInTurns(state, room);
+    } else {
+      for (const client of room.clients.values()) listedForQa.delete(client);
+    }
+  }
 };
 
 const emitWebinarAttendeeCountNow = (
@@ -168,9 +275,7 @@ export const emitWebinarHandQueueChanged = (room: Room): void => {
     roomId: room.id,
     queue: room.getWebinarHandQueue(),
   };
-  for (const admin of room.getAdmins()) {
-    admin.socket.emit("webinar:handQueueChanged", notification);
-  }
+  emitToHosts(room, "webinar:handQueueChanged", notification);
 };
 
 export const emitWebinarFeedChanged = (

@@ -64,11 +64,12 @@ struct AppHostInputs: Equatable {
     let isAttendee: Bool
     let isLocked: Bool
     let isReconnecting: Bool
+    let keepsAppDocuments: Bool
 
     static func make(callSession: Int = 0, appId: String = "", isHost: Bool = false, isAttendee: Bool = false,
-                     isLocked: Bool = false, isReconnecting: Bool = false) -> AppHostInputs {
+                     isLocked: Bool = false, isReconnecting: Bool = false, keepsAppDocuments: Bool = false) -> AppHostInputs {
         return AppHostInputs(callSession: callSession, appId: appId, isHost: isHost, isAttendee: isAttendee,
-                             isLocked: isLocked, isReconnecting: isReconnecting)
+                             isLocked: isLocked, isReconnecting: isReconnecting, keepsAppDocuments: keepsAppDocuments)
     }
 }
 
@@ -81,6 +82,7 @@ struct AppHostModel: Equatable {
     let isLocked: Bool
     let canEdit: Bool
     let canClose: Bool
+    let closeEffect: AppCloseEffect
     let canLock: Bool
     let closePending: Bool
     let lockPending: Bool
@@ -96,7 +98,8 @@ struct AppHostModel: Equatable {
     let wantsWebView: Bool
 
     static let empty = AppHostModel(revision: 0, appId: "", appSessionId: "", phase: AppHostPhase.opening, issue: AppHostIssue.none,
-                                    isLocked: false, canEdit: false, canClose: false, canLock: false, closePending: false,
+                                    isLocked: false, canEdit: false, canClose: false, closeEffect: AppCloseEffect.returnsToMeeting,
+                                    canLock: false, closePending: false,
                                     lockPending: false, tag: AppHostTag.none, bundleVersion: "", editorCount: 0, nameCount: 0,
                                     playback: "none", hasEmbed: false, reloadSerial: 0, wantsWebView: false)
 }
@@ -141,6 +144,8 @@ enum AppWheelLimits {
     static let label = 48
     static let results = 25
     static let name = 64
+    static let pasteLines = 256
+    static let waiting = 999
 }
 
 enum AppWatchLimits {
@@ -152,13 +157,14 @@ enum AppWatchLimits {
 }
 
 enum AppPageCommandKind: String, CaseIterable, Equatable {
-    case addEntries, removeEntry, shuffle, sort, clearEntries, spin, setRemoveWinner, setSounds, clearResults
+    case addEntries, removeEntry, shuffle, sort, clearEntries, spin, setRemoveWinner, setSounds, clearResults, addOutcome
     case playNow, enqueue, request, approve, decline, cancelRequest, move, remove
 }
 
 struct WheelEntryModel: Equatable, Identifiable {
     let id: String
     let label: String
+    let number: Int
 }
 
 struct WheelResultModel: Equatable, Identifiable {
@@ -191,6 +197,7 @@ struct WatchVideoModel: Equatable, Identifiable {
 struct AppEmbedAppStatus: Equatable {
     let kind: String
     let entries: [WheelEntryModel]
+    let waiting: Int
     let results: [WheelResultModel]
     let removeWinner: Bool
     let sounds: Bool
@@ -205,7 +212,7 @@ struct AppEmbedAppStatus: Equatable {
     let myRequestId: String
     let requestDeclined: Bool
 
-    static let empty = AppEmbedAppStatus(kind: "", entries: [], results: [], removeWinner: false, sounds: true, spinning: false,
+    static let empty = AppEmbedAppStatus(kind: "", entries: [], waiting: 0, results: [], removeWinner: false, sounds: true, spinning: false,
                                          winnerSpinId: "", winnerLabel: "", videoId: "", title: "", playback: "none", queue: [],
                                          requests: [], myRequestId: "", requestDeclined: false)
 }
@@ -229,7 +236,7 @@ enum AppEmbedAppCodec {
                 let id = entry["id"] as? String ?? ""
                 guard AppBridgeCodec.isValidIdentifier(id),
                       let label = text(entry["label"], limit: AppWheelLimits.label, required: true) else { return nil }
-                entries.append(WheelEntryModel(id: id, label: label))
+                entries.append(WheelEntryModel(id: id, label: label, number: entries.count + 1))
             }
         }
         var results: [WheelResultModel] = []
@@ -248,8 +255,9 @@ enum AppEmbedAppCodec {
               let sounds = flag(object["sounds"], fallback: true),
               let spinning = flag(object["spinning"], fallback: false),
               let winnerSpinId = optionalIdentifier(object["winnerSpinId"]),
-              let winnerLabel = text(object["winnerLabel"], limit: AppWheelLimits.label, required: false) else { return nil }
-        return AppEmbedAppStatus(kind: "wheel", entries: entries, results: results, removeWinner: removeWinner, sounds: sounds,
+              let winnerLabel = text(object["winnerLabel"], limit: AppWheelLimits.label, required: false),
+              let waiting = count(object["waiting"], limit: AppWheelLimits.waiting) else { return nil }
+        return AppEmbedAppStatus(kind: "wheel", entries: entries, waiting: waiting, results: results, removeWinner: removeWinner, sounds: sounds,
                                  spinning: spinning, winnerSpinId: winnerSpinId, winnerLabel: winnerLabel, videoId: "", title: "",
                                  playback: "none", queue: [], requests: [], myRequestId: "", requestDeclined: false)
     }
@@ -287,7 +295,7 @@ enum AppEmbedAppCodec {
         }
         guard let myRequestId = optionalIdentifier(object["myRequestId"]),
               let declined = flag(object["requestDeclined"], fallback: false) else { return nil }
-        return AppEmbedAppStatus(kind: "watch", entries: [], results: [], removeWinner: false, sounds: true, spinning: false,
+        return AppEmbedAppStatus(kind: "watch", entries: [], waiting: 0, results: [], removeWinner: false, sounds: true, spinning: false,
                                  winnerSpinId: "", winnerLabel: "", videoId: videoId, title: title, playback: playback, queue: queue,
                                  requests: requests, myRequestId: myRequestId, requestDeclined: declined)
     }
@@ -306,6 +314,12 @@ enum AppEmbedAppCodec {
         guard let string = value as? String, string.count <= limit else { return nil }
         if required && string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
         return string
+    }
+
+    static func count(_ value: Any?, limit: Int) -> Int? {
+        guard let value = value else { return 0 }
+        guard let number = AppBridgeCodec.number(value), number >= 0.0, number == number.rounded(), number <= Double(limit) else { return nil }
+        return Int(number)
     }
 
     static func flag(_ value: Any?, fallback: Bool) -> Bool? {
@@ -411,6 +425,87 @@ enum WatchSearchPhase: String, CaseIterable, Equatable {
     case idle, searching, results, empty, unavailable, failed
 }
 
+struct WheelNameSubmission: Equatable {
+    let requestId: String
+    let lines: [String]
+    let tokens: [String]
+    let sentAtMillis: Double
+    let asks: Int
+}
+
+struct WheelNameDraft: Equatable {
+    private(set) var scope = ""
+    private(set) var text = ""
+    private(set) var sent: [WheelNameSubmission] = []
+    private(set) var isUnconfirmed = false
+
+    mutating func enter(_ nextScope: String) {
+        if nextScope == scope { return }
+        scope = nextScope
+        text = ""
+        sent = []
+        isUnconfirmed = false
+    }
+
+    mutating func edit(_ value: String) -> Bool {
+        let addsLine = WheelNameDraft.lineBreaks(value) > WheelNameDraft.lineBreaks(text)
+        if value != text { isUnconfirmed = false }
+        text = value
+        return addsLine
+    }
+
+    mutating func clear() {
+        text = ""
+        isUnconfirmed = false
+    }
+
+    mutating func didSend(requestId: String, lines: [String], tokens: [String], sentAtMillis: Double, rest: String = "") {
+        sent.append(WheelNameSubmission(requestId: requestId, lines: lines, tokens: tokens, sentAtMillis: sentAtMillis, asks: 0))
+        text = rest
+        isUnconfirmed = false
+    }
+
+    mutating func asked(requestId: String) {
+        guard let index = sent.firstIndex(where: { $0.requestId == requestId }) else { return }
+        let submission = sent[index]
+        sent[index] = WheelNameSubmission(requestId: requestId, lines: submission.lines, tokens: submission.tokens,
+                                          sentAtMillis: submission.sentAtMillis, asks: submission.asks + 1)
+    }
+
+    mutating func settle(requestId: String, added: [Int]) {
+        guard let index = sent.firstIndex(where: { $0.requestId == requestId }) else { return }
+        let submission = sent[index]
+        sent.remove(at: index)
+        var kept: [String] = []
+        var offset = 0
+        for line in submission.lines {
+            if !added.contains(offset) { kept.append(line) }
+            offset += 1
+        }
+        restore(kept.joined(separator: "\n"))
+    }
+
+    mutating func giveUp(requestId: String) {
+        if !sent.contains(where: { $0.requestId == requestId }) { return }
+        settle(requestId: requestId, added: [])
+        isUnconfirmed = true
+    }
+
+    private mutating func restore(_ value: String) {
+        let kept = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if kept.isEmpty { return }
+        text = text.isEmpty ? kept : kept + "\n" + text
+    }
+
+    private static func lineBreaks(_ value: String) -> Int {
+        return value.components(separatedBy: "\n").count - 1
+    }
+}
+
+enum WheelPageNotice: String, CaseIterable, Equatable {
+    case unconfirmed, waiting, full
+}
+
 struct WheelPageModel: Equatable {
     let revision: Int
     let entries: [WheelEntryModel]
@@ -420,7 +515,9 @@ struct WheelPageModel: Equatable {
     let spinning: Bool
     let canEdit: Bool
     let canSpin: Bool
+    let canReorder: Bool
     let isFull: Bool
+    let waitingNames: Int
     let isReady: Bool
 
     let missingNames: [String]
@@ -441,13 +538,15 @@ struct WheelPageModel: Equatable {
 
     func withRevision(_ value: Int) -> WheelPageModel {
         return WheelPageModel(revision: value, entries: entries, results: results, removeWinner: removeWinner, sounds: sounds,
-                              spinning: spinning, canEdit: canEdit, canSpin: canSpin, isFull: isFull, isReady: isReady,
+                              spinning: spinning, canEdit: canEdit, canSpin: canSpin, canReorder: canReorder, isFull: isFull,
+                              waitingNames: waitingNames, isReady: isReady,
                               missingNames: missingNames, pendingKinds: pendingKinds, pendingTargets: pendingTargets,
                               winnerSequence: winnerSequence, winnerLabel: winnerLabel)
     }
 
     static let empty = WheelPageModel(revision: 0, entries: [], results: [], removeWinner: false, sounds: true, spinning: false,
-                                      canEdit: false, canSpin: false, isFull: false, isReady: false, missingNames: [],
+                                      canEdit: false, canSpin: false, canReorder: false, isFull: false, waitingNames: 0, isReady: false,
+                                      missingNames: [],
                                       pendingKinds: [], pendingTargets: [], winnerSequence: 0, winnerLabel: "")
 }
 
@@ -560,20 +659,37 @@ enum AppPagePolicy {
             }
             collapsed += String(character)
         }
-        return AppBridgeCodec.clipped(collapsed, AppWheelLimits.label)
+        return collapsed
     }
 
-    static func wheelLabels(_ raw: String, room: Int) -> [String] {
+    static func wheelLabels(_ raw: String) -> [String] {
         var labels: [String] = []
-        if room <= 0 { return labels }
         let lines = raw.replacingOccurrences(of: "\r", with: "\n").components(separatedBy: "\n")
         for line in lines {
             let label = normalizedLabel(line)
-            if label.isEmpty { continue }
-            labels.append(label)
-            if labels.count >= room { break }
+            if !label.isEmpty { labels.append(label) }
         }
         return labels
+    }
+
+    static func pasteBatch(_ lines: [String]) -> [String] {
+        var batch: [String] = []
+        for line in lines {
+            if batch.count >= AppWheelLimits.pasteLines { break }
+            batch.append(line)
+        }
+        return batch
+    }
+
+    static func wheelNotices(canEdit: Bool, isFull: Bool, waitingNames: Int, isUnconfirmed: Bool) -> [WheelPageNotice] {
+        var notices: [WheelPageNotice] = []
+        if canEdit && isUnconfirmed { notices.append(WheelPageNotice.unconfirmed) }
+        if waitingNames > 0 {
+            notices.append(WheelPageNotice.waiting)
+        } else if canEdit && isFull {
+            notices.append(WheelPageNotice.full)
+        }
+        return notices
     }
 
     static func missingNames(roster: [String], entries: [WheelEntryModel]) -> [String] {
@@ -595,16 +711,20 @@ enum AppPagePolicy {
         return missing
     }
 
+    static func nameToken() -> String {
+        return UUID().uuidString.lowercased()
+    }
+
     static func isEditCommand(_ kind: AppPageCommandKind) -> Bool {
         switch kind {
-        case .setSounds, .request, .cancelRequest: return false
+        case .setSounds, .request, .cancelRequest, .addOutcome: return false
         default: return true
         }
     }
 
     static func appId(_ kind: AppPageCommandKind) -> String {
         switch kind {
-        case .addEntries, .removeEntry, .shuffle, .sort, .clearEntries, .spin, .setRemoveWinner, .setSounds, .clearResults:
+        case .addEntries, .removeEntry, .shuffle, .sort, .clearEntries, .spin, .setRemoveWinner, .setSounds, .clearResults, .addOutcome:
             return "wheel"
         case .playNow, .enqueue, .request, .approve, .decline, .cancelRequest, .move, .remove:
             return "watch"
@@ -622,6 +742,7 @@ enum AppPagePolicy {
         case .setRemoveWinner: return AppBridgeOutboundType.setRemoveWinner
         case .setSounds: return AppBridgeOutboundType.setSounds
         case .clearResults: return AppBridgeOutboundType.clearResults
+        case .addOutcome: return AppBridgeOutboundType.addOutcome
         case .playNow: return AppBridgeOutboundType.playNow
         case .enqueue: return AppBridgeOutboundType.enqueue
         case .request: return AppBridgeOutboundType.request
@@ -662,6 +783,9 @@ final class AppHostPresenter {
 
     private(set) var feedbackState = MeetingShellFeedbackState(session: 0, token: FeedbackToken.baseline)
 
+    private(set) var stageDiscardPromptId = ""
+    @ObservationIgnored private var resolveStageDiscard: ((Bool) -> Void)?
+
     @ObservationIgnored var onCommand: ((AppHostCoreCommand) -> Void)? = nil
 
     @ObservationIgnored var onOpenPage: ((String) -> Void)? = nil
@@ -673,6 +797,7 @@ final class AppHostPresenter {
     @ObservationIgnored var sleep: (Double) async -> Void = { millis in
         try? await Task.sleep(nanoseconds: UInt64(max(0.0, millis) * 1_000_000.0))
     }
+    @ObservationIgnored var nowMillis: () -> Double = { DiagnosticsClock.wallMillis() }
 
     @ObservationIgnored private(set) var session: ActiveAppSession? = nil
 
@@ -704,8 +829,15 @@ final class AppHostPresenter {
 
     @ObservationIgnored private var appStatus = AppEmbedAppStatus.empty
     @ObservationIgnored private var pagePending: [AppPagePendingCommand] = []
+    @ObservationIgnored private var outcomeOrigins: [String: String] = [:]
     @ObservationIgnored private var lastWinnerSpinId = ""
     @ObservationIgnored private var winnerSequence = 0
+    private(set) var wheelDraft = WheelNameDraft()
+
+    var wheelNotices: [WheelPageNotice] {
+        return AppPagePolicy.wheelNotices(canEdit: wheel.canEdit, isFull: wheel.isFull, waitingNames: wheel.waitingNames,
+                                          isUnconfirmed: wheelDraft.isUnconfirmed)
+    }
     @ObservationIgnored private var winnerLabel = ""
     @ObservationIgnored private var announcedVideoId = ""
     @ObservationIgnored private var titleSequence = 0
@@ -720,6 +852,7 @@ final class AppHostPresenter {
     @ObservationIgnored private var watchRevision = 0
     @ObservationIgnored private var sawAppStatus = false
     @ObservationIgnored private(set) var isHiddenLocally = false
+    @ObservationIgnored private var hiddenReleaseTask: Task<Void, Never>? = nil
 
     @ObservationIgnored var fixtureSeedNames: [String] = []
 
@@ -754,12 +887,56 @@ final class AppHostPresenter {
     func setHiddenLocally(_ hidden: Bool) {
         if isHiddenLocally == hidden { return }
         isHiddenLocally = hidden
+        cancelHiddenRelease()
+        session?.setWatchHidden(hidden)
         if hidden {
-            session?.releaseEmbed()
+            cancelReadyTimer()
+            if let session, session.appId == "watch" {
+                if session.embedReady {
+                    let mount = session.bridgeGeneration
+                    hiddenReleaseTask = Task { @MainActor [weak session] in
+                        guard let session, !Task.isCancelled, session.bridgeGeneration == mount else { return }
+                        if await session.prepareToLeave(), !Task.isCancelled, session.bridgeGeneration == mount {
+                            session.releaseEmbedIfClean()
+                        }
+                    }
+                } else {
+                    session.releaseEmbedIfClean()
+                }
+            }
             rebuild()
-        } else {
+        } else if session?.embedReady != true {
             retry()
+        } else {
+            if !embedReady { startReadyTimer() }
+            rebuild()
         }
+    }
+
+    private func cancelHiddenRelease() {
+        hiddenReleaseTask?.cancel()
+        hiddenReleaseTask = nil
+    }
+
+    func requestStageDiscard(resolve: @escaping (Bool) -> Void) {
+        guard stageDiscardPromptId.isEmpty else { return }
+        resolveStageDiscard = resolve
+        stageDiscardPromptId = UUID().uuidString
+    }
+
+    func resolveStageDiscardPrompt(id: String, confirmed: Bool) {
+        guard !id.isEmpty, id == stageDiscardPromptId else { return }
+        let resolve = resolveStageDiscard
+        resolveStageDiscard = nil
+        stageDiscardPromptId = ""
+        resolve?(confirmed)
+    }
+
+    func closeCancelled() {
+        if !closePending { return }
+        closePending = false
+        cancelSafety()
+        rebuild()
     }
 
     func closeFailed() {
@@ -793,12 +970,17 @@ final class AppHostPresenter {
             if event.appSessionId != appSessionId { return }
             cancelReadyTimer()
             embedReady = false
+            pending = []
+            pagePending = []
+            rebuild()
+            rebuildToolbar()
         case .ready:
             if event.appSessionId != appSessionId { return }
             embedReady = true
             issue = AppHostIssue.none
             bundleVersion = event.bundleVersion
             cancelReadyTimer()
+            askUnsettledAddOutcomes()
             rebuild()
         case .failed:
             if event.appSessionId != appSessionId { return }
@@ -829,7 +1011,7 @@ final class AppHostPresenter {
             if first { seedFixture(app) }
         case .ack:
             if event.appSessionId != appSessionId { return }
-            acknowledge(requestId: event.requestId, ok: event.ok, pngBase64: event.pngBase64)
+            acknowledge(requestId: event.requestId, ok: event.ok, error: event.error, pngBase64: event.pngBase64, added: event.added)
         }
     }
 
@@ -935,28 +1117,57 @@ final class AppHostPresenter {
     @discardableResult
     func addWheelNames(_ raw: String) -> ActivityTapResult {
         if !wheel.canEdit { return ActivityTapResult.explained }
-        if wheel.isFull { return ActivityTapResult.explained }
-        let labels = AppPagePolicy.wheelLabels(raw, room: AppWheelLimits.maxEntries - wheel.entries.count)
+        let labels = AppPagePolicy.pasteBatch(AppPagePolicy.wheelLabels(raw))
         if labels.isEmpty { return ActivityTapResult.ignored }
         return sendPage(AppPageCommandKind.addEntries, target: "", payload: ["labels": labels])
     }
 
+    func editWheelDraft(_ value: String) {
+        if wheelDraft.edit(value) { submitWheelDraft() }
+    }
+
+    func submitWheelDraft() {
+        let text = wheelDraft.text
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            wheelDraft.clear()
+            return
+        }
+        if !wheel.canEdit { return }
+        let lines = AppPagePolicy.wheelLabels(text)
+        let batch = AppPagePolicy.pasteBatch(lines)
+        var rest: [String] = []
+        var tokens: [String] = []
+        var index = 0
+        for line in lines {
+            if index >= batch.count {
+                rest.append(line)
+            } else {
+                tokens.append(AppPagePolicy.nameToken())
+            }
+            index += 1
+        }
+        let sentAt = nowMillis().rounded(.down)
+        let payload: [String: Any] = ["labels": batch, "tokens": tokens, "sentAt": sentAt]
+        if sendPage(AppPageCommandKind.addEntries, target: "", payload: payload) != ActivityTapResult.dispatched {
+            return
+        }
+        guard let command = pagePending.last else { return }
+        wheelDraft.didSend(requestId: command.requestId, lines: batch, tokens: tokens, sentAtMillis: sentAt,
+                           rest: rest.joined(separator: "\n"))
+        startAddDeadline(requestId: command.requestId)
+    }
+
     @discardableResult
     func addEveryoneToWheel() -> ActivityTapResult {
-        if !wheel.canEdit || wheel.isFull { return ActivityTapResult.explained }
-        let missing = AppPagePolicy.missingNames(roster: rosterNames(), entries: wheel.entries)
-        let room = AppWheelLimits.maxEntries - wheel.entries.count
-        var labels: [String] = []
-        for name in missing {
-            if labels.count >= room { break }
-            labels.append(name)
-        }
+        if !wheel.canEdit { return ActivityTapResult.explained }
+        let labels = AppPagePolicy.pasteBatch(AppPagePolicy.missingNames(roster: rosterNames(), entries: wheel.entries))
         if labels.isEmpty { return ActivityTapResult.ignored }
         return sendPage(AppPageCommandKind.addEntries, target: "everyone", payload: ["labels": labels])
     }
 
     @discardableResult
     func removeWheelEntry(_ entryId: String) -> ActivityTapResult {
+        if wheel.spinning { return ActivityTapResult.explained }
         if !AppBridgeCodec.isValidIdentifier(entryId) || !wheel.entries.contains(where: { $0.id == entryId }) {
             return ActivityTapResult.ignored
         }
@@ -965,18 +1176,21 @@ final class AppHostPresenter {
 
     @discardableResult
     func shuffleWheel() -> ActivityTapResult {
+        if wheel.spinning { return ActivityTapResult.explained }
         if wheel.entries.count < 2 { return ActivityTapResult.ignored }
         return sendPage(AppPageCommandKind.shuffle)
     }
 
     @discardableResult
     func sortWheel() -> ActivityTapResult {
+        if wheel.spinning { return ActivityTapResult.explained }
         if wheel.entries.count < 2 { return ActivityTapResult.ignored }
         return sendPage(AppPageCommandKind.sort)
     }
 
     @discardableResult
     func clearWheelNames() -> ActivityTapResult {
+        if wheel.spinning { return ActivityTapResult.explained }
         if wheel.entries.isEmpty { return ActivityTapResult.ignored }
         return sendPage(AppPageCommandKind.clearEntries)
     }
@@ -1171,6 +1385,7 @@ final class AppHostPresenter {
         resetLocal()
         isHiddenLocally = false
         inputs = AppHostInputs.make()
+        followSession()
         trendingItems = []
         trendingRequested = false
         rebuild()
@@ -1252,25 +1467,42 @@ final class AppHostPresenter {
 
     private func followSession() {
         let current = session?.appSessionId ?? ""
-        if current == appSessionId { return }
-        appSessionId = current
-        issue = AppHostIssue.none
-        bundleVersion = ""
-        embedReady = false
-        embedStatus = AppEmbedStatus.empty
-        previousTool = AppWhiteboardTool.pen.rawValue
-        pending = []
-        exportPNGBase64 = ""
-        exportFailed = false
-        cancelReadyTimer()
-        resetPageState()
-        rebuildToolbar()
-        rebuildPages()
+        if current != appSessionId {
+            cancelHiddenRelease()
+            session?.setWatchHidden(isHiddenLocally)
+            appSessionId = current
+            issue = AppHostIssue.none
+            bundleVersion = ""
+            embedReady = false
+            embedStatus = AppEmbedStatus.empty
+            previousTool = AppWhiteboardTool.pen.rawValue
+            pending = []
+            exportPNGBase64 = ""
+            exportFailed = false
+            cancelReadyTimer()
+            resetPageState()
+            rebuildToolbar()
+            rebuildPages()
+        }
+        let draftScope = String(inputs.callSession) + "/" + appSessionId
+        if wheelDraft.scope != draftScope { wheelDraft.enter(draftScope) }
     }
 
-    private func acknowledge(requestId: String, ok: Bool, pngBase64: String) {
+    private func acknowledge(requestId: String, ok: Bool, error: String, pngBase64: String, added: [Int]?) {
         if let pageIndex = pagePending.firstIndex(where: { $0.requestId == requestId }) {
+            let command = pagePending[pageIndex]
             pagePending.remove(at: pageIndex)
+            if command.kind == AppPageCommandKind.addOutcome {
+                resolveAdd(command.target, error: error, added: added)
+            } else if command.kind == AppPageCommandKind.addEntries && command.target.isEmpty {
+                resolveAdd(requestId, error: error, added: added)
+                askAddOutcome(requestId)
+            }
+            rebuildPages()
+            return
+        }
+        if wheelDraft.sent.contains(where: { $0.requestId == requestId }) && (added != nil || error == AppBridgeProtocol.addOutcomeUnknown) {
+            resolveAdd(requestId, error: error, added: added)
             rebuildPages()
             return
         }
@@ -1297,8 +1529,17 @@ final class AppHostPresenter {
     }
 
     func fireCommandTimeout(requestId: String) {
+        let asked = outcomeOrigins.removeValue(forKey: requestId) ?? ""
         if let pageIndex = pagePending.firstIndex(where: { $0.requestId == requestId }) {
+            let command = pagePending[pageIndex]
             pagePending.remove(at: pageIndex)
+            askAddOutcome(command.kind == AppPageCommandKind.addOutcome ? command.target : requestId)
+            rebuildPages()
+            return
+        }
+        let original = asked.isEmpty ? requestId : asked
+        if wheelDraft.sent.contains(where: { $0.requestId == original }) {
+            askAddOutcome(original)
             rebuildPages()
             return
         }
@@ -1307,6 +1548,70 @@ final class AppHostPresenter {
         pending.remove(at: index)
         if entry.kind == AppHostCommandKind.export { exportFailed = true }
         rebuildToolbar()
+    }
+
+    private func startAddDeadline(requestId: String) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.sleep(AppBridgeProtocol.addOutcomeWindowMillis)
+            self.fireAddDeadline(requestId: requestId)
+        }
+    }
+
+    func fireAddDeadline(requestId: String) {
+        if !wheelDraft.sent.contains(where: { $0.requestId == requestId }) { return }
+        pagePending.removeAll(where: { $0.requestId == requestId })
+        giveUpAdd(requestId)
+        rebuildPages()
+    }
+
+    private func resolveAdd(_ original: String, error: String, added: [Int]?) {
+        if added == nil && error == AppBridgeProtocol.addOutcomeUnknown {
+            giveUpAdd(original)
+            return
+        }
+        settleAdd(original, added: added)
+    }
+
+    private func settleAdd(_ original: String, added: [Int]?) {
+        guard let list = added else { return }
+        pagePending.removeAll(where: { $0.kind == AppPageCommandKind.addOutcome && $0.target == original })
+        wheelDraft.settle(requestId: original, added: list)
+    }
+
+    private func giveUpAdd(_ original: String) {
+        pagePending.removeAll(where: { $0.kind == AppPageCommandKind.addOutcome && $0.target == original })
+        wheelDraft.giveUp(requestId: original)
+    }
+
+    private func askAddOutcome(_ original: String) {
+        guard let submission = wheelDraft.sent.first(where: { $0.requestId == original }) else { return }
+        let waiting = pagePending.contains(where: {
+            $0.requestId == original || ($0.kind == AppPageCommandKind.addOutcome && $0.target == original)
+        })
+        if waiting { return }
+        let elapsed = nowMillis() - submission.sentAtMillis
+        if submission.asks >= AppBridgeProtocol.addOutcomeAsks || elapsed < 0.0 || elapsed >= AppBridgeProtocol.addOutcomeWindowMillis {
+            giveUpAdd(original)
+            return
+        }
+        if !embedReady { return }
+        nextRequestNumber += 1
+        let requestId = "h-" + String(nextRequestNumber)
+        let question: [String: Any] = ["tokens": submission.tokens, "sentAt": submission.sentAtMillis]
+        if session?.sendCommand(AppBridgeOutboundType.addOutcome, requestId: requestId, payload: question) != true {
+            return
+        }
+        wheelDraft.asked(requestId: original)
+        pagePending.append(AppPagePendingCommand(requestId: requestId, kind: AppPageCommandKind.addOutcome, target: original))
+        outcomeOrigins[requestId] = original
+        startCommandTimer(requestId: requestId)
+    }
+
+    private func askUnsettledAddOutcomes() {
+        for submission in wheelDraft.sent {
+            askAddOutcome(submission.requestId)
+        }
     }
 
     private func startReadyTimer() {
@@ -1365,7 +1670,10 @@ final class AppHostPresenter {
     }
 
     private func resetLocal() {
+        stageDiscardPromptId = ""
+        resolveStageDiscard = nil
         cancelReadyTimer()
+        cancelHiddenRelease()
         pendingSafetyTask?.cancel()
         pendingSafetyTask = nil
         appSessionId = session?.appSessionId ?? ""
@@ -1400,6 +1708,7 @@ final class AppHostPresenter {
             isLocked: inputs.isLocked,
             canEdit: canEdit,
             canClose: hasApp && inputs.isHost,
+            closeEffect: AppCloseEffect.of(appId: hasApp ? inputs.appId : "", keepsAppDocuments: inputs.keepsAppDocuments),
             canLock: hasApp && inputs.isHost,
             closePending: closePending,
             lockPending: lockPending,
@@ -1419,7 +1728,7 @@ final class AppHostPresenter {
         revision += 1
         model = AppHostModel(revision: revision, appId: next.appId, appSessionId: next.appSessionId, phase: next.phase,
                              issue: next.issue, isLocked: next.isLocked, canEdit: next.canEdit, canClose: next.canClose,
-                             canLock: next.canLock, closePending: next.closePending, lockPending: next.lockPending, tag: next.tag,
+                             closeEffect: next.closeEffect, canLock: next.canLock, closePending: next.closePending, lockPending: next.lockPending, tag: next.tag,
                              bundleVersion: next.bundleVersion, editorCount: next.editorCount, nameCount: next.nameCount,
                              playback: next.playback, hasEmbed: next.hasEmbed, reloadSerial: next.reloadSerial,
                              wantsWebView: next.wantsWebView)
@@ -1448,7 +1757,8 @@ final class AppHostPresenter {
 
     static func sameModel(_ a: AppHostModel, _ b: AppHostModel) -> Bool {
         return a.appId == b.appId && a.appSessionId == b.appSessionId && a.phase == b.phase && a.issue == b.issue
-            && a.isLocked == b.isLocked && a.canEdit == b.canEdit && a.canClose == b.canClose && a.canLock == b.canLock
+            && a.isLocked == b.isLocked && a.canEdit == b.canEdit && a.canClose == b.canClose
+            && a.closeEffect == b.closeEffect && a.canLock == b.canLock
             && a.closePending == b.closePending && a.lockPending == b.lockPending && a.tag == b.tag
             && a.bundleVersion == b.bundleVersion && a.editorCount == b.editorCount && a.nameCount == b.nameCount
             && a.playback == b.playback && a.hasEmbed == b.hasEmbed && a.reloadSerial == b.reloadSerial
@@ -1527,6 +1837,7 @@ final class AppHostPresenter {
     private func resetPageState() {
         appStatus = AppEmbedAppStatus.empty
         pagePending = []
+        outcomeOrigins = [:]
         sawAppStatus = false
         lastWinnerSpinId = ""
         winnerLabel = ""
@@ -1562,7 +1873,9 @@ final class AppHostPresenter {
             spinning: spinning,
             canEdit: wheelEdit,
             canSpin: wheelEdit && wheelEntries.count >= 2 && !spinning && !kinds.contains(AppPageCommandKind.spin.rawValue),
+            canReorder: wheelEdit && !spinning,
             isFull: wheelEntries.count >= AppWheelLimits.maxEntries,
+            waitingNames: isWheel ? appStatus.waiting : 0,
             isReady: isWheel && ready,
             missingNames: missing,
             pendingKinds: isWheel ? kinds : [],
@@ -1576,7 +1889,7 @@ final class AppHostPresenter {
         }
 
         let isWatch = model.appId == "watch" && appStatus.kind == "watch"
-        let watchApp = model.appId == "watch" && ready
+        let watchApp = model.appId == "watch" && ready && !isHiddenLocally
         let nextWatch = WatchPageModel(
             revision: watch.revision,
             videoId: isWatch ? appStatus.videoId : "",

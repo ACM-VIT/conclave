@@ -20,12 +20,6 @@ export interface GridLayoutOptions {
   maxTilesPerPage?: number;
   /** Target tile aspect ratio = width / height (16:9 = 1.7778 landscape). */
   targetAspect?: number;
-  /**
-   * Width / height of each tile on the page, in order. When any tile differs
-   * from `targetAspect`, the page packs into justified rows: every tile shares
-   * one height and keeps its own width. Missing or invalid entries count as
-   * `targetAspect`.
-   */
   tileAspects?: readonly number[];
 }
 
@@ -153,6 +147,215 @@ const readTileAspects = (
     : null;
 };
 
+const MAX_ROW_STRETCH = 1.25;
+const PORTRAIT_STRETCH_ASPECT = 4 / 5;
+
+const sum = (values: readonly number[]) =>
+  values.reduce((total, value) => total + value, 0);
+
+const rowWidthOf = (widths: readonly number[], gap: number) =>
+  sum(widths) + (widths.length - 1) * gap;
+
+/**
+ * Whole pixels summing to `total`, each inside `low` to `high`: floor each
+ * size, then move the pixels left over one at a time to the tiles nearest the
+ * next pixel that still have room.
+ */
+const roundWithin = (sizes: number[], low: number[], high: number[], total: number) => {
+  const pixels = sizes.map((size, index) =>
+    Math.min(Math.max(Math.floor(size), low[index]), high[index]),
+  );
+  // Flooring leaves at most a couple of px per tile to move, and each pass
+  // moves at least one; the cap only matters when pixels outgrow float steps.
+  for (let left = total - sum(pixels), pass = 0; left !== 0 && pass < 4 * sizes.length + 4; pass += 1) {
+    const grow = left > 0;
+    const movable = pixels
+      .map((pixel, index) => ({ index, remainder: sizes[index] - pixel }))
+      .filter(({ index }) => (grow ? pixels[index] < high[index] : pixels[index] > low[index]))
+      .sort((a, b) => (grow ? b.remainder - a.remainder : a.remainder - b.remainder))
+      .slice(0, Math.abs(left));
+    if (movable.length === 0) break;
+    movable.forEach(({ index }) => {
+      pixels[index] += grow ? 1 : -1;
+    });
+    left = total - sum(pixels);
+  }
+  return pixels;
+};
+
+// Portrait tiles grow and shrink at this share of their width's rate, so a
+// row widens its landscape tiles first and crops a face as little as it can.
+const PORTRAIT_RESIZE_WEIGHT = 0.5;
+
+/**
+ * How far each tile may resize, in whole pixels, from its unrounded width
+ * `exact`: `floor` and `hard` are the 1.25x caps either way, never past the
+ * tile's own whole-pixel width. `weight` is each tile's share of a row's
+ * resize: its unrounded width, halved for a portrait tile, and never zero.
+ */
+const resizeLimits = (exact: number[], height: number) => ({
+  floor: exact.map((width) => Math.min(Math.ceil(width / MAX_ROW_STRETCH), Math.floor(width))),
+  hard: exact.map((width) => Math.floor(width * MAX_ROW_STRETCH)),
+  weight: exact.map((width) =>
+    Math.max(width < height ? width * PORTRAIT_RESIZE_WEIGHT : width, ASPECT_EPSILON),
+  ),
+});
+
+/**
+ * Move `sizes` by `amount` px in total, each tile in proportion to its
+ * weight, until it reaches its limit. Returns the px no tile could take.
+ */
+const fillToward = (weights: number[], sizes: number[], limits: number[], amount: number) => {
+  const direction = Math.sign(amount);
+  const room = (index: number) => (limits[index] - sizes[index]) * direction;
+  let left = Math.abs(amount);
+  let open = sizes.flatMap((_, index) => (room(index) > ASPECT_EPSILON ? [index] : []));
+  // Each pass fills at least one tile or the whole amount, so this many passes
+  // always suffice; the bound only matters when float precision runs out.
+  for (let pass = 0; pass <= sizes.length && left > ASPECT_EPSILON && open.length > 0; pass += 1) {
+    const base = sum(open.map((index) => weights[index]));
+    const step = Math.min(left / base, ...open.map((index) => room(index) / weights[index]));
+    open.forEach((index) => {
+      sizes[index] += direction * weights[index] * step;
+      // Land exactly on a limit, so rounding can never cross it.
+      if (room(index) <= ASPECT_EPSILON) sizes[index] = limits[index];
+    });
+    left -= base * step;
+    open = open.filter((index) => room(index) > ASPECT_EPSILON);
+  }
+  return direction * left;
+};
+
+/**
+ * The whole pixels `count` tiles can share in a row no wider than `rowWidth`.
+ * Float error can leave `rowWidth - gaps` a hair under the integer it came
+ * from, so that integer is accepted when it still fits.
+ */
+const tileBudget = (count: number, gap: number, rowWidth: number) => {
+  const gaps = (count - 1) * gap;
+  const budget = Math.floor(rowWidth - gaps);
+  return budget + 1 + gaps <= rowWidth ? budget + 1 : budget;
+};
+
+/**
+ * Resize a row's tiles so the row spans `rowWidth` at most, to the whole pixel
+ * below when the gap is fractional. The row fills in unrounded pixels from the
+ * tiles' unrounded widths toward their unrounded 1.25x caps, every tile taking
+ * its weighted share, so a row's growth spreads across it instead of landing
+ * on one tile. Only then do the tiles go to whole pixels inside their caps.
+ * Returns null when the caps cannot reach `rowWidth`.
+ */
+const resizeRow = (
+  exact: number[],
+  { floor, hard, weight }: ReturnType<typeof resizeLimits>,
+  gap: number,
+  rowWidth: number,
+) => {
+  const total = tileBudget(exact.length, gap, rowWidth);
+  if (total < sum(floor) || total > sum(hard)) return null;
+  const sizes = [...exact];
+  const limit = total < sum(exact) ? 1 / MAX_ROW_STRETCH : MAX_ROW_STRETCH;
+  fillToward(weight, sizes, exact.map((width) => width * limit), total - sum(exact));
+  return roundWithin(sizes, floor, hard, total);
+};
+
+// A row that misses the shared width by this much or less stays at its
+// nearest legal width: 4 px at each edge, a third of the 12 px gap.
+const ROW_MISS_TOLERANCE = 8;
+// Past that, a row eases back to its own width this many px for every px it
+// misses by, so a near miss stays nearly aligned and a far one sits at its own
+// width.
+const ROW_EASE_RATE = 3;
+
+const alignRows = (rowAspects: number[][], height: number, gap: number, cols: number) => {
+  // A lone row has nothing to line up with, so its tiles keep their own
+  // whole-pixel widths, exactly as base lays them out.
+  if (rowAspects.length === 1) {
+    return [rowAspects[0].map((aspect) => Math.floor(height * aspect))];
+  }
+  const rows = rowAspects.map((aspects) => {
+    const exact = aspects.map((aspect) => height * aspect);
+    const tiles = exact.map(Math.floor);
+    const limits = resizeLimits(exact, height);
+    return {
+      exact,
+      tiles,
+      limits,
+      full: aspects.length === cols,
+      natural: rowWidthOf(exact, gap),
+      low: rowWidthOf(exact.map((width) => width / MAX_ROW_STRETCH), gap),
+      soft: rowWidthOf(
+        exact.map((width) =>
+          width < height
+            ? Math.min(width * MAX_ROW_STRETCH, Math.max(width, height * PORTRAIT_STRETCH_ASPECT))
+            : width * MAX_ROW_STRETCH,
+        ),
+        gap,
+      ),
+      high: rowWidthOf(exact.map((width) => width * MAX_ROW_STRETCH), gap),
+      pixelLow: rowWidthOf(limits.floor, gap),
+      pixelHigh: rowWidthOf(limits.hard, gap),
+    };
+  });
+  const fullRows = rows.filter((row) => row.full);
+  const widest = Math.max(...rows.map((row) => row.natural));
+  const preferred = Math.min(
+    Math.max(
+      Math.min(widest, ...fullRows.map((row) => row.soft)),
+      Math.max(...fullRows.map((row) => row.low)),
+    ),
+    Math.min(...fullRows.map((row) => row.high)),
+  );
+  const floor = Math.min(preferred, Math.max(...fullRows.map((row) => row.natural)));
+  const fullWeight = 4 * (rows.length - fullRows.length) + 2;
+  const miss = (row: (typeof rows)[number], width: number) =>
+    Math.max(row.low - width, 0, width - row.high);
+  const cost = (width: number) =>
+    rows.reduce(
+      (total, row) => (row.full ? total : total + 4 * miss(row, width)),
+      Math.abs(width - preferred) +
+        fullWeight * Math.max(...fullRows.map((row) => miss(row, width))),
+    );
+  const target = [
+    ...rows.flatMap((row) => [row.low, row.high]),
+    ...fullRows.flatMap((wide) => fullRows.map((narrow) => (wide.low + narrow.high) / 2)),
+  ]
+    .map((width) => Math.max(width, floor))
+    .reduce((best, width) => (cost(width) < cost(best) ? width : best), preferred);
+
+  const widths = rows.map((row) => {
+    const nearest = Math.min(Math.max(target, row.low), row.high);
+    const ease = Math.max(0, miss(row, target) - ROW_MISS_TOLERANCE) * ROW_EASE_RATE;
+    return nearest > row.natural
+      ? Math.max(row.natural, nearest - ease)
+      : Math.min(row.natural, nearest + ease);
+  });
+  // Rows that met share one pixel width inside all their caps. When a shorter
+  // row's caps leave no such width, the full rows still share one.
+  const met = rows.filter((_, index) => Math.abs(widths[index] - target) <= ASPECT_EPSILON);
+  const overlap = (group: typeof rows) => ({
+    group,
+    low: Math.max(...group.map((row) => row.pixelLow)),
+    high: Math.min(...group.map((row) => row.pixelHigh)),
+  });
+  const shared = [overlap(met), overlap(met.filter((row) => row.full))].find(
+    ({ group, low, high }) => group.length > 0 && low <= high,
+  );
+  const sharedWidth =
+    shared &&
+    Math.min(
+      Math.max(target, shared.low),
+      shared.high,
+    );
+  return rows.map((row, index) => {
+    const pixelWidth =
+      shared && sharedWidth !== undefined && shared.group.includes(row)
+        ? sharedWidth
+        : Math.min(Math.max(widths[index], row.pixelLow), row.pixelHigh);
+    return resizeRow(row.exact, row.limits, gap, pixelWidth) ?? row.tiles;
+  });
+};
+
 /**
  * Pack tiles of differing aspect into rows that share one height, keeping the
  * given order. For each row count, a DP splits the tiles into contiguous rows
@@ -250,19 +453,16 @@ const computeJustifiedRows = ({
   if (!best) return null;
 
   const tileHeight = Math.floor(best.tileHeight);
-  const widths = aspects.map((aspect) => Math.floor(tileHeight * aspect));
-  const rowWidths: number[] = [];
   let start = 0;
-  best.rowCounts.forEach((rowCount) => {
-    let rowWidth = (rowCount - 1) * gap;
-    for (let index = start; index < start + rowCount; index += 1) {
-      rowWidth += widths[index];
-    }
-    rowWidths.push(rowWidth);
+  const rowAspects = best.rowCounts.map((rowCount) => {
     start += rowCount;
+    return aspects.slice(start - rowCount, start);
   });
   const rows = best.rowCounts.length;
   const cols = Math.max(...best.rowCounts);
+  const alignedRows = alignRows(rowAspects, tileHeight, gap, cols);
+  const widths = alignedRows.flat();
+  const rowWidths = alignedRows.map((tiles) => rowWidthOf(tiles, gap));
   const contentWidth = Math.max(...rowWidths);
   const contentHeight = rows * tileHeight + (rows - 1) * gap;
   const offsetX = Math.max(0, (width - contentWidth) / 2);

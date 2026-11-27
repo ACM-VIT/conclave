@@ -5,8 +5,6 @@ import {
 } from "@conclave/ai/room-settings";
 import { config } from "../config/config.js";
 
-// Deployment values establish defaults; explicit room choices override them.
-// Discovery, the settings UI and inference must see the same effective profile.
 export function roomAiFeatureDefaults(
   env: AiEnvironment,
   features = roomAiFeatureSettingsFromEnvironment(env),

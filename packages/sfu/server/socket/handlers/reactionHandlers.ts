@@ -42,7 +42,6 @@ export const registerReactionHandlers = (
           return;
         }
 
-        // reactionsDisabled policy: non-hosts cannot send reactions.
         if (
           context.currentRoom.isReactionsDisabled &&
           !(context.currentClient instanceof Admin)
@@ -53,7 +52,6 @@ export const registerReactionHandlers = (
           return;
         }
 
-        // Throttle: drop over-budget reactions (ack an error, do not broadcast).
         if (!takeToken(socket, "sendReaction", RATE_LIMITS.reaction)) {
           respond(callback, { error: "You are reacting too quickly" });
           return;

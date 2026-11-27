@@ -63,6 +63,7 @@ describe("screen share ownership across the produce await", () => {
       currentUserKey: null,
       activeConclaveAnswers: new Map(),
       adminHandlersRegistered: false,
+      joinAttempts: 0,
     });
 
     const callback = vi.fn();
@@ -80,7 +81,6 @@ describe("screen share ownership across the produce await", () => {
     );
     expect(produce).toHaveBeenCalledOnce();
 
-    // Another participant's share lands while this producer is being created.
     screenShareProducerId = "other-share";
     const close = vi.fn();
     resolveProduce({ id: "late-share", rtpParameters: screenRtpParameters, close } as unknown as Producer);

@@ -27,7 +27,7 @@ class STGOrderPriorityBridgeTests {
             selfViewMode = "tile", pinnedUserId = pin, screenShareUserId = presenter)
 
     private fun stage(): StagePresenter {
-        val stage = StagePresenter(shell = MeetingShellPresenter())
+        val stage = StagePresenter(shell = MeetingShellPresenter(defaults = IsolatedDefaults.make()))
         stage.sleep = { _ -> kotlinx.coroutines.delay(60_000) }
         stage.setViewport(StageViewport(width = 375.0, height = 667.0, insetTop = 76.0, insetBottom = 64.0,
             insetLeading = 0.0, insetTrailing = 0.0, widthClass = StageSizeClass.compact, heightClass = StageSizeClass.regular,

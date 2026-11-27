@@ -1,41 +1,178 @@
 name: CI
 
 "on":
-  push:
-    branches: ["**"]
   pull_request:
+    branches: [staging, main]
+  merge_group:
+    branches: [staging, main]
+  push:
+    branches: [staging, main]
+  workflow_dispatch:
 
-# Cancel superseded runs on the same ref to save CI minutes.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
 
 jobs:
-  build:
-    name: check + build
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+  ci:
+    name: ${{ matrix.job }}
+    runs-on: &ci-runner ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: ${{ startsWith(matrix.job, 'fuzz-') && 20 || 10 }}
+    env:
+      CI_JOB: ${{ matrix.job }}
+    strategy:
+      fail-fast: false
+      matrix:
+        job: [lint, typecheck, build, checks, deploy, fuzz-a, fuzz-b, fuzz-c]
+    steps: &ci-steps
+      - run: echo "CI_JOB_STARTED_AT=$(date +%s%3N)" >> "$GITHUB_ENV"
 
+      - uses: actions/checkout@v7.0.1
+        with:
+          filter: blob:none
+          fetch-depth: 0
+
+      - id: setup
+        uses: ./.github/actions/setup
+
+      - if: steps.setup.outputs.modules-hit != 'true'
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          echo "CI_JOB_STARTED_AT=$(date +%s%3N)" >> "$GITHUB_ENV"
+          echo "CI_BUDGET_FROM=setup ended, as node_modules missed the cache" >> "$GITHUB_ENV"
+          if [ "$EVENT" != "push" ]; then
+            echo "::warning title=node_modules cache miss::This $EVENT run installed node_modules without a cache. A miss on every run means staging or main has not saved a cache for this lockfile and toolchain."
+          fi
+
+      # The backup and restore tests run the real scripts, which need these.
+      # The tests fail on CI when one is missing rather than skip.
+      - if: env.CI_JOB == 'test-backup'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends age psmisc redis-server
+
+      - id: next-cache
+        if: env.CI_JOB == 'build'
+        uses: actions/cache/restore@v6.1.0
+        with:
+          path: apps/web/.next/cache
+          key: next-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: next-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}-
+
+      - name: Cache the comment parsers
+        if: env.CI_JOB == 'checks'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/conclave/swift-trivia
+            ~/.cache/conclave/kotlin-lexer
+          key: comment-parsers-${{ runner.os }}-${{ hashFiles('scripts/quality/comments/swift-trivia/Package.resolved', 'scripts/quality/comments/tokenizers.mjs') }}
+
+      - name: Check toolchains for the comment ratchet
+        if: env.CI_JOB == 'checks'
+        run: |
+          swift --version
+          python3 -c 'import sys; assert sys.version_info >= (3, 12), sys.version'
+
+      - name: Fetch the comment parsers
+        if: env.CI_JOB == 'checks'
+        run: pnpm comments:tools
+
+      - id: run
+        run: node scripts/ci/run.mjs "$CI_JOB"
+        env:
+          COMMENT_RATCHET_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || 'origin/staging' }}
+          COMMENT_RATCHET_MODE: ${{ github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000' && 'exact' || 'merge-base' }}
+
+      - if: always() && github.event_name == 'push' && env.CI_JOB == 'typecheck' && steps.setup.outcome == 'success' && steps.setup.outputs.modules-hit != 'true'
+        uses: actions/cache/save@v6.1.0
+        with:
+          path: |
+            node_modules
+            apps/*/node_modules
+            packages/*/node_modules
+          key: ${{ steps.setup.outputs.modules-key }}
+
+      - if: always() && github.event_name == 'push' && env.CI_JOB == 'typecheck' && steps.setup.outcome == 'success' && steps.setup.outputs.modules-hit != 'true'
+        uses: actions/cache/save@v6.1.0
+        with:
+          path: ${{ steps.setup.outputs.store-path }}
+          key: ${{ steps.setup.outputs.store-key }}
+
+      - if: github.event_name == 'push' && env.CI_JOB == 'build' && steps.run.outcome == 'success' && steps.next-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6.1.0
+        with:
+          path: apps/web/.next/cache
+          key: ${{ steps.next-cache.outputs.cache-primary-key }}
+
+  test-unit:
+    runs-on: *ci-runner
+    timeout-minutes: 10
+    env:
+      CI_JOB: ${{ matrix.job }}
+    strategy:
+      fail-fast: false
+      matrix:
+        job: [test, test-web-unit-b]
+    steps: *ci-steps
+
+  test-sfu:
+    runs-on: *ci-runner
+    timeout-minutes: 10
+    env:
+      CI_JOB: test-sfu
+    steps: *ci-steps
+
+  test-sfu-b:
+    runs-on: *ci-runner
+    timeout-minutes: 10
+    env:
+      CI_JOB: test-sfu-b
+    steps: *ci-steps
+
+  test-transcript-oracle:
+    runs-on: *ci-runner
+    timeout-minutes: 10
+    env:
+      CI_JOB: test-transcript-oracle
+    steps: *ci-steps
+
+  test-backup:
+    runs-on: *ci-runner
+    timeout-minutes: 10
+    env:
+      CI_JOB: test-backup
+    steps: *ci-steps
+
+  test-sfu-app-model:
+    runs-on: *ci-runner
+    timeout-minutes: 10
+    env:
+      CI_JOB: test-sfu-app-model
+    steps: *ci-steps
+
+  test-result:
+    name: test
+    needs: [test-unit, test-sfu, test-sfu-b, test-transcript-oracle, test-backup, test-sfu-app-model]
+    if: ${{ always() }}
+    runs-on: *ci-runner
+    timeout-minutes: 1
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7.0.1
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6.1.0
-        with:
-          version: 12.16.1
-
-      - name: Setup Node
-        uses: actions/setup-node@v7.1.0
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Check
-        run: pnpm check
-
-      - name: Build
-        run: pnpm build
+      - env:
+          TEST_UNIT_RESULT: ${{ needs.test-unit.result }}
+          TEST_SFU_RESULT: ${{ needs.test-sfu.result }}
+          TEST_SFU_B_RESULT: ${{ needs.test-sfu-b.result }}
+          TEST_TRANSCRIPT_ORACLE_RESULT: ${{ needs.test-transcript-oracle.result }}
+          TEST_BACKUP_RESULT: ${{ needs.test-backup.result }}
+          TEST_SFU_APP_MODEL_RESULT: ${{ needs.test-sfu-app-model.result }}
+        run: |
+          test "$TEST_UNIT_RESULT" = success &&
+          test "$TEST_SFU_RESULT" = success &&
+          test "$TEST_SFU_B_RESULT" = success &&
+          test "$TEST_TRANSCRIPT_ORACLE_RESULT" = success &&
+          test "$TEST_BACKUP_RESULT" = success &&
+          test "$TEST_SFU_APP_MODEL_RESULT" = success

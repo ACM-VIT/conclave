@@ -1,6 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  captureGeneration,
+  captureUserMedia,
+  createHeldDestination,
+  isCaptureReleased,
+  onCapturesReleased,
+} from "../lib/media-captures";
 import { DEFAULT_AUDIO_CONSTRAINTS } from "../lib/constants";
 import { createNoiseCancellationPipeline } from "../lib/noise-cancellation";
 
@@ -48,6 +55,22 @@ const pickRecorderMimeType = (): string | undefined => {
     } catch {}
   }
   return undefined;
+};
+
+const createResourceScope = () => {
+  const disposers: Array<() => void> = [];
+  return {
+    own: (dispose: () => void) => {
+      disposers.push(dispose);
+    },
+    close: () => {
+      while (disposers.length > 0) {
+        try {
+          disposers.pop()?.();
+        } catch {}
+      }
+    },
+  };
 };
 
 export function useMicTest({
@@ -152,28 +175,37 @@ export function useMicTest({
     }
 
     let cancelled = false;
-    let sourceStream: MediaStream | null = null;
-    let pipelineCleanup: (() => void) | null = null;
-    let context: AudioContext | null = null;
-    let rafId: number | null = null;
-    const nodes: AudioNode[] = [];
+    const scope = createResourceScope();
+
+    const dispose = () => {
+      if (cancelled) return;
+      cancelled = true;
+      stopLoopback();
+      scope.close();
+      levelRef.current = 0;
+      setIsRunning(false);
+      setIsStarting(false);
+      setUsingNoiseCancellation(false);
+    };
+    const unsubscribe = onCapturesReleased(dispose);
 
     setIsStarting(true);
     setError(null);
 
+    const generation = captureGeneration();
     const run = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            ...DEFAULT_AUDIO_CONSTRAINTS,
-            ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+        const stream = await captureUserMedia(
+          {
+            audio: {
+              ...DEFAULT_AUDIO_CONSTRAINTS,
+              ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+            },
           },
-        });
-        if (cancelled) {
-          stream.getTracks().forEach((track) => track.stop());
-          return;
-        }
-        sourceStream = stream;
+          generation,
+        );
+        scope.own(() => stream.getTracks().forEach((track) => track.stop()));
+        if (cancelled) return;
         const rawTrack = stream.getAudioTracks()[0];
         if (!rawTrack) throw new Error("No audio track obtained");
 
@@ -181,17 +213,14 @@ export function useMicTest({
         let usedNoiseCancellation = false;
         if (noiseCancellation) {
           try {
-            const pipeline = await createNoiseCancellationPipeline(rawTrack);
-            if (cancelled) {
-              pipeline.cleanup({ stopSource: true, stopOutput: true });
-              return;
-            }
+            const pipeline = await createNoiseCancellationPipeline(rawTrack, generation);
+            scope.own(() => pipeline.cleanup({ stopSource: false, stopOutput: true }));
             monitorTrack = pipeline.outputTrack;
             usedNoiseCancellation = true;
-            pipelineCleanup = () =>
-              pipeline.cleanup({ stopSource: false, stopOutput: true });
-          } catch {
+          } catch (err) {
+            if (isCaptureReleased(err)) throw err;
           }
+          if (cancelled) return;
         }
 
         const AudioContextConstructor =
@@ -204,7 +233,10 @@ export function useMicTest({
         if (!AudioContextConstructor) {
           throw new Error("Web Audio is not available");
         }
-        context = new AudioContextConstructor({ latencyHint: "interactive" });
+        const context = new AudioContextConstructor({ latencyHint: "interactive" });
+        scope.own(() => {
+          void context.close().catch(() => {});
+        });
         if (context.state === "suspended") {
           void context.resume().catch(() => {});
         }
@@ -217,17 +249,33 @@ export function useMicTest({
         const analyser = context.createAnalyser();
         analyser.fftSize = 2048;
         analyser.smoothingTimeConstant = 0;
-        const recorderDestination = context.createMediaStreamDestination();
+        const recorderDestination = createHeldDestination(context, generation);
+        scope.own(() => recorderDestination.stream.getTracks().forEach((track) => track.stop()));
 
         source.connect(gainNode);
         gainNode.connect(analyser);
         gainNode.connect(recorderDestination);
-        nodes.push(source, gainNode, analyser, recorderDestination);
+        scope.own(() => {
+          for (const node of [source, gainNode, analyser, recorderDestination]) {
+            try {
+              node.disconnect();
+            } catch {}
+          }
+        });
 
         gainNodeRef.current = gainNode;
         recorderStreamRef.current = recorderDestination.stream;
+        scope.own(() => {
+          if (gainNodeRef.current === gainNode) gainNodeRef.current = null;
+          if (recorderStreamRef.current === recorderDestination.stream) recorderStreamRef.current = null;
+        });
 
         const samples = new Float32Array(analyser.fftSize);
+        let rafId: number | null = null;
+        scope.own(() => {
+          if (rafId !== null) window.cancelAnimationFrame(rafId);
+          rafId = null;
+        });
         const tick = () => {
           if (cancelled) return;
           analyser.getFloatTimeDomainData(samples);
@@ -250,58 +298,21 @@ export function useMicTest({
         setIsRunning(true);
         setIsStarting(false);
       } catch (err) {
-        if (cancelled) return;
-        if (rafId !== null) {
-          window.cancelAnimationFrame(rafId);
-          rafId = null;
-        }
-        gainNodeRef.current = null;
-        recorderStreamRef.current = null;
-        for (const node of nodes) {
-          try {
-            node.disconnect();
-          } catch {}
-        }
-        nodes.length = 0;
-        pipelineCleanup?.();
-        pipelineCleanup = null;
-        sourceStream?.getTracks().forEach((track) => track.stop());
-        sourceStream = null;
-        if (context) {
-          void context.close().catch(() => {});
-          context = null;
-        }
+        scope.close();
+        if (cancelled || isCaptureReleased(err)) return;
         setError(describeMicTestError(err));
         setIsStarting(false);
         setIsRunning(false);
+      } finally {
+        if (cancelled) scope.close();
       }
     };
 
     void run();
 
     return () => {
-      cancelled = true;
-      if (rafId !== null) window.cancelAnimationFrame(rafId);
-      stopLoopback();
-      gainNodeRef.current = null;
-      recorderStreamRef.current = null;
-      for (const node of nodes) {
-        try {
-          node.disconnect();
-        } catch {}
-      }
-      pipelineCleanup?.();
-      sourceStream?.getTracks().forEach((track) => {
-        try {
-          track.stop();
-        } catch {}
-      });
-      if (context) {
-        void context.close().catch(() => {});
-      }
-      levelRef.current = 0;
-      setIsRunning(false);
-      setUsingNoiseCancellation(false);
+      unsubscribe();
+      dispose();
     };
   }, [active, deviceId, noiseCancellation, stopLoopback]);
 
@@ -335,11 +346,9 @@ export function useMicTest({
           ? sinkCapable.setSinkId(sinkId).catch(() => {})
           : Promise.resolve();
       setLoopbackPhase("playing");
-      void applySink.then(() =>
-        audio.play().catch(() => {
-          finish();
-        }),
-      );
+      void applySink.then(() => {
+        if (playbackAudioRef.current === audio) void audio.play().catch(finish);
+      });
     },
     [stopPlayback],
   );
@@ -446,56 +455,65 @@ export async function playSpeakerTestSound(
       .webkitAudioContext;
   if (!AudioContextConstructor) return;
 
+  const generation = captureGeneration();
   const context = new AudioContextConstructor();
-  if (context.state === "suspended") {
-    await context.resume().catch(() => {});
-  }
-  const destination = context.createMediaStreamDestination();
-  const master = context.createGain();
-  master.gain.value = 0.5;
-  master.connect(destination);
-
-  const now = context.currentTime;
-  const notes: { frequency: number; start: number; duration: number }[] = [
-    { frequency: 659.25, start: 0, duration: 0.28 },
-    { frequency: 880, start: 0.22, duration: 0.5 },
-  ];
-  for (const note of notes) {
-    const osc = context.createOscillator();
-    osc.type = "sine";
-    osc.frequency.value = note.frequency;
-    const envelope = context.createGain();
-    envelope.gain.setValueAtTime(0, now + note.start);
-    envelope.gain.linearRampToValueAtTime(0.9, now + note.start + 0.02);
-    envelope.gain.exponentialRampToValueAtTime(
-      0.001,
-      now + note.start + note.duration,
-    );
-    osc.connect(envelope);
-    envelope.connect(master);
-    osc.start(now + note.start);
-    osc.stop(now + note.start + note.duration + 0.05);
-  }
-
   const audio = new Audio();
-  audio.srcObject = destination.stream;
-  const sinkCapable = audio as HTMLAudioElement & {
-    setSinkId?: (sinkId: string) => Promise<void>;
-  };
-  if (outputDeviceId && sinkCapable.setSinkId) {
-    await sinkCapable.setSinkId(outputDeviceId).catch(() => {});
-  }
-  await audio.play().catch(() => {});
+  let master: GainNode | null = null;
+  let destination: MediaStreamAudioDestinationNode | null = null;
+  try {
+    if (context.state === "suspended") {
+      await context.resume().catch(() => {});
+    }
+    destination = createHeldDestination(context, generation);
+    master = context.createGain();
+    master.gain.value = 0.5;
+    master.connect(destination);
 
-  await new Promise<void>((resolve) => {
-    window.setTimeout(resolve, 900);
-  });
-  try {
-    audio.pause();
-    audio.srcObject = null;
-  } catch {}
-  try {
-    master.disconnect();
-  } catch {}
-  await context.close().catch(() => {});
+    const now = context.currentTime;
+    const notes: { frequency: number; start: number; duration: number }[] = [
+      { frequency: 659.25, start: 0, duration: 0.28 },
+      { frequency: 880, start: 0.22, duration: 0.5 },
+    ];
+    for (const note of notes) {
+      const osc = context.createOscillator();
+      osc.type = "sine";
+      osc.frequency.value = note.frequency;
+      const envelope = context.createGain();
+      envelope.gain.setValueAtTime(0, now + note.start);
+      envelope.gain.linearRampToValueAtTime(0.9, now + note.start + 0.02);
+      envelope.gain.exponentialRampToValueAtTime(
+        0.001,
+        now + note.start + note.duration,
+      );
+      osc.connect(envelope);
+      envelope.connect(master);
+      osc.start(now + note.start);
+      osc.stop(now + note.start + note.duration + 0.05);
+    }
+
+    audio.srcObject = destination.stream;
+    const sinkCapable = audio as HTMLAudioElement & {
+      setSinkId?: (sinkId: string) => Promise<void>;
+    };
+    if (outputDeviceId && sinkCapable.setSinkId) {
+      await sinkCapable.setSinkId(outputDeviceId).catch(() => {});
+    }
+    await audio.play().catch(() => {});
+
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 900);
+    });
+  } catch (err) {
+    if (!isCaptureReleased(err)) throw err;
+  } finally {
+    try {
+      audio.pause();
+      audio.srcObject = null;
+    } catch {}
+    try {
+      master?.disconnect();
+    } catch {}
+    destination?.stream.getTracks().forEach((track) => track.stop());
+    await context.close().catch(() => {});
+  }
 }

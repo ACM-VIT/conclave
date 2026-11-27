@@ -1,5 +1,7 @@
 import type { Socket } from "socket.io";
 import { Logger } from "../../utilities/loggers.js";
+import { captureServerException } from "../analytics/posthog.js";
+import { noteSocketEvent } from "../analytics/socketEvents.js";
 
 type Listener = (...args: unknown[]) => unknown;
 
@@ -25,18 +27,27 @@ const answerFailedAck = (args: unknown[]): void => {
  * down the whole SFU and every room on it. Errors are now logged and answered
  * on the event's ack instead.
  */
-export const guardSocketListeners = (socket: Socket): void => {
+export const guardSocketListeners = (
+  socket: Socket,
+  beforeEach: () => void = () => {},
+): void => {
   const register = socket.on.bind(socket) as (
     event: string,
     listener: Listener,
   ) => Socket;
-  const guarded = (event: string, listener: Listener): Socket =>
-    register(event, (...args: unknown[]) => {
+  const guarded = (event: string, listener: Listener): Socket => {
+    noteSocketEvent(event);
+    return register(event, (...args: unknown[]) => {
       const fail = (error: unknown) => {
         Logger.error(`[Socket] Handler for "${event}" failed (${socket.id})`, error);
+        captureServerException(error, {
+          source: "socket_handler",
+          properties: { socket_event: event },
+        });
         answerFailedAck(args);
       };
       try {
+        beforeEach();
         const result = listener(...args);
         if (result && typeof (result as Promise<unknown>).then === "function") {
           (result as Promise<unknown>).then(undefined, fail);
@@ -45,5 +56,6 @@ export const guardSocketListeners = (socket: Socket): void => {
         fail(error);
       }
     });
+  };
   socket.on = guarded as unknown as Socket["on"];
 };

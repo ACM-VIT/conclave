@@ -253,7 +253,7 @@ struct CHT4PhotoTests {
     @Test func theFixtureScriptsTheAttachmentStates() async {
         await ChatFixtureTestGate.acquire()
         defer { ChatFixtureTestGate.release() }
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let driver = ChatFixtureDriver.installOnStage(state: .attachmentUploading, shell: shell)
         #expect(shell.chat.composer.attachment.phase == .uploading && shell.chat.composer.attachment.progress == 0.42)
         #expect(ChatFixtureDriver.state(named: "chat-attachment-uploading") == .attachmentUploading)

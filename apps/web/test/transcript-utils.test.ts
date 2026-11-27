@@ -1,3 +1,4 @@
+import { fakeSecretKey } from "@conclave/meeting-core/test-fixtures";
 import { describe, expect, it } from "vitest";
 import {
   createSilentPcm16Base64,
@@ -9,7 +10,7 @@ describe("redactSensitiveText", () => {
   it("redacts OpenAI-looking keys from propagated errors", () => {
     expect(
       redactSensitiveText(
-        "Incorrect API key provided: sk-project_1234567890abcdef",
+        `Incorrect API key provided: ${fakeSecretKey("sk", "project_1234567890abcdef")}`,
       ),
     ).toBe("Incorrect API key provided: sk-...[redacted]");
   });

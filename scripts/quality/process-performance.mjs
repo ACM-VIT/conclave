@@ -690,10 +690,6 @@ export function assessBrowserProcessPerformance({
           continue;
         }
       } else {
-        // A process that does not span the full window has no exact cumulative
-        // baseline. Keep its lifecycle visible, but exclude it from the
-        // full-window CPU authority instead of mixing an unknown partial
-        // counter into the meeting-process total.
         continue;
       }
       const type = after?.type ?? before?.type ?? "unknown";

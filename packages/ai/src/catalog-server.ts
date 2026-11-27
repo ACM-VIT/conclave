@@ -25,8 +25,6 @@ const catalogBaseUrl = (provider: AiTextProvider, env: AiEnvironment) =>
         env.ANTHROPIC_BASE_URL,
       ) ?? AI_ENDPOINTS.anthropic.apiBase);
 
-// Only successful selected-model checks are cached. New IDs and failed checks
-// always reload; the cache never retains a raw provider credential.
 export const modelVerificationCache = new Map<
   string,
   { expiresAt: number; model: TranscriptResponseModelConfig }
@@ -88,7 +86,6 @@ export async function fetchAiModelCatalog(options: {
         },
         signal,
         cache: "no-store",
-        // Never forward a provider credential to a redirect target.
         redirect: "manual",
       });
       if (!response.ok) {
@@ -127,7 +124,6 @@ export async function fetchAiModelCatalog(options: {
         return false;
       if (provider === "anthropic" && row.capabilities) {
         const capabilities = record(row.capabilities);
-        // All pickers cover both assistant tools and structured meeting minutes.
         if (
           !supported(capabilities.structured_outputs) ||
           !supported(record(capabilities.server_tools).web_search)
@@ -181,7 +177,6 @@ export async function fetchAiModelCatalog(options: {
       });
     return { provider, source: "live", models };
   } catch {
-    // Do not log SDK errors, request objects, or credentials for model discovery.
     return {
       ...fallback,
       error: `Could not refresh ${AI_PROVIDERS[provider].label} models. Showing built-in models.`,

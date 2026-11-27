@@ -17,6 +17,7 @@ struct JoinRoomRequest: Codable {
     let displayName: String?
     let webinarInviteCode: String?
     let meetingInviteCode: String?
+    var roomRecoveryPass: String? = nil
 
     var mediaCapabilities = NativeClientMediaCapabilities(
         webcam: NativeWebcamCodecCapabilities(
@@ -26,6 +27,11 @@ struct JoinRoomRequest: Codable {
             preferredBaseline: "vp8"
         )
     )
+}
+
+struct RoomRecoveryPassNotification: Decodable {
+    let roomId: String
+    let roomRecoveryPass: String
 }
 
 enum JoinMode: String, Codable {
@@ -270,6 +276,13 @@ struct LaunchBrowserResponse: Codable {
 
 struct AppsOpenRequest: Codable {
     let appId: String
+    let expectedRevision: Int?
+    let expectedRoomId: String?
+}
+
+struct AppsCloseRequest: Codable {
+    let expectedRevision: Int
+    let expectedRoomId: String?
 }
 
 struct AppsLockRequest: Codable {
@@ -279,6 +292,7 @@ struct AppsLockRequest: Codable {
 struct AppsSyncRequest: Codable {
     let appId: String
     let syncMessage: String
+    var wholeChanges: Bool = true
 }
 
 struct AppsUpdateRequest: Codable {
@@ -748,6 +762,7 @@ struct JoinRoomResponse: Codable {
     let status: String?
     let activeSpeakerId: String?
     let hasActiveSpeakerInfo: Bool
+    let roomRecoveryPass: String?
 
     let roomId: String?
     let hostUserId: String?
@@ -774,6 +789,7 @@ struct JoinRoomResponse: Codable {
         case existingProducers
         case status
         case activeSpeakerId
+        case roomRecoveryPass
         case roomId
         case hostUserId
         case hostUserIds
@@ -817,13 +833,15 @@ struct JoinRoomResponse: Codable {
         webinarAttendeeCount: Int? = nil,
         webinarMaxAttendees: Int? = nil,
         webinarQaEnabled: Bool? = nil,
-        displayNameSnapshot: [DisplayNameSnapshotUser]? = nil
+        displayNameSnapshot: [DisplayNameSnapshotUser]? = nil,
+        roomRecoveryPass: String? = nil
     ) {
         self.rtpCapabilities = rtpCapabilities
         self.existingProducers = existingProducers
         self.status = status
         self.activeSpeakerId = activeSpeakerId
         self.hasActiveSpeakerInfo = hasActiveSpeakerInfo || activeSpeakerId != nil
+        self.roomRecoveryPass = roomRecoveryPass
         self.roomId = roomId
         self.hostUserId = hostUserId
         self.hostUserIds = hostUserIds
@@ -858,6 +876,7 @@ struct JoinRoomResponse: Codable {
         self.status = status
         self.activeSpeakerId = try container.decodeIfPresent(String.self, forKey: .activeSpeakerId)
         self.hasActiveSpeakerInfo = container.contains(.activeSpeakerId)
+        self.roomRecoveryPass = try? container.decodeIfPresent(String.self, forKey: .roomRecoveryPass)
         self.roomId = try container.decodeIfPresent(String.self, forKey: .roomId)
         self.hostUserId = try container.decodeIfPresent(String.self, forKey: .hostUserId)
         self.hostUserIds = try container.decodeIfPresent([String].self, forKey: .hostUserIds)
@@ -2054,6 +2073,12 @@ struct WebinarDemotedNotification: Codable {
     let webinarLinkSlug: String?
 }
 
+struct WebinarStageInviteUsedNotification: Codable {
+    let roomId: String
+    let userId: String?
+    let invitedUserKeys: [String]?
+}
+
 struct WebinarUserRequest: Codable {
     let userId: String
 }
@@ -2162,17 +2187,26 @@ struct AppsStateNotification: Codable {
     let activeAppId: String?
     let locked: Bool
     let roomId: String?
+    /// Absent from an older SFU, which erases an app's document when it leaves the stage.
+    let revision: Int?
+    /// The presented app's document. A new number means the room started it over.
+    let docGeneration: Int?
 
-    init(activeAppId: String? = nil, locked: Bool = false, roomId: String? = nil) {
+    init(activeAppId: String? = nil, locked: Bool = false, roomId: String? = nil, revision: Int? = nil,
+         docGeneration: Int? = nil) {
         self.activeAppId = activeAppId
         self.locked = locked
         self.roomId = roomId
+        self.revision = revision
+        self.docGeneration = docGeneration
     }
 
     enum CodingKeys: String, CodingKey {
         case activeAppId
         case locked
         case roomId
+        case revision
+        case docGeneration
     }
 
     init(from decoder: Decoder) throws {
@@ -2180,6 +2214,8 @@ struct AppsStateNotification: Codable {
         activeAppId = try container.decodeIfPresent(String.self, forKey: .activeAppId)
         locked = try container.decodeIfPresent(Bool.self, forKey: .locked) ?? false
         roomId = try container.decodeIfPresent(String.self, forKey: .roomId)
+        revision = try? container.decodeIfPresent(Int.self, forKey: .revision)
+        docGeneration = try? container.decodeIfPresent(Int.self, forKey: .docGeneration)
     }
 }
 

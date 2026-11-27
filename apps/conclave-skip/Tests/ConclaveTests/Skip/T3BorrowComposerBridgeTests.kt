@@ -28,7 +28,7 @@ class T3BorrowComposerBridgeTests {
     private fun up(code: Int) = event(code, android.view.KeyEvent.ACTION_UP)
 
     private class Harness(state: ChatFixtureState, var draft: String, val hardware: Boolean = true) {
-        val shell = MeetingShellPresenter()
+        val shell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         val driver = ChatFixtureDriver.installOnStage(state, shell)
         val keys = ChatComposerKeys()
         val inserted = mutableListOf<String>()

@@ -146,7 +146,7 @@ describe("super admin socket moderation", () => {
 
   it("protects clients at the shared kick primitive", () => {
     const h = makeHarness();
-    expect(kickClient(h.room, "target")).toBe(false);
+    expect(kickClient(h.room, "target")).toEqual([]);
     expect(h.targetSocket.disconnect).not.toHaveBeenCalled();
   });
 
@@ -293,12 +293,12 @@ describe("kick and admission", () => {
 
   it("revokes a kicked host's retained host rights and stage invite", () => {
     const h = makeHarness({ targetClaims: {}, targetAdmin: true });
-    h.room.registerAdminUserKey("admin@example.com");
-    h.room.hostUserKey = "admin@example.com";
+    h.room.grantHost("admin@example.com", "promoted");
+    h.room.makePrimaryHost("admin@example.com");
     h.room.promoteWebinarUserKey("admin@example.com");
     expect(h.invoke("kickUser", { userId: "target" })).toHaveBeenCalledWith({ success: true });
     expect(h.room.isAdminUserKey("admin@example.com")).toBe(false);
-    expect(h.room.hostUserKey).toBeNull();
+    expect(h.room.hostUserKey).not.toBe("admin@example.com");
     expect(h.room.isWebinarPromotedUserKey("admin@example.com")).toBe(false);
   });
 });

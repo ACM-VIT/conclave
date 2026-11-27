@@ -6,7 +6,7 @@ import UIKit
 enum ConclaveFeedback {
     static let preferenceKey = "conclave.pref.haptics"
 
-    static func isEnabled(in defaults: UserDefaults = .standard) -> Bool {
+    static func isEnabled(in defaults: UserDefaults) -> Bool {
         defaults.object(forKey: preferenceKey) as? Bool ?? true
     }
 
@@ -69,7 +69,7 @@ final class IOSFeedbackDelivery {
 
     let recordOnly: Bool
 
-    convenience init(presenter: NativeHostingPresenter, defaults: UserDefaults = .standard) {
+    convenience init(presenter: NativeHostingPresenter, defaults: UserDefaults) {
         self.init(
             source: { FeedbackSourceState(session: presenter.feedbackState.session, token: presenter.feedbackState.token) },
             defaults: defaults,
@@ -81,7 +81,7 @@ final class IOSFeedbackDelivery {
 
     init(
         source: @escaping @MainActor () -> FeedbackSourceState,
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults,
         recordOnly: Bool,
         deliversKind: @escaping (FeedbackKind) -> Bool,
         records: FeedbackDeliveryRecords?

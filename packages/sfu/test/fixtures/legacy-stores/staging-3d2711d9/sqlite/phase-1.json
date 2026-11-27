@@ -1,0 +1,109 @@
+{
+  "tables": {
+    "scheduling_records": {
+      "sql": "CREATE TABLE scheduling_records (\n      kind TEXT NOT NULL,\n      id TEXT NOT NULL,\n      client_id TEXT NOT NULL,\n      updated_at INTEGER NOT NULL,\n      payload_json TEXT NOT NULL,\n      PRIMARY KEY (kind, id)\n    )",
+      "rows": [
+        {
+          "kind": "profile",
+          "id": "ba0a0240-8ab9-414d-85ff-50e0052a1815",
+          "client_id": "conclave",
+          "updated_at": 1795538483298,
+          "payload_json": "{\"id\":\"ba0a0240-8ab9-414d-85ff-50e0052a1815\",\"clientId\":\"conclave\",\"userId\":\"host-user\",\"email\":\"host@example.test\",\"name\":\"Host\",\"username\":\"host\",\"timeZone\":\"Asia/Kolkata\",\"createdAt\":1795538483248,\"updatedAt\":1795538483298}"
+        },
+        {
+          "kind": "availability",
+          "id": "ba0a0240-8ab9-414d-85ff-50e0052a1815",
+          "client_id": "conclave",
+          "updated_at": 1795538483299,
+          "payload_json": "{\"profileId\":\"ba0a0240-8ab9-414d-85ff-50e0052a1815\",\"availability\":{\"timeZone\":\"Asia/Kolkata\",\"windows\":[{\"day\":1,\"startMinutes\":540,\"endMinutes\":1020},{\"day\":2,\"startMinutes\":540,\"endMinutes\":1020},{\"day\":3,\"startMinutes\":540,\"endMinutes\":1020},{\"day\":4,\"startMinutes\":540,\"endMinutes\":1020},{\"day\":5,\"startMinutes\":540,\"endMinutes\":1020}],\"overrides\":[{\"date\":\"2099-01-01\",\"windows\":[],\"unavailable\":true}],\"updatedAt\":1795538483292}}"
+        },
+        {
+          "kind": "event_type",
+          "id": "da942ed7-2eac-44ff-bb67-44d7d86fcbe3",
+          "client_id": "conclave",
+          "updated_at": 1795538483295,
+          "payload_json": "{\"id\":\"da942ed7-2eac-44ff-bb67-44d7d86fcbe3\",\"clientId\":\"conclave\",\"profileId\":\"ba0a0240-8ab9-414d-85ff-50e0052a1815\",\"userId\":\"host-user\",\"slug\":\"intro\",\"title\":\"Intro\",\"description\":\"\",\"durationMinutes\":30,\"minimumNoticeMinutes\":0,\"bookingWindowDays\":60,\"bufferBeforeMinutes\":0,\"bufferAfterMinutes\":15,\"isActive\":true,\"requiresCalendar\":false,\"createdAt\":1795538483295,\"updatedAt\":1795538483295}"
+        },
+        {
+          "kind": "calendar",
+          "id": "ba0a0240-8ab9-414d-85ff-50e0052a1815",
+          "client_id": "conclave",
+          "updated_at": 1795538483299,
+          "payload_json": "{\"id\":\"de71053e-1194-44ae-ae6a-113f6ed1acfe\",\"clientId\":\"conclave\",\"profileId\":\"ba0a0240-8ab9-414d-85ff-50e0052a1815\",\"userId\":\"host-user\",\"provider\":\"google\",\"status\":\"connected\",\"email\":\"host@example.test\",\"calendarId\":\"primary\",\"accessToken\":\"v1:IWPjJhFCDTKKDNJh:rEe1yCJuqejUzPxNWZiP3w:vwSiZeAQUjGFPA\",\"refreshToken\":\"v1:KgLAf90oJoULXNjL:tQuzOIZYHtFrxK22tY5Ktg:5Ao7_6OWmf76-UY\",\"accessTokenExpiresAt\":4000000000000,\"scopes\":[\"calendar\"],\"connectedAt\":1795538483299,\"updatedAt\":1795538483299,\"error\":null}"
+        }
+      ]
+    },
+    "scheduled_meetings": {
+      "sql": "CREATE TABLE scheduled_meetings (\n      id TEXT PRIMARY KEY,\n      client_id TEXT NOT NULL,\n      room_code TEXT NOT NULL,\n      status TEXT NOT NULL,\n      scheduled_start_at INTEGER NOT NULL,\n      scheduled_end_at INTEGER NOT NULL,\n      updated_at INTEGER NOT NULL,\n      payload_json TEXT NOT NULL\n    )",
+      "rows": [
+        {
+          "id": "78675c8e-ec41-45d7-84d9-65b8ead7e922",
+          "client_id": "conclave",
+          "room_code": "team-sync",
+          "status": "scheduled",
+          "scheduled_start_at": 4000000000000,
+          "scheduled_end_at": 4000003600000,
+          "updated_at": 1795538483304,
+          "payload_json": "{\"id\":\"78675c8e-ec41-45d7-84d9-65b8ead7e922\",\"clientId\":\"conclave\",\"roomCode\":\"team-sync\",\"title\":\"Weekly\",\"hostEmail\":\"host@example.test\",\"hostName\":\"Host\",\"hostUserId\":\"host-user\",\"scheduledStartAt\":4000000000000,\"scheduledEndAt\":4000003600000,\"status\":\"scheduled\",\"startedAt\":null,\"endedAt\":null,\"createdAt\":1795538483304,\"createdBy\":\"host-user\",\"updatedAt\":1795538483304,\"source\":\"manual\",\"eventTypeId\":null,\"attendeeName\":null,\"attendeeEmail\":null,\"attendeeNote\":null,\"attendeeTimeZone\":null,\"googleCalendarEventId\":null,\"calendarSyncStatus\":\"not_required\",\"calendarSyncError\":null,\"emailNotificationStatus\":\"not_configured\",\"emailNotificationError\":null,\"emailNotificationSentAt\":null,\"emailReminderStatus\":\"not_configured\",\"emailReminderError\":null,\"emailReminderSentAt\":null}"
+        },
+        {
+          "id": "4249acf8-7185-4de9-bbcc-55094f3eeda3",
+          "client_id": "conclave",
+          "room_code": "daily-sync",
+          "status": "scheduled",
+          "scheduled_start_at": 4100000000000,
+          "scheduled_end_at": 4100003600000,
+          "updated_at": 1795538483309,
+          "payload_json": "{\"id\":\"4249acf8-7185-4de9-bbcc-55094f3eeda3\",\"clientId\":\"conclave\",\"roomCode\":\"daily-sync\",\"title\":\"Daily\",\"hostEmail\":\"host@example.test\",\"hostName\":\"Host\",\"hostUserId\":\"host-user\",\"scheduledStartAt\":4100000000000,\"scheduledEndAt\":4100003600000,\"status\":\"scheduled\",\"startedAt\":null,\"endedAt\":null,\"createdAt\":1795538483309,\"createdBy\":\"host-user\",\"updatedAt\":1795538483309,\"source\":\"manual\",\"eventTypeId\":null,\"attendeeName\":null,\"attendeeEmail\":null,\"attendeeNote\":null,\"attendeeTimeZone\":null,\"googleCalendarEventId\":null,\"calendarSyncStatus\":\"not_required\",\"calendarSyncError\":null,\"emailNotificationStatus\":\"not_configured\",\"emailNotificationError\":null,\"emailNotificationSentAt\":null,\"emailReminderStatus\":\"not_configured\",\"emailReminderError\":null,\"emailReminderSentAt\":null}"
+        },
+        {
+          "id": "f1f28100-b44d-41be-97e3-8775e2567853",
+          "client_id": "conclave",
+          "room_code": "retro-sync",
+          "status": "cancelled",
+          "scheduled_start_at": 4200000000000,
+          "scheduled_end_at": 4200003600000,
+          "updated_at": 1795538483315,
+          "payload_json": "{\"id\":\"f1f28100-b44d-41be-97e3-8775e2567853\",\"clientId\":\"conclave\",\"roomCode\":\"retro-sync\",\"title\":\"Retro\",\"hostEmail\":\"host@example.test\",\"hostName\":\"Host\",\"hostUserId\":\"host-user\",\"scheduledStartAt\":4200000000000,\"scheduledEndAt\":4200003600000,\"status\":\"cancelled\",\"startedAt\":null,\"endedAt\":null,\"createdAt\":1795538483313,\"createdBy\":\"host-user\",\"updatedAt\":1795538483315,\"source\":\"manual\",\"eventTypeId\":null,\"attendeeName\":null,\"attendeeEmail\":null,\"attendeeNote\":null,\"attendeeTimeZone\":null,\"googleCalendarEventId\":null,\"calendarSyncStatus\":\"not_required\",\"calendarSyncError\":null,\"emailNotificationStatus\":\"not_configured\",\"emailNotificationError\":null,\"emailNotificationSentAt\":null,\"emailReminderStatus\":\"not_configured\",\"emailReminderError\":null,\"emailReminderSentAt\":null}"
+        },
+        {
+          "id": "e1a2fa5b-3dce-4b9a-a7be-ec1af75e772b",
+          "client_id": "conclave",
+          "room_code": "lucid-ember-8667",
+          "status": "scheduled",
+          "scheduled_start_at": 1796009400000,
+          "scheduled_end_at": 1796011200000,
+          "updated_at": 1795538483634,
+          "payload_json": "{\"id\":\"e1a2fa5b-3dce-4b9a-a7be-ec1af75e772b\",\"clientId\":\"conclave\",\"roomCode\":\"lucid-ember-8667\",\"title\":\"Intro\",\"hostEmail\":\"host@example.test\",\"hostName\":\"Host\",\"hostUserId\":\"host-user\",\"scheduledStartAt\":1796009400000,\"scheduledEndAt\":1796011200000,\"status\":\"scheduled\",\"startedAt\":null,\"endedAt\":null,\"createdAt\":1795538483587,\"createdBy\":\"guest@example.test\",\"updatedAt\":1795538483634,\"source\":\"booking_link\",\"eventTypeId\":\"da942ed7-2eac-44ff-bb67-44d7d86fcbe3\",\"attendeeName\":\"Guest\",\"attendeeEmail\":\"guest@example.test\",\"attendeeNote\":null,\"attendeeTimeZone\":\"Asia/Kolkata\",\"googleCalendarEventId\":\"event-1\",\"calendarSyncStatus\":\"synced\",\"calendarSyncError\":null,\"emailNotificationStatus\":\"sent\",\"emailNotificationError\":null,\"emailNotificationSentAt\":1795538483634,\"emailReminderStatus\":\"not_configured\",\"emailReminderError\":null,\"emailReminderSentAt\":null}"
+        }
+      ]
+    },
+    "scheduled_webinars": {
+      "sql": "CREATE TABLE scheduled_webinars (\n      id TEXT PRIMARY KEY,\n      client_id TEXT NOT NULL,\n      room_id TEXT NOT NULL,\n      link_slug TEXT NOT NULL,\n      status TEXT NOT NULL,\n      scheduled_start_at INTEGER NOT NULL,\n      scheduled_end_at INTEGER NOT NULL,\n      updated_at INTEGER NOT NULL,\n      payload_json TEXT NOT NULL\n    )",
+      "rows": [
+        {
+          "id": "41c3d9d3-a77f-401b-b1d4-2e53c5ebde1f",
+          "client_id": "conclave",
+          "room_id": "sched-08514e0e",
+          "link_slug": "launch-day",
+          "status": "scheduled",
+          "scheduled_start_at": 4000000000000,
+          "scheduled_end_at": 4000003600000,
+          "updated_at": 1795538483319,
+          "payload_json": "{\"id\":\"41c3d9d3-a77f-401b-b1d4-2e53c5ebde1f\",\"clientId\":\"conclave\",\"roomId\":\"sched-08514e0e\",\"linkSlug\":\"launch-day\",\"title\":\"Launch\",\"description\":\"\",\"hostEmail\":\"host@example.test\",\"hostName\":\"Host\",\"hostUserId\":\"host-user\",\"coHosts\":[{\"email\":\"co@example.test\"}],\"scheduledStartAt\":4000000000000,\"scheduledEndAt\":4000003600000,\"status\":\"scheduled\",\"publicAccess\":true,\"maxAttendees\":500,\"requiresInviteCode\":false,\"waitingRoomEnabled\":true,\"earlyEntryMinutes\":10,\"qaEnabled\":true,\"notes\":\"\",\"createdAt\":1795538483319,\"createdBy\":\"host-user\",\"updatedAt\":1795538483319,\"liveStartedAt\":null,\"endedAt\":null,\"totalJoinCount\":0,\"peakAttendeeCount\":0,\"webinarLink\":\"https://conclave.acmvit.in/w/launch-day\",\"coHostInviteTokenHash\":null,\"coHostInviteTokenCreatedAt\":null}"
+        },
+        {
+          "id": "05041798-d67e-4844-b523-a0469338a107",
+          "client_id": "conclave",
+          "room_id": "sched-979b4a55",
+          "link_slug": "town-hall",
+          "status": "scheduled",
+          "scheduled_start_at": 4100000000000,
+          "scheduled_end_at": 4100003600000,
+          "updated_at": 1795538483323,
+          "payload_json": "{\"id\":\"05041798-d67e-4844-b523-a0469338a107\",\"clientId\":\"conclave\",\"roomId\":\"sched-979b4a55\",\"linkSlug\":\"town-hall\",\"title\":\"Town hall\",\"description\":\"\",\"hostEmail\":\"host@example.test\",\"hostName\":\"Host\",\"hostUserId\":\"host-user\",\"coHosts\":[],\"scheduledStartAt\":4100000000000,\"scheduledEndAt\":4100003600000,\"status\":\"scheduled\",\"publicAccess\":true,\"maxAttendees\":500,\"requiresInviteCode\":false,\"waitingRoomEnabled\":true,\"earlyEntryMinutes\":10,\"qaEnabled\":true,\"notes\":\"\",\"createdAt\":1795538483323,\"createdBy\":\"host-user\",\"updatedAt\":1795538483323,\"liveStartedAt\":null,\"endedAt\":null,\"totalJoinCount\":0,\"peakAttendeeCount\":0,\"webinarLink\":\"https://conclave.acmvit.in/w/town-hall\",\"coHostInviteTokenHash\":null,\"coHostInviteTokenCreatedAt\":null}"
+        }
+      ]
+    }
+  }
+}

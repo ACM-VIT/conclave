@@ -1,0 +1,1027 @@
+// @vitest-environment happy-dom
+import { act, useState } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { AuthorityProvider } from "@conclave/apps-sdk";
+import { AUTHORITY_EVENTS, type AuthoritySocket } from "@conclave/apps-sdk/authority";
+import { QaPanel } from "../src/app/components/qa/QaPanel";
+import { useMeetingQa } from "../src/app/hooks/useMeetingQa";
+import { WAITING_FOR_VIEW, useReconnectHold } from "../src/app/hooks/useHeldThroughReconnect";
+import type {
+  ConnectionState,
+  WebinarQaChangedNotification,
+  WebinarQaEntry,
+} from "../src/app/lib/types";
+import { withQaChange, type WebinarQaList } from "../src/app/lib/webinarQaList";
+
+type Listener = (...args: unknown[]) => void;
+type LegacyQaProps = Parameters<typeof useMeetingQa>[0]["legacy"];
+type Sent = { event: string; payload: Record<string, unknown>; ack?: (reply: unknown) => void };
+
+const listeners = new Map<string, Set<Listener>>();
+const sent: Sent[] = [];
+const socket: AuthoritySocket = {
+  connected: true,
+  on: (event, listener) => {
+    listeners.set(event, (listeners.get(event) ?? new Set()).add(listener));
+  },
+  off: (event, listener) => {
+    listeners.get(event)?.delete(listener);
+  },
+  emit: (event, payload, ack) => {
+    sent.push({ event, payload: (payload ?? {}) as Record<string, unknown>, ack: ack as Sent["ack"] });
+  },
+};
+const last = (event: string) => [...sent].reverse().find((entry) => entry.event === event);
+const push = (payload: unknown) => {
+  for (const listener of [...(listeners.get(AUTHORITY_EVENTS.frame) ?? [])]) listener(payload);
+};
+
+/** A question as the old events told it to this client. */
+const fromOldEvents: WebinarQaEntry = {
+  id: "q1",
+  userId: "",
+  displayName: "Gia",
+  question: "Is this recorded?",
+  status: "answering",
+  askedAt: 1,
+  updatedAt: 1,
+  upvotes: 3,
+  hasUpvoted: false,
+};
+const legacy: Omit<LegacyQaProps, "entries"> & { entries: WebinarQaList } = {
+  entries: [fromOldEvents],
+  fromThisConnection: true,
+  submit: vi.fn(async () => ({ ok: true })),
+  upvote: vi.fn(),
+  moderate: vi.fn(async () => ({ ok: true })),
+};
+
+let root: Root;
+let container: HTMLDivElement;
+let withPanel = false;
+let qa: ReturnType<typeof useMeetingQa>;
+/** The ids each render of the hook showed, in order. */
+const renders: string[][] = [];
+const availability: boolean[] = [];
+const offers: { offered: boolean; ids: string[]; asks: "app" | "old events" | "nothing" }[] = [];
+
+/** What the socket was sent on the old events, as `useMeetSocket` keeps it. */
+let oldEvents: { change: (notification: WebinarQaChangedNotification) => void };
+
+/**
+ * The hook over a list as the socket holds it. A new `entries` is a whole
+ * list the socket was sent, a change goes through the socket's own rule,
+ * and a list the hook is done with is forgotten.
+ */
+function Probe({
+  isWebinar,
+  isJoined,
+  connectionState,
+  legacyQa,
+}: {
+  isWebinar: boolean;
+  isJoined: boolean;
+  connectionState: ConnectionState;
+  legacyQa: typeof legacy;
+}) {
+  const hold = useReconnectHold({ isJoined, connectionState });
+  const [list, setList] = useState<WebinarQaList>(legacyQa.entries);
+  const [sent, setSent] = useState<WebinarQaList>(legacyQa.entries);
+  const [fromThisConnection, setFromThisConnection] = useState(legacyQa.fromThisConnection);
+  const [sentMark, setSentMark] = useState(legacyQa.fromThisConnection);
+  if (legacyQa.entries !== sent) {
+    setSent(legacyQa.entries);
+    setList(legacyQa.entries);
+  }
+  if (legacyQa.fromThisConnection !== sentMark) {
+    setSentMark(legacyQa.fromThisConnection);
+    setFromThisConnection(legacyQa.fromThisConnection);
+  }
+  oldEvents = {
+    change: (notification) => {
+      setList((held) => withQaChange(held, notification));
+      setFromThisConnection(true);
+    },
+  };
+  qa = useMeetingQa({
+    legacy: { ...legacyQa, entries: list, fromThisConnection, forget: () => setList(null) },
+    isWebinar,
+    hold,
+    currentUserId: "me",
+  });
+  renders.push(qa.entries.map((entry) => entry.id));
+  availability.push(qa.isAvailable);
+  offers.push({
+    offered: qa.offered,
+    ids: qa.entries.map((entry) => entry.id),
+    asks: !qa.onSubmit ? "nothing" : qa.onSubmit === legacyQa.submit ? "old events" : "app",
+  });
+  return withPanel ? (
+    <QaPanel
+      audience="webinar"
+      entries={qa.entries}
+      qaEnabled
+      currentUserId="me"
+      onClose={() => {}}
+      onSubmit={qa.onSubmit}
+      onUpvote={qa.onUpvote}
+      waiting={qa.waiting}
+      connection={qa.connection}
+    />
+  ) : null;
+}
+
+const mount = async (
+  isWebinar: boolean,
+  legacyQa: typeof legacy = legacy,
+  {
+    connected = true,
+    connectionState = connected ? "joined" : "reconnecting",
+    socketOpen = connected,
+    isJoined = true,
+  }: {
+    connected?: boolean;
+    connectionState?: ConnectionState;
+    socketOpen?: boolean;
+    isJoined?: boolean;
+  } = {},
+) => {
+  await act(async () =>
+    root.render(
+      <AuthorityProvider socket={socketOpen ? socket : null} joined={connectionState === "joined"}>
+        <Probe
+          isWebinar={isWebinar}
+          isJoined={isJoined}
+          connectionState={connectionState}
+          legacyQa={legacyQa}
+        />
+      </AuthorityProvider>,
+    ),
+  );
+};
+
+/** The server says it runs Q&A. The client asks for the view at once. */
+const offerQa = async () => {
+  await act(async () =>
+    last(AUTHORITY_EVENTS.capabilities)!.ack!({
+      ok: true,
+      value: {
+        protocol: 1,
+        roomEpoch: "epoch",
+        serverNowMs: Date.now(),
+        apps: [{ instance: "qa.1", app: "qa", major: 1, surface: "panel" }],
+      },
+    }),
+  );
+};
+
+/** The view arrives, with the same question answered meanwhile. */
+const sendView = async () => {
+  const subscription = last(AUTHORITY_EVENTS.subscribe)!.payload.subscription as string;
+  await act(async () =>
+    push({
+      kind: "replace",
+      subscription,
+      generation: 1,
+      serverNowMs: Date.now(),
+      part: 0,
+      last: true,
+      rows: [
+        {
+          bucket: "questions",
+          key: "q1",
+          value: {
+            id: "q1",
+            askerName: "Gia",
+            text: "Is this recorded?",
+            status: "answered",
+            askedAt: 1,
+            updatedAt: 2,
+            answerText: "Yes",
+            answeredByName: "Asha",
+          },
+        },
+        { bucket: "votes", key: "q1", value: { upvotes: 4 } },
+      ],
+      grants: { actions: ["ask", "upvote"], needsIdentity: [], queries: [] },
+    }),
+  );
+};
+
+beforeEach(() => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.useFakeTimers();
+  listeners.clear();
+  sent.length = 0;
+  renders.length = 0;
+  offers.length = 0;
+  availability.length = 0;
+  container = document.createElement("div");
+  root = createRoot(container);
+});
+
+afterEach(async () => {
+  withPanel = false;
+  await act(async () => root.unmount());
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+const fire = async (event: string) =>
+  act(async () => {
+    for (const listener of [...(listeners.get(event) ?? [])]) listener();
+  });
+
+const pendingQuestion = (id: string, text: string) => ({
+  bucket: "questions",
+  key: id,
+  value: { id, askerName: "Gia", text, status: "pending", askedAt: 1, updatedAt: 1, answerText: null, answeredByName: null },
+});
+
+/** Two public questions in the app's view, then the host hides the second. */
+const hideAfterTheHandover = async () => {
+  const offTopic: WebinarQaEntry = {
+    ...fromOldEvents,
+    id: "q2",
+    question: "Off-topic: who is getting lunch?",
+    status: "pending",
+  };
+  // The old events showed both questions before the app's view came.
+  await mount(true, { ...legacy, entries: [fromOldEvents, offTopic] });
+  await offerQa();
+  const subscription = last(AUTHORITY_EVENTS.subscribe)!.payload.subscription as string;
+  await act(async () =>
+    push({
+      kind: "replace",
+      subscription,
+      generation: 1,
+      serverNowMs: Date.now(),
+      part: 0,
+      last: true,
+      rows: [pendingQuestion("q1", "Is this recorded?"), pendingQuestion("q2", "Off-topic: who is getting lunch?")],
+      grants: { actions: ["ask", "upvote"], needsIdentity: [], queries: [] },
+    }),
+  );
+  const atHandover = qa.entries.map((entry) => entry.id);
+  await act(async () =>
+    push({
+      kind: "patch",
+      subscription,
+      generation: 1,
+      serverNowMs: Date.now(),
+      seq: 1,
+      put: [],
+      remove: [{ bucket: "questions", key: "q2" }],
+    }),
+  );
+  const afterTheHide = qa.entries.map((entry) => entry.id);
+  return { subscription, atHandover, afterTheHide, fromTheHide: renders.length };
+};
+
+it("keeps a webinar on the old events until its own view of Q&A has arrived", async () => {
+  await mount(true);
+  const beforeTheAnswer = qa;
+
+  // The server offers Q&A and the client subscribes. The view is slow to come.
+  await offerQa();
+  const subscribed = last(AUTHORITY_EVENTS.subscribe) !== undefined;
+  const whileWaiting = qa;
+  await act(async () => vi.advanceTimersByTimeAsync(8_000));
+  const stillWaiting = qa;
+
+  await sendView();
+
+  expect(beforeTheAnswer).toMatchObject({ offered: false, fromApp: false, entries: [fromOldEvents] });
+  expect(subscribed).toBe(true);
+  // The old events are all it has until then, and the server keeps sending them.
+  expect(whileWaiting).toMatchObject({ offered: true, fromApp: false, entries: [fromOldEvents] });
+  expect(whileWaiting.onSubmit).toBe(legacy.submit);
+  expect(whileWaiting.onUpvote).toBe(legacy.upvote);
+  expect(stillWaiting).toMatchObject({ fromApp: false, entries: [fromOldEvents] });
+  // Once the view is in, the app is the source.
+  expect(qa.fromApp).toBe(true);
+  expect(qa.entries).toMatchObject([{ id: "q1", status: "answered", upvotes: 4, answerText: "Yes" }]);
+  expect(qa.onSubmit).not.toBe(legacy.submit);
+});
+
+it("stays on the old events when the server's answer comes too late to use", async () => {
+  await mount(true);
+  // Longer than the wait for an answer.
+  await act(async () => vi.advanceTimersByTimeAsync(8_000));
+  const gaveUp = qa;
+  await offerQa();
+
+  expect(gaveUp).toMatchObject({ offered: false, fromApp: false, entries: [fromOldEvents] });
+  expect(qa).toMatchObject({ offered: false, fromApp: false, entries: [fromOldEvents] });
+  expect(last(AUTHORITY_EVENTS.subscribe)).toBeUndefined();
+});
+
+it("offers meeting Q&A as soon as the server does, with nothing borrowed from the old events", async () => {
+  await mount(false);
+  await offerQa();
+  const whileWaiting = qa;
+  await sendView();
+
+  // The old events carry webinar Q&A only: nothing of theirs is shown or sent.
+  expect(whileWaiting).toMatchObject({ offered: true, fromApp: false, entries: [] });
+  expect(whileWaiting.onSubmit).toBeUndefined();
+  expect(whileWaiting.onUpvote).toBeUndefined();
+  expect(qa).toMatchObject({ offered: true, fromApp: true });
+  expect(qa.entries.length).toBe(1);
+});
+
+it("never falls back to the old events once the app's view has arrived, even while a new view comes in parts", async () => {
+  // The old events stop once the app's view is in, so this list is as it
+  // was at the handover, with a question the host hides afterwards.
+  const offTopic: WebinarQaEntry = {
+    ...fromOldEvents,
+    id: "q2",
+    question: "Off-topic: who is getting lunch?",
+    status: "pending",
+  };
+  await mount(true, { ...legacy, entries: [fromOldEvents, offTopic] });
+  await offerQa();
+  const subscription = last(AUTHORITY_EVENTS.subscribe)!.payload.subscription as string;
+  const question = (id: string, text: string) => ({
+    bucket: "questions",
+    key: id,
+    value: { id, askerName: "Gia", text, status: "pending", askedAt: 1, updatedAt: 1, answerText: null, answeredByName: null },
+  });
+  await act(async () =>
+    push({
+      kind: "replace",
+      subscription,
+      generation: 1,
+      serverNowMs: Date.now(),
+      part: 0,
+      last: true,
+      rows: [question("q1", "Is this recorded?"), question("q2", "Off-topic: who is getting lunch?")],
+      grants: { actions: ["ask", "upvote"], needsIdentity: [], queries: [] },
+    }),
+  );
+  const atHandover = qa.entries.map((entry) => entry.id);
+  // The host hides the second question.
+  await act(async () =>
+    push({
+      kind: "patch",
+      subscription,
+      generation: 1,
+      serverNowMs: Date.now(),
+      seq: 1,
+      put: [],
+      remove: [{ bucket: "questions", key: "q2" }],
+    }),
+  );
+  const afterTheHide = qa.entries.map((entry) => entry.id);
+  // Then a new view comes in two parts.
+  await act(async () =>
+    push({
+      kind: "replace",
+      subscription,
+      generation: 2,
+      serverNowMs: Date.now(),
+      part: 0,
+      last: false,
+      rows: [question("q1", "Is this recorded?")],
+      grants: { actions: ["ask", "upvote"], needsIdentity: [], queries: [] },
+    }),
+  );
+  const betweenTheParts = qa;
+  await act(async () =>
+    push({
+      kind: "replace",
+      subscription,
+      generation: 2,
+      serverNowMs: Date.now(),
+      part: 1,
+      last: true,
+      rows: [],
+    }),
+  );
+
+  expect(atHandover).toEqual(["q1", "q2"]);
+  expect(afterTheHide).toEqual(["q1"]);
+  // Between the parts nothing stale is shown, and nothing goes out on the old events.
+  expect(betweenTheParts.entries.map((entry) => entry.id)).not.toContain("q2");
+  expect(betweenTheParts.onSubmit).not.toBe(legacy.submit);
+  expect(betweenTheParts.onUpvote).not.toBe(legacy.upvote);
+  expect(qa.fromApp).toBe(true);
+  expect(qa.entries.map((entry) => entry.id)).toEqual(["q1"]);
+});
+
+it("goes back to the old events on a new connection, and stays on them while its view does not come", async () => {
+  const offTopic: WebinarQaEntry = {
+    ...fromOldEvents,
+    id: "q2",
+    question: "Off-topic: who is getting lunch?",
+    status: "pending",
+  };
+  await mount(true, { ...legacy, entries: [fromOldEvents, offTopic] });
+  await offerQa();
+  await sendView();
+  const handedOver = qa.fromApp;
+
+  // The connection drops and comes back. On the new connection the server
+  // feeds the old events again, from a list as it is now.
+  await fire("disconnect");
+  await mount(true, { ...legacy, entries: [fromOldEvents] });
+  await fire("connect");
+  await offerQa();
+  const subscribedAgain = sent.filter((entry) => entry.event === AUTHORITY_EVENTS.subscribe).length;
+  // The new subscription is never answered and no view comes.
+  await act(async () => vi.advanceTimersByTimeAsync(8_000));
+
+  expect(handedOver).toBe(true);
+  expect(subscribedAgain).toBe(2);
+  expect(qa).toMatchObject({ offered: true, fromApp: false });
+  expect(qa.entries.map((entry) => entry.id)).toEqual(["q1"]);
+  expect(qa.onSubmit).toBe(legacy.submit);
+  expect(qa.onUpvote).toBe(legacy.upvote);
+});
+
+it("goes back to the old events when the connection drops while a new view is coming in parts", async () => {
+  await mount(true, { ...legacy, entries: [fromOldEvents] });
+  await offerQa();
+  await sendView();
+  // A new view starts to come in parts.
+  const subscription = last(AUTHORITY_EVENTS.subscribe)!.payload.subscription as string;
+  await act(async () =>
+    push({
+      kind: "replace",
+      subscription,
+      generation: 2,
+      serverNowMs: Date.now(),
+      part: 0,
+      last: false,
+      rows: [],
+      grants: { actions: ["ask", "upvote"], needsIdentity: [], queries: [] },
+    }),
+  );
+  const whileReplacing = qa;
+  // The connection drops before the last part, and comes back. The old
+  // events give the new connection its own list.
+  await fire("disconnect");
+  await fire("connect");
+  await offerQa();
+  const beforeItsList = qa;
+  await mount(true, { ...legacy, entries: [fromOldEvents] });
+  await act(async () => vi.advanceTimersByTimeAsync(8_000));
+  const afterOneReconnect = qa;
+  // It drops and comes back again before any view arrives.
+  await fire("disconnect");
+  await mount(true, { ...legacy, entries: null });
+  await fire("connect");
+  await offerQa();
+  const beforeTheNextList = qa;
+  await mount(true, { ...legacy, entries: [fromOldEvents] });
+  await act(async () => vi.advanceTimersByTimeAsync(8_000));
+
+  expect(whileReplacing).toMatchObject({ fromApp: false, entries: [] });
+  // Until the new connection has a list, what was shown stays.
+  expect(beforeItsList.entries).toEqual([]);
+  expect(beforeTheNextList.entries.map((entry) => entry.id)).toEqual(["q1"]);
+  // A new connection is a new subscription: the old events again.
+  expect(afterOneReconnect).toMatchObject({ offered: true, fromApp: false });
+  expect(afterOneReconnect.entries.map((entry) => entry.id)).toEqual(["q1"]);
+  expect(afterOneReconnect.onSubmit).toBe(legacy.submit);
+  expect(qa).toMatchObject({ offered: true, fromApp: false });
+  expect(qa.entries.map((entry) => entry.id)).toEqual(["q1"]);
+  expect(qa.onUpvote).toBe(legacy.upvote);
+});
+
+
+it("never shows a question the host hid again while the connection comes back, at any render", async () => {
+  const { atHandover, afterTheHide, fromTheHide } = await hideAfterTheHandover();
+
+  // The attendee's socket drops and comes back. The new connection's first
+  // list is slow to come, as it was in the browser.
+  await fire("disconnect");
+  await fire("connect");
+  await offerQa();
+  await act(async () => vi.advanceTimersByTimeAsync(1_270));
+  const whileWaiting = qa;
+  // The old events give the new connection its list, as it is now.
+  await mount(true, { ...legacy, entries: [fromOldEvents] });
+  const onTheNewList = qa.entries.map((entry) => entry.id);
+  // Then the new connection's view of the app comes.
+  await sendView();
+
+  expect(atHandover).toEqual(["q1", "q2"]);
+  expect(afterTheHide).toEqual(["q1"]);
+  for (const shown of renders.slice(fromTheHide)) expect(shown).not.toContain("q2");
+  // Until the new connection sends anything, the list last shown stays.
+  expect(whileWaiting).toMatchObject({ offered: true, fromApp: false });
+  expect(whileWaiting.entries.map((entry) => entry.id)).toEqual(["q1"]);
+  expect(renders.slice(fromTheHide).every((shown) => shown.join() === "q1")).toBe(true);
+  expect(onTheNewList).toEqual(["q1"]);
+  expect(qa.fromApp).toBe(true);
+});
+
+it("never shows a question the host hid again while the same connection subscribes again, at any render", async () => {
+  const { subscription, atHandover, afterTheHide, fromTheHide } = await hideAfterTheHandover();
+  const subscribed = sent.filter((entry) => entry.event === AUTHORITY_EVENTS.subscribe).length;
+
+  // A patch goes missing, so the client starts over on the same connection.
+  await act(async () =>
+    push({
+      kind: "patch",
+      subscription,
+      generation: 1,
+      serverNowMs: Date.now(),
+      seq: 3,
+      put: [],
+      remove: [],
+    }),
+  );
+  const subscribedAgain = sent.filter((entry) => entry.event === AUTHORITY_EVENTS.subscribe).length;
+  await act(async () => vi.advanceTimersByTimeAsync(1_270));
+  const whileWaiting = qa;
+  // The old events resume with a whole list, as it is now.
+  await mount(true, { ...legacy, entries: [fromOldEvents] });
+  const onTheNewList = qa.entries.map((entry) => entry.id);
+
+  expect(atHandover).toEqual(["q1", "q2"]);
+  expect(afterTheHide).toEqual(["q1"]);
+  expect(subscribedAgain).toBe(subscribed + 1);
+  for (const shown of renders.slice(fromTheHide)) expect(shown).not.toContain("q2");
+  expect(whileWaiting.entries.map((entry) => entry.id)).toEqual(["q1"]);
+  expect(onTheNewList).toEqual(["q1"]);
+  expect(qa.onSubmit).toBe(legacy.submit);
+});
+
+it("shows a host each question once their meeting becomes a webinar, with no list sent first", async () => {
+  // A server without the runtime: the client asks what it offers and is
+  // never answered.
+  const noListYet = { ...legacy, entries: null, fromThisConnection: false };
+  await mount(false, noListYet);
+  await act(async () => vi.advanceTimersByTimeAsync(8_000));
+  const inTheMeeting = qa;
+  // Webinar mode starts. A server that sends no list with it still sends
+  // each question as it comes.
+  await mount(true, noListYet);
+  const fromTheQuestion = renders.length;
+  await act(async () =>
+    oldEvents.change({
+      roomId: "room",
+      entry: { ...fromOldEvents, id: "q9", question: "First question", status: "pending" },
+    }),
+  );
+
+  expect(inTheMeeting).toMatchObject({ offered: false, fromApp: false, entries: [] });
+  expect(qa.entries.map((entry) => entry.id)).toEqual(["q9"]);
+  expect(renders.slice(fromTheQuestion).length).toBeGreaterThan(0);
+  expect(renders.slice(fromTheQuestion).every((shown) => shown.join() === "q9")).toBe(true);
+  expect({ waiting: qa.waiting, moderate: qa.onModerate }).toEqual({ waiting: false, moderate: legacy.moderate });
+});
+
+it("clears an attendee's list at once when webinar mode ends and the server withdraws Q&A", async () => {
+  await mount(true, { ...legacy, entries: [fromOldEvents] });
+  await offerQa();
+  await sendView();
+  const onTheApp = qa.entries.map((entry) => entry.id);
+  const subscription = last(AUTHORITY_EVENTS.subscribe)!.payload.subscription as string;
+
+  // The host turns webinar mode off with Q&A still on, and the server
+  // withdraws the attendee's view.
+  const fromTheRevoke = renders.length;
+  await act(async () =>
+    push({ kind: "revoke", subscription, generation: 1, serverNowMs: Date.now(), reason: "forbidden" }),
+  );
+  const atTheRevoke = qa;
+  await act(async () => vi.advanceTimersByTimeAsync(60_000));
+
+  expect(onTheApp).toEqual(["q1"]);
+  expect(atTheRevoke.entries).toEqual([]);
+  expect(renders.slice(fromTheRevoke).length).toBeGreaterThan(0);
+  expect(renders.slice(fromTheRevoke).every((shown) => shown.length === 0)).toBe(true);
+  expect(qa.entries).toEqual([]);
+});
+
+it("clears a meeting's list at once when the server withdraws Q&A", async () => {
+  await mount(false, { ...legacy, entries: null });
+  await offerQa();
+  await sendView();
+  const onTheApp = qa.entries.map((entry) => entry.id);
+  const subscription = last(AUTHORITY_EVENTS.subscribe)!.payload.subscription as string;
+
+  const fromTheRevoke = renders.length;
+  await act(async () =>
+    push({ kind: "revoke", subscription, generation: 1, serverNowMs: Date.now(), reason: "forbidden" }),
+  );
+
+  expect(onTheApp).toEqual(["q1"]);
+  expect(renders.slice(fromTheRevoke).every((shown) => shown.length === 0)).toBe(true);
+  expect(qa.entries).toEqual([]);
+});
+
+it("keeps a meeting's Q&A, its list and its composer while the connection comes back, at every render", async () => {
+  const noOldList = { ...legacy, entries: null };
+  await mount(false, noOldList);
+  await offerQa();
+  await sendView();
+  const beforeTheDrop = offers[offers.length - 1];
+  const fromTheDrop = offers.length;
+
+  await mount(false, noOldList, { connected: false });
+  await act(async () => vi.advanceTimersByTimeAsync(5_000));
+  await mount(false, noOldList);
+  await offerQa();
+  await act(async () => vi.advanceTimersByTimeAsync(1_000));
+  await sendView();
+  const throughTheReconnect = offers.slice(fromTheDrop);
+
+  expect(beforeTheDrop).toEqual({ offered: true, ids: ["q1"], asks: "app" });
+  expect(throughTheReconnect.length).toBeGreaterThan(0);
+  expect(throughTheReconnect.every((shown) => JSON.stringify(shown) === JSON.stringify(beforeTheDrop))).toBe(true);
+});
+
+it("lets a meeting's Q&A go when the server answers without it after a reconnect", async () => {
+  const noOldList = { ...legacy, entries: null };
+  await mount(false, noOldList);
+  await offerQa();
+  await sendView();
+
+  await mount(false, noOldList, { connected: false });
+  await mount(false, noOldList);
+  await act(async () =>
+    last(AUTHORITY_EVENTS.capabilities)!.ack!({
+      ok: true,
+      value: { protocol: 1, roomEpoch: "epoch", serverNowMs: Date.now(), apps: [] },
+    }),
+  );
+
+  expect(qa.offered).toBe(false);
+  expect(qa.entries).toEqual([]);
+});
+
+it("lets a meeting's Q&A go when the person leaves the meeting while the connection is down", async () => {
+  const noOldList = { ...legacy, entries: null };
+  await mount(false, noOldList);
+  await offerQa();
+  await sendView();
+
+  await mount(false, noOldList, { connected: false, isJoined: false });
+
+  expect(qa.offered).toBe(false);
+  expect(qa.entries).toEqual([]);
+});
+
+it("keeps every action of a meeting's Q&A waiting while its view comes back, and sends nothing for them", async () => {
+  const noOldList = { ...legacy, entries: null };
+  const viewWithMyVote = async () => {
+    const subscription = last(AUTHORITY_EVENTS.subscribe)!.payload.subscription as string;
+    await act(async () =>
+      push({
+        kind: "replace",
+        subscription,
+        generation: 1,
+        serverNowMs: Date.now(),
+        part: 0,
+        last: true,
+        rows: [
+          pendingQuestion("q1", "Is this recorded?"),
+          { bucket: "votes", key: "q1", value: { upvotes: 1 } },
+          { bucket: "myUpvotes", key: "q1", value: {} },
+        ],
+        grants: { actions: ["ask", "upvote", "moderate"], needsIdentity: [], queries: [] },
+      }),
+    );
+  };
+  await mount(false, noOldList);
+  await offerQa();
+  await viewWithMyVote();
+  await mount(false, noOldList, { connected: false });
+  await mount(false, noOldList);
+  await offerQa();
+  const whileWaiting = qa;
+  const fromTheGap = sent.length;
+  const answers: Promise<unknown>[] = [];
+  await act(async () => {
+    answers.push(Promise.resolve(whileWaiting.onUpvote?.("q1")));
+    answers.push(Promise.resolve(whileWaiting.onSubmit?.("Will the slides be shared?")));
+    answers.push(Promise.resolve(whileWaiting.onModerate?.({ id: "q1", action: "dismissed" })));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await viewWithMyVote();
+  await act(async () => vi.advanceTimersByTimeAsync(10_000));
+
+  expect(sent.slice(fromTheGap).filter((entry) => entry.event === AUTHORITY_EVENTS.act)).toEqual([]);
+  expect(whileWaiting.waiting).toBe(true);
+  expect(whileWaiting.entries.map((entry) => entry.hasUpvoted)).toEqual([true]);
+  expect(qa.waiting).toBe(false);
+  expect(qa.entries.map((entry) => entry.hasUpvoted)).toEqual([true]);
+  const results = await Promise.all(answers);
+  expect(results).toEqual([WAITING_FOR_VIEW, WAITING_FOR_VIEW, WAITING_FOR_VIEW]);
+});
+
+const meetingWithTheApp = async () => {
+  const noOldList = { ...legacy, entries: null };
+  await mount(false, noOldList);
+  await offerQa();
+  await sendView();
+  return noOldList;
+};
+const nothingLeft = () => ({ offered: qa.offered, ids: qa.entries.map((entry) => entry.id), waiting: qa.waiting });
+
+it("drops a meeting's questions at once when a rejoin is refused and the meeting ends in an error", async () => {
+  const noOldList = await meetingWithTheApp();
+  await mount(false, noOldList, { connected: false });
+  const whileReconnecting = qa.entries.map((entry) => entry.id);
+
+  await mount(false, noOldList, { connectionState: "error", socketOpen: true });
+
+  expect(whileReconnecting).toEqual(["q1"]);
+  expect(nothingLeft()).toEqual({ offered: false, ids: [], waiting: false });
+});
+
+it("drops a meeting's questions at once when the reconnect attempts run out", async () => {
+  const noOldList = await meetingWithTheApp();
+  await mount(false, noOldList, { connected: false });
+
+  await mount(false, noOldList, { connectionState: "error", socketOpen: false });
+
+  expect(nothingLeft()).toEqual({ offered: false, ids: [], waiting: false });
+});
+
+it("drops a meeting's questions at once when the server disconnects a slow socket and nothing reconnects", async () => {
+  const noOldList = await meetingWithTheApp();
+
+  await fire("disconnect");
+  await mount(false, noOldList, { connectionState: "disconnected", socketOpen: true });
+
+  expect(nothingLeft()).toEqual({ offered: false, ids: [], waiting: false });
+});
+
+it("drops a meeting's questions at once when the person is out of the meeting with the socket still open", async () => {
+  const noOldList = await meetingWithTheApp();
+
+  await mount(false, noOldList, { connectionState: "waiting", socketOpen: true, isJoined: false });
+
+  expect(nothingLeft()).toEqual({ offered: false, ids: [], waiting: false });
+});
+
+it("keeps a webinar's attendee and host actions waiting while the old events' list comes back", async () => {
+  const oldServer = {
+    ...legacy,
+    entries: [fromOldEvents],
+    submit: vi.fn(async () => ({ ok: true })),
+    upvote: vi.fn(),
+    moderate: vi.fn(async () => ({ ok: true })),
+  };
+  await mount(true, oldServer);
+  await act(async () =>
+    last(AUTHORITY_EVENTS.capabilities)!.ack!({
+      ok: true,
+      value: { protocol: 1, roomEpoch: "epoch", serverNowMs: Date.now(), apps: [] },
+    }),
+  );
+  const beforeTheDrop = { waiting: qa.waiting, submit: qa.onSubmit };
+
+  await mount(true, { ...oldServer, entries: null }, { connected: false });
+  const whileWaiting = qa;
+  const answers = await act(async () =>
+    Promise.all([
+      Promise.resolve(whileWaiting.onSubmit?.("Will the slides be shared?")),
+      Promise.resolve(whileWaiting.onUpvote?.("q1")),
+      Promise.resolve(whileWaiting.onModerate?.({ id: "q1", action: "dismissed" })),
+    ]),
+  );
+  await mount(true, { ...oldServer, entries: [fromOldEvents] });
+  const listBackBeforeTheServerAnswers = qa.waiting;
+  const submitBeforeTheServerAnswers = qa.onSubmit;
+  await act(async () =>
+    last(AUTHORITY_EVENTS.capabilities)!.ack!({
+      ok: true,
+      value: { protocol: 1, roomEpoch: "epoch", serverNowMs: Date.now(), apps: [] },
+    }),
+  );
+
+  expect(beforeTheDrop).toEqual({ waiting: false, submit: oldServer.submit });
+  expect(listBackBeforeTheServerAnswers).toBe(false);
+  expect(submitBeforeTheServerAnswers).toBe(oldServer.submit);
+  expect(oldServer.submit).not.toHaveBeenCalled();
+  expect(oldServer.upvote).not.toHaveBeenCalled();
+  expect(oldServer.moderate).not.toHaveBeenCalled();
+  expect(whileWaiting.waiting).toBe(true);
+  expect(whileWaiting.entries.map((entry) => entry.id)).toEqual(["q1"]);
+  expect(answers).toEqual([WAITING_FOR_VIEW, WAITING_FOR_VIEW, WAITING_FOR_VIEW]);
+  expect({ waiting: qa.waiting, submit: qa.onSubmit }).toEqual({ waiting: false, submit: oldServer.submit });
+});
+
+it("drops a webinar's questions at once when its reconnect ends in an error", async () => {
+  await mount(true, { ...legacy, entries: [fromOldEvents] });
+  await mount(true, { ...legacy, entries: null }, { connected: false });
+  const whileReconnecting = qa.entries.map((entry) => entry.id);
+
+  await mount(true, { ...legacy, entries: null }, { connectionState: "error", socketOpen: false });
+
+  expect(whileReconnecting).toEqual(["q1"]);
+  expect(qa.entries).toEqual([]);
+  expect(qa.waiting).toBe(false);
+  expect(qa.onSubmit).toBeUndefined();
+});
+
+it("drops a webinar's questions at once when the person is out of it with the socket still open", async () => {
+  await mount(true, { ...legacy, entries: [fromOldEvents] });
+
+  await mount(true, { ...legacy, entries: null }, { connectionState: "waiting", socketOpen: true, isJoined: false });
+
+  expect(qa.entries).toEqual([]);
+  expect(qa.onSubmit).toBeUndefined();
+});
+
+const oldServerSpies = () => ({
+  ...legacy,
+  entries: [fromOldEvents],
+  submit: vi.fn(async () => ({ ok: true })),
+  upvote: vi.fn(),
+  moderate: vi.fn(async () => ({ ok: true })),
+});
+const flagOffWebinar = async (oldServer: typeof legacy) => {
+  await mount(true, oldServer);
+  await act(async () => vi.advanceTimersByTimeAsync(5_000));
+};
+const tryEveryAction = async () =>
+  act(async () =>
+    Promise.all([
+      Promise.resolve(qa.onSubmit?.("Will the slides be shared?")),
+      Promise.resolve(qa.onUpvote?.("q1")),
+      Promise.resolve(qa.onModerate?.({ id: "q1", action: "dismissed" })),
+    ]),
+  );
+
+it("sends nothing from a webinar on a server without the runtime in the second before its list is cleared", async () => {
+  const oldServer = oldServerSpies();
+  await flagOffWebinar(oldServer);
+  const beforeTheDrop = { waiting: qa.waiting, submit: qa.onSubmit };
+
+  await fire("disconnect");
+  await mount(true, { ...oldServer, fromThisConnection: false }, { connectionState: "reconnecting", socketOpen: true });
+  const waitingAt: boolean[] = [];
+  for (const at of [0, 250, 250, 499]) {
+    await act(async () => vi.advanceTimersByTimeAsync(at));
+    waitingAt.push(qa.waiting);
+    await tryEveryAction();
+  }
+  await mount(true, { ...oldServer, entries: null, fromThisConnection: false }, { connected: false });
+  waitingAt.push(qa.waiting);
+  await tryEveryAction();
+  await mount(true, { ...oldServer, fromThisConnection: false });
+  waitingAt.push(qa.waiting);
+  await tryEveryAction();
+
+  expect(beforeTheDrop).toEqual({ waiting: false, submit: oldServer.submit });
+  expect(oldServer.submit).not.toHaveBeenCalled();
+  expect(oldServer.upvote).not.toHaveBeenCalled();
+  expect(oldServer.moderate).not.toHaveBeenCalled();
+  expect(waitingAt).toEqual([true, true, true, true, true, true]);
+  expect(qa.entries.map((entry) => entry.id)).toEqual(["q1"]);
+  await mount(true, oldServer);
+  expect({ waiting: qa.waiting, submit: qa.onSubmit }).toEqual({ waiting: false, submit: oldServer.submit });
+});
+
+it("gives a webinar without old-event actions no actions while it waits", async () => {
+  const noActions = { ...legacy, entries: [fromOldEvents], submit: undefined, upvote: undefined, moderate: undefined };
+  await flagOffWebinar(noActions);
+
+  await fire("disconnect");
+  await mount(true, { ...noActions, entries: null }, { connected: false });
+
+  expect(qa.waiting).toBe(true);
+  expect({ submit: qa.onSubmit, upvote: qa.onUpvote, moderate: qa.onModerate }).toEqual({
+    submit: undefined,
+    upvote: undefined,
+    moderate: undefined,
+  });
+});
+
+it("closes a meeting's Q&A in the same render the meeting ends in an error, before the apps client hears of it", async () => {
+  const noOldList = await meetingWithTheApp();
+  const whileLive = qa.isAvailable;
+  const fromTheError = availability.length;
+
+  await mount(false, noOldList, { connectionState: "error", socketOpen: true });
+
+  expect(whileLive).toBe(true);
+  expect(availability.slice(fromTheError).length).toBeGreaterThan(0);
+  expect(availability.slice(fromTheError).every((shown) => shown === false)).toBe(true);
+});
+
+it("lets a webinar act as soon as this connection's own list arrives, before the server answers what it runs", async () => {
+  const oldServer = oldServerSpies();
+  await flagOffWebinar(oldServer);
+  await fire("disconnect");
+  await mount(true, { ...oldServer, entries: null, fromThisConnection: false }, { connected: false });
+
+  await mount(true, { ...oldServer, entries: [fromOldEvents], fromThisConnection: true });
+  const onItsOwnList = { waiting: qa.waiting, submit: qa.onSubmit };
+  await act(async () => vi.advanceTimersByTimeAsync(4_000));
+  const stillUnanswered = { waiting: qa.waiting, submit: qa.onSubmit };
+
+  expect(onItsOwnList).toEqual({ waiting: false, submit: oldServer.submit });
+  expect(stillUnanswered).toEqual({ waiting: false, submit: oldServer.submit });
+});
+
+it("never lets a webinar act on a list an earlier connection gave it, even once the server has answered", async () => {
+  const oldServer = oldServerSpies();
+  await mount(true, oldServer);
+  await act(async () =>
+    last(AUTHORITY_EVENTS.capabilities)!.ack!({ ok: false, code: "unsupported" }),
+  );
+  const onItsOwnList = qa.waiting;
+
+  await fire("disconnect");
+  await mount(true, { ...oldServer, fromThisConnection: false }, { connected: false });
+  await mount(true, { ...oldServer, fromThisConnection: false });
+  await act(async () =>
+    last(AUTHORITY_EVENTS.capabilities)!.ack!({ ok: false, code: "unsupported" }),
+  );
+  const answeredWithTheOldList = qa.waiting;
+  await tryEveryAction();
+
+  expect(onItsOwnList).toBe(false);
+  expect(answeredWithTheOldList).toBe(true);
+  expect(qa.entries.map((entry) => entry.id)).toEqual(["q1"]);
+  expect(oldServer.submit).not.toHaveBeenCalled();
+  expect(oldServer.upvote).not.toHaveBeenCalled();
+  expect(oldServer.moderate).not.toHaveBeenCalled();
+});
+
+it("names each connection of a meeting's Q&A by its own token, stable within it and new after a reconnect", async () => {
+  await mount(false);
+  await offerQa();
+  await sendView();
+  const first = qa.connection;
+  await act(async () =>
+    push({
+      kind: "patch",
+      subscription: last(AUTHORITY_EVENTS.subscribe)!.payload.subscription as string,
+      generation: 1,
+      serverNowMs: Date.now(),
+      seq: 1,
+      put: [{ bucket: "votes", key: "q1", value: { upvotes: 5 } }],
+      remove: [],
+    }),
+  );
+  const afterAPatch = qa.connection;
+  await mount(false, legacy, { connectionState: "reconnecting", socketOpen: false });
+  await mount(false);
+  await offerQa();
+  await sendView();
+
+  expect(afterAPatch).toBe(first);
+  expect(qa.connection).not.toBe(first);
+});
+
+it.each([
+  ["accepts it", { ok: true }, { draft: "", error: false }],
+  ["refuses it", { ok: false, error: "Ask a longer question" }, { draft: "Will the slides be shared?", error: true }],
+])(
+  "answers a webinar question asked on the old events while the app's view was coming, when the server %s after the view is in",
+  async (_case, reply, shown) => {
+    withPanel = true;
+    let settle!: (value: { ok: boolean; error?: string }) => void;
+    vi.mocked(legacy.submit!).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        }),
+    );
+    await mount(true);
+    await offerQa();
+    const input = container.querySelector<HTMLTextAreaElement>('[data-testid="qa-input"]')!;
+    const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+    await act(async () => {
+      setValue?.call(input, "Will the slides be shared?");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const askedOn = qa.onSubmit === legacy.submit ? "old events" : "app";
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="qa-send"]')!.click());
+    await sendView();
+    const afterTheHandover = qa.fromApp;
+    await act(async () => settle(reply));
+
+    expect(askedOn).toBe("old events");
+    expect(afterTheHandover).toBe(true);
+    expect(container.querySelector<HTMLTextAreaElement>('[data-testid="qa-input"]')!.value).toBe(shown.draft);
+    expect(container.textContent?.includes("Ask a longer question")).toBe(shown.error);
+  },
+);
+
+it("keeps one connection token through a webinar's handover to the app and a rejoin over the same socket, and takes a new one only with a new socket", async () => {
+  await mount(true);
+  const onTheOldEvents = qa.connection;
+  await offerQa();
+  await sendView();
+  const afterTheHandover = qa.connection;
+  await mount(true, { ...legacy, fromThisConnection: false }, { connectionState: "reconnecting", socketOpen: true });
+  await mount(true);
+  const afterARejoinOverTheSameSocket = qa.connection;
+  await mount(true, { ...legacy, fromThisConnection: false }, { connected: false });
+  await mount(true);
+
+  expect(afterTheHandover).toBe(onTheOldEvents);
+  expect(afterARejoinOverTheSameSocket).toBe(onTheOldEvents);
+  expect(qa.connection).not.toBe(onTheOldEvents);
+});

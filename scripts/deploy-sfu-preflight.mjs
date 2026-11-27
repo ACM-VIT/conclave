@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 
 import { isIP } from "node:net";
+import { realpathSync } from "node:fs";
+import { posix } from "node:path";
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { readRtcPortRange, readWorkerSizing, resolveWebRtcPortBudget } from "../packages/sfu/config/workerSettings.mjs";
 
 const REGION_PATTERN = /^[a-z0-9](?:[a-z0-9._:-]{0,62}[a-z0-9])?$/;
 const INSTANCE_ID_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,126}[A-Za-z0-9])?$/;
@@ -40,10 +44,23 @@ const parseRequiredPort = (value, label, errors) => {
   return parsed;
 };
 
+const IPV4_MAPPED_PATTERN = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/;
+
+/** Canonical IP literal, with IPv4-mapped IPv6 (::ffff:a.b.c.d) unwrapped to IPv4. */
+const canonicalIp = (value) => {
+  if (isIP(value) !== 6) return value;
+  const canonical = new URL(`http://[${value}]`).hostname.slice(1, -1);
+  const mapped = IPV4_MAPPED_PATTERN.exec(canonical);
+  if (!mapped) return canonical;
+  const [high, low] = [mapped[1], mapped[2]].map((group) => Number.parseInt(group, 16));
+  return [high >> 8, high & 0xff, low >> 8, low & 0xff].join(".");
+};
+
 const isLoopbackIp = (value) => {
-  if (value === "::1") return true;
-  if (isIP(value) !== 4) return false;
-  return Number(value.split(".")[0]) === 127;
+  const ip = canonicalIp(value);
+  if (ip === "::1") return true;
+  if (isIP(ip) !== 4) return false;
+  return Number(ip.split(".")[0]) === 127;
 };
 
 const isPublicIpv4 = (value) => {
@@ -62,26 +79,18 @@ const isPublicIpv4 = (value) => {
   return true;
 };
 
-const isPublicIpv6 = (value) => {
-  const normalized = value.toLowerCase();
-  if (normalized === "::" || normalized === "::1") return false;
-  if (normalized.startsWith("fc") || normalized.startsWith("fd")) return false;
-  if (/^fe[89ab]/.test(normalized) || normalized.startsWith("ff")) return false;
-  return /^[23]/.test(normalized);
+/** Global unicast is 2000::/3. Canonical IPv6 drops leading zeros, so compare the first hextet as a number. */
+const isPublicIpv6 = (canonical) => {
+  const firstHextet = Number.parseInt(canonical.split(":", 1)[0] || "0", 16);
+  return (firstHextet & 0xe000) === 0x2000;
 };
 
 const isPublicIp = (value) => {
-  const version = isIP(value);
-  if (version === 4) return isPublicIpv4(value);
-  if (version === 6) return isPublicIpv6(value);
+  const ip = canonicalIp(value);
+  const version = isIP(ip);
+  if (version === 4) return isPublicIpv4(ip);
+  if (version === 6) return isPublicIpv6(ip);
   return false;
-};
-
-const normalizeIp = (value) => {
-  if (isIP(value) === 6) {
-    return new URL(`http://[${value}]`).hostname.slice(1, -1);
-  }
-  return value;
 };
 
 const isLocalUrl = (url) =>
@@ -120,7 +129,29 @@ const parsePublicUrl = (value, service, errors) => {
   return url;
 };
 
-const normalizeRedisRegistry = (value, service, errors) => {
+/**
+ * Redis carries room placement and the Socket.IO adapter. Only a Redis on this
+ * host's loopback may skip TLS and credentials; anything else must use both,
+ * and a public IP is refused unless the operator explicitly allows it.
+ */
+const checkRedisExposure = (url, service, errors, allowPublicRedis) => {
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  if (host.toLowerCase() === "localhost" || isLoopbackIp(host)) return;
+
+  if (url.protocol !== "rediss:") {
+    errors.push(`${service}: a Redis that is not on loopback must use TLS (rediss://).`);
+  }
+  if (!url.password) {
+    errors.push(`${service}: a Redis that is not on loopback must require credentials in the URL.`);
+  }
+  if (isPublicIp(host) && !allowPublicRedis) {
+    errors.push(
+      `${service}: Redis at public IP ${host} is refused. Use a private address, or set SFU_DEPLOY_ALLOW_PUBLIC_REDIS=1 if it is firewalled to the SFU hosts.`,
+    );
+  }
+};
+
+const normalizeRedisRegistry = (value, service, errors, allowPublicRedis) => {
   if (!value?.trim()) {
     errors.push(`${service}: SFU_REDIS_URL or REDIS_URL is required.`);
     return null;
@@ -136,6 +167,7 @@ const normalizeRedisRegistry = (value, service, errors) => {
       errors.push(`${service}: the shared registry URL must include a host.`);
       return null;
     }
+    checkRedisExposure(url, service, errors, allowPublicRedis);
     const port = url.port || "6379";
     const database = !url.pathname || url.pathname === "/" ? "/0" : url.pathname;
     url.searchParams.sort();
@@ -146,10 +178,112 @@ const normalizeRedisRegistry = (value, service, errors) => {
   }
 };
 
+/**
+ * Mirrors the SFU's production startup checks (server/cors.ts), so a value the
+ * new container would refuse to boot with fails here, before the live
+ * instance starts draining.
+ */
+const checkProductionMode = (env, service, errors) => {
+  if (String(env.NODE_ENV || "").trim() !== "production") {
+    errors.push(`${service}: NODE_ENV must be production.`);
+    return;
+  }
+  const origins = String(env.SFU_CORS_ORIGINS || "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  if (origins.length === 0 || origins.includes("*")) {
+    if (env.SFU_ALLOW_OPEN_CORS !== "1") {
+      errors.push(`${service}: SFU_CORS_ORIGINS must list the web app origins; the SFU will not start in production without it.`);
+    }
+    return;
+  }
+  for (const origin of origins) {
+    let protocol = "";
+    try {
+      protocol = new URL(origin).protocol;
+    } catch {
+      protocol = "";
+    }
+    if (protocol !== "http:" && protocol !== "https:") {
+      errors.push(`${service}: SFU_CORS_ORIGINS entry ${JSON.stringify(origin)} is not an http(s) origin.`);
+    }
+  }
+};
+
+// Mirrors how the control-plane store resolves its file (packages/sfu/server/controlPlane/open.ts)
+// and the image defaults in packages/sfu/Dockerfile. The SFU's root filesystem
+// is read-only, so a store off a writable mount stops it at startup.
+const SFU_WORKDIR = "/app/packages/sfu";
+const IMAGE_SQLITE_PATH = "/var/lib/conclave/conclave.sqlite";
+const DEPLOY_RECORDINGS_PATH = "/var/lib/conclave/recordings";
+const IMAGE_JSON_PATH = DEPLOY_RECORDINGS_PATH + "/control-plane.json";
+const IMAGE_FALLBACK_IMPORT_DIR = DEPLOY_RECORDINGS_PATH + "/json-fallback-import";
+const LEGACY_MODES = ["SCHEDULING_PERSISTENCE", "SCHEDULED_MEETINGS_PERSISTENCE", "SCHEDULED_WEBINARS_PERSISTENCE"];
+
+const storeFile = (env) => {
+  const value = (name) => String(env[name] || "").trim();
+  const modeOf = (name) => {
+    const mode = value(name).toLowerCase();
+    return mode === "file" ? "json" : mode;
+  };
+  const legacy = LEGACY_MODES.map(modeOf);
+  const agreed = legacy[0] && legacy.every((mode) => mode === legacy[0]) ? legacy[0] : "";
+  const redisUrl = value("SFU_PERSISTENCE_REDIS_URL") || value("SFU_REDIS_URL") || value("REDIS_URL");
+  const mode = modeOf("CONTROL_PLANE_PERSISTENCE") || agreed || (redisUrl ? "redis" : "sqlite");
+  if (mode === "json") return ["CONTROL_PLANE_JSON_PATH", value("CONTROL_PLANE_JSON_PATH") || IMAGE_JSON_PATH];
+  const sqlite = value("CONCLAVE_SQLITE_PATH");
+  // An explicit shared SQLite file can still be a legacy import source in Redis mode.
+  if (mode === "memory" || (mode === "redis" && !sqlite)) return null;
+  return ["CONCLAVE_SQLITE_PATH", sqlite || IMAGE_SQLITE_PATH];
+};
+
+const checkStorePaths = (definition, env, service, errors) => {
+  const mounts = (Array.isArray(definition.volumes) ? definition.volumes : [])
+    .filter((volume) => volume && (volume.type === "bind" || volume.type === "volume"))
+    .map(({ target, read_only }) => ({ target: posix.resolve("/", String(target)), readOnly: read_only }))
+    .sort((a, b) => b.target.length - a.target.length);
+  const cwd = definition.working_dir || SFU_WORKDIR;
+  const requireWritableMount = (variable, path, impact) => {
+    const resolved = posix.resolve(cwd, path);
+    const mount = mounts.find(({ target }) =>
+      target === "/" || resolved === target || resolved.startsWith(`${target}/`));
+    if (mount && !mount.readOnly) return;
+    const writable = mounts.filter(({ readOnly }) => !readOnly).map(({ target }) => target);
+    errors.push(
+      `${service}: ${variable} resolves to ${resolved}, which is not on a writable volume mount (${writable.join(", ") || "none"}). ${impact}`,
+    );
+  };
+  requireWritableMount("recordings ownership handoff", DEPLOY_RECORDINGS_PATH,
+    "The deploy script must be able to hand this tree over to the SFU user.");
+  for (const { target, readOnly } of mounts) {
+    if (readOnly && target.startsWith(DEPLOY_RECORDINGS_PATH + "/")) {
+      requireWritableMount("recordings ownership handoff", target,
+        "The deploy script walks this subtree during the ownership handoff.");
+    }
+  }
+  const fallbackImport = String(env.CONCLAVE_FALLBACK_IMPORT_DIR ?? IMAGE_FALLBACK_IMPORT_DIR);
+  if (!fallbackImport || fallbackImport !== fallbackImport.trim()) {
+    errors.push(`${service}: CONCLAVE_FALLBACK_IMPORT_DIR must name a directory without leading or trailing whitespace.`);
+  } else {
+    requireWritableMount("CONCLAVE_FALLBACK_IMPORT_DIR", fallbackImport,
+      "Deploy and SFU startup move JSON fallback copies here.");
+  }
+  const store = storeFile(env);
+  if (store) requireWritableMount(...store, "The SFU would refuse to start.");
+  const recordings = String(env.RECORDING_STORAGE_PATH || "").trim();
+  const recovery = String(env.SFU_ROOM_RECOVERY_PATH || "").trim();
+  requireWritableMount(
+    !recovery && recordings ? "SFU_ROOM_RECOVERY_PATH (from RECORDING_STORAGE_PATH)" : "SFU_ROOM_RECOVERY_PATH",
+    recovery || posix.join(recordings || "data", "room-recovery"),
+    "The SFU cannot open rooms without writing recovery state.",
+  );
+};
+
 const isRequiredRedisMode = (value) =>
   value === true || value === 1 || String(value).trim().toLowerCase() === "true" || String(value).trim() === "1";
 
-export const resolveSfuTargets = ({ compose, serviceNames }) => {
+export const resolveSfuTargets = ({ allowPublicRedis = false, compose, serviceNames }) => {
   const services = compose?.services;
   if (!services || typeof services !== "object") {
     throw new SfuDeployPreflightError(["Rendered compose JSON has no services object."]);
@@ -177,14 +311,21 @@ export const resolveSfuTargets = ({ compose, serviceNames }) => {
     const region = String(env.SFU_REGION || "").trim();
     const publicUrl = parsePublicUrl(String(env.SFU_PUBLIC_URL || ""), service, errors);
     const announcedIpInput = String(env.ANNOUNCED_IP || "").trim();
-    const announcedIp = normalizeIp(announcedIpInput);
-    const rtcMinPort = parseRequiredPort(env.RTC_MIN_PORT, `${service}: RTC_MIN_PORT`, errors);
-    const rtcMaxPort = parseRequiredPort(env.RTC_MAX_PORT, `${service}: RTC_MAX_PORT`, errors);
+    const announcedIp = canonicalIp(announcedIpInput);
+    let rtcMinPort = null;
+    let rtcMaxPort = null;
+    try {
+      ({ rtcMinPort, rtcMaxPort } = readRtcPortRange(env));
+      resolveWebRtcPortBudget({ rtcMinPort, rtcMaxPort, ...readWorkerSizing(env) });
+    } catch (error) {
+      errors.push(`${service}: ${error.message}`);
+    }
     const serverPort = parseRequiredPort(env.SFU_PORT || env.PORT, `${service}: SFU_PORT`, errors);
     const redisRegistry = normalizeRedisRegistry(
       String(env.SFU_REDIS_URL || env.REDIS_URL || ""),
       service,
       errors,
+      allowPublicRedis,
     );
 
     if (!INSTANCE_ID_PATTERN.test(instanceId)) {
@@ -201,12 +342,20 @@ export const resolveSfuTargets = ({ compose, serviceNames }) => {
     } else if (publicUrl && !isLocalUrl(publicUrl) && !isPublicIp(announcedIpInput)) {
       errors.push(`${service}: ANNOUNCED_IP must be a publicly routable IP for a non-local public URL.`);
     }
-    if (rtcMinPort !== null && rtcMaxPort !== null && rtcMaxPort < rtcMinPort) {
-      errors.push(`${service}: RTC_MAX_PORT must be greater than or equal to RTC_MIN_PORT.`);
-    }
-    if (!String(env.SFU_SECRET || "").trim() || env.SFU_SECRET === "development-secret") {
+    // Mirrors config/config.ts: startup refuses padding and the default secret.
+    const secret = String(env.SFU_SECRET || "");
+    if (!secret.trim() || secret.trim() === "development-secret") {
       errors.push(`${service}: SFU_SECRET must be a non-default value.`);
+    } else if (secret !== secret.trim()) {
+      // Mirrors paddedSfuSecretMessage in packages/sfu/config/config.ts.
+      errors.push(
+        env.SCHEDULING_TOKEN_SECRET
+          ? `${service}: SFU_SECRET has leading or trailing whitespace. Remove it; SCHEDULING_TOKEN_SECRET keeps saved calendar tokens readable.`
+          : `${service}: SFU_SECRET has leading or trailing whitespace. Saved calendar tokens are encrypted with the padded value, so first set SCHEDULING_TOKEN_SECRET to the exact current SFU_SECRET, padding included, before you trim SFU_SECRET.`,
+      );
     }
+    checkProductionMode(env, service, errors);
+    checkStorePaths(definition, env, service, errors);
 
     targets.push({
       announcedIp,
@@ -216,7 +365,7 @@ export const resolveSfuTargets = ({ compose, serviceNames }) => {
       region,
       rtcMaxPort,
       rtcMinPort,
-      secret: String(env.SFU_SECRET || ""),
+      secret,
       serverPort,
       service,
     });
@@ -276,8 +425,51 @@ export const resolveSfuTargets = ({ compose, serviceNames }) => {
     }
   }
 
+  checkOwnRedis({ services, selectedNames, errors });
+
   if (errors.length > 0) throw new SfuDeployPreflightError(errors);
   return targets;
+};
+
+// Every Redis variable an SFU reads. Redis pub/sub ignores the database
+// number, so one of them on another Redis joins that Redis's channels.
+const SFU_REDIS_VARIABLES = ["REDIS_URL", "SFU_REDIS_URL", "SFU_PERSISTENCE_REDIS_URL"];
+
+// A compose file that runs its own Redis (staging's) must point every SFU's
+// every Redis variable at it, on 127.0.0.1 and the port it listens on, so a
+// Redis URL inherited from the shell or a production .env can never reach
+// another deployment's Redis.
+const checkOwnRedis = ({ services, selectedNames, errors }) => {
+  const redis = services.redis;
+  if (!redis) return;
+  const redisEnv = parseEnvironment(redis.environment);
+  const command = Array.isArray(redis.command) ? redis.command.join(" ") : String(redis.command ?? "");
+  const port = String(redisEnv.REDIS_PORT || command.match(/--port\s+"?(\d+)/)?.[1] || "6379");
+  for (const service of selectedNames) {
+    const definition = services[service];
+    if (!definition) continue;
+    const env = parseEnvironment(definition.environment);
+    for (const name of SFU_REDIS_VARIABLES) {
+      const value = String(env[name] ?? "").trim();
+      if (!value) {
+        errors.push(`${service}: ${name} must be set to this compose file's own Redis on 127.0.0.1:${port}.`);
+        continue;
+      }
+      let host = "";
+      let urlPort = "";
+      try {
+        const url = new URL(value);
+        host = url.hostname.toLowerCase();
+        urlPort = url.port || "6379";
+      } catch {
+        errors.push(`${service}: ${name} is not a valid URL.`);
+        continue;
+      }
+      if (!["127.0.0.1", "localhost"].includes(host) || urlPort !== port) {
+        errors.push(`${service}: ${name} points at ${host}:${urlPort}, not this compose file's own Redis on 127.0.0.1:${port}.`);
+      }
+    }
+  }
 };
 
 const readJsonResponse = async ({ fetchImpl, url, headers, timeoutMs }) => {
@@ -355,13 +547,14 @@ const probeTarget = async ({ target, fetchImpl, timeoutMs }) => {
 };
 
 export const runSfuDeployPreflight = async ({
+  allowPublicRedis = false,
   compose,
   configOnly = false,
   fetchImpl = globalThis.fetch,
   serviceNames,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 }) => {
-  const targets = resolveSfuTargets({ compose, serviceNames });
+  const targets = resolveSfuTargets({ allowPublicRedis, compose, serviceNames });
   if (configOnly) return { configOnly: true, probes: [], targets };
   if (typeof fetchImpl !== "function") {
     throw new SfuDeployPreflightError(["This Node.js runtime does not provide fetch()."]);
@@ -419,6 +612,7 @@ const main = async () => {
         : await readFile(options.composeJson, "utf8");
     const compose = JSON.parse(rawCompose);
     const result = await runSfuDeployPreflight({
+      allowPublicRedis: process.env.SFU_DEPLOY_ALLOW_PUBLIC_REDIS === "1",
       compose,
       configOnly: options.configOnly,
       serviceNames: options.serviceNames,
@@ -437,6 +631,22 @@ const main = async () => {
   }
 };
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Node gives this module its real path but leaves argv[1] as typed, so both
+// sides are resolved before comparing; a checkout reached through a symlink
+// must still run the checks. An entry that names this file but does not
+// resolve to it is an error, never a silent pass.
+const realPath = (file) => {
+  try {
+    return realpathSync.native(file);
+  } catch {
+    return null;
+  }
+};
+const self = fileURLToPath(import.meta.url);
+const entry = process.argv[1];
+if (entry && realPath(entry) === realPath(self)) {
   await main();
+} else if (entry && path.basename(entry) === path.basename(self)) {
+  console.error(`deploy-sfu-preflight.mjs cannot tell whether ${entry} is this file (${self}); refusing to report a result.`);
+  process.exitCode = 1;
 }

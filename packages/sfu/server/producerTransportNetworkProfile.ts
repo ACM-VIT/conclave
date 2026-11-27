@@ -6,11 +6,6 @@ export type ProducerTransportNetworkProfile =
 
 export const PRODUCER_TRANSPORT_FAIR_MAX_INCOMING_BITRATE_BPS = 1_100_000;
 export const PRODUCER_TRANSPORT_POOR_MAX_INCOMING_BITRATE_BPS = 180_000;
-// Keep enough aggregate headroom for the 80 kbps survival RID, a live Opus
-// microphone, RTP/RTCP, and retransmissions. The former 105 kbps ceiling was
-// only the sum of nominal video + emergency Opus payload caps; in a real
-// transport it starved protocol overhead, collapsed sender BWE to ~60 kbps,
-// and made recovery pause every simulcast encoder.
 export const PRODUCER_TRANSPORT_EMERGENCY_MAX_INCOMING_BITRATE_BPS = 160_000;
 
 export const isProducerTransportNetworkProfile = (
@@ -21,12 +16,6 @@ export const isProducerTransportNetworkProfile = (
   value === "poor" ||
   value === "emergency";
 
-/**
- * Resolve the aggregate publisher upload ceiling for one transport. The
- * constrained profiles include audio headroom; mediasoup's transport-wide BWE
- * then decides which VP8 RID can fit without asking Chromium to transact a
- * live RTCRtpSender.setParameters() update.
- */
 export const getProducerTransportMaxIncomingBitrate = (
   profile: ProducerTransportNetworkProfile,
   configuredGoodMaxIncomingBitrateBps: number,

@@ -1,23 +1,39 @@
-import {
-  canonicalizeSfuClientId,
-  CONCLAVE_SFU_CLIENT_ID,
-} from "@/lib/sfu-client-id";
+import { APP_ROUTE_SEGMENTS, sanitizeRoomCode, sanitizeWebinarLinkCode } from "../app/lib/utils";
+import { canonicalizeSfuClientId } from "./sfu-client-id";
 
-type MeetingLinkInput = {
+export type RoomDestination = {
   roomCode: string;
-  clientId?: string | null;
+  clientId: string;
 };
 
-export const buildMeetingPath = (meeting: MeetingLinkInput): string => {
-  const path = `/${encodeURIComponent(meeting.roomCode)}`;
-  const clientId = canonicalizeSfuClientId(meeting.clientId);
-  if (!clientId || clientId === CONCLAVE_SFU_CLIENT_ID) {
-    return path;
-  }
-  return `${path}?clientId=${encodeURIComponent(clientId)}`;
+const APP_ROUTES: ReadonlySet<string> = new Set(APP_ROUTE_SEGMENTS);
+
+export const roomIdFromMeetingPath = (segment: string): string =>
+  segment === "undefined" || segment === "null" ? "" : sanitizeRoomCode(segment);
+
+const tenantPath = (path: string, clientId: string): string | null => {
+  const tenant = canonicalizeSfuClientId(clientId);
+  return tenant ? `${path}?clientId=${encodeURIComponent(tenant)}` : null;
+};
+
+export const webinarSlugFromPath = (segment: string): string =>
+  segment === "undefined" || segment === "null" ? "" : sanitizeWebinarLinkCode(segment);
+
+export const buildWebinarPath = ({ slug, clientId }: { slug: string; clientId: string }): string | null =>
+  slug && webinarSlugFromPath(slug) === slug
+    ? tenantPath(`/w/${encodeURIComponent(slug)}`, clientId)
+    : null;
+
+export const buildMeetingPath = (meeting: RoomDestination): string | null => {
+  const { roomCode } = meeting;
+  if (!roomCode || APP_ROUTES.has(roomCode) || roomIdFromMeetingPath(roomCode) !== roomCode) return null;
+  return tenantPath(`/${encodeURIComponent(roomCode)}`, meeting.clientId);
 };
 
 export const buildMeetingUrl = (
   origin: string,
-  meeting: MeetingLinkInput,
-): string => `${origin.replace(/\/$/, "")}${buildMeetingPath(meeting)}`;
+  meeting: RoomDestination,
+): string | null => {
+  const path = buildMeetingPath(meeting);
+  return path === null ? null : `${origin.replace(/\/$/, "")}${path}`;
+};

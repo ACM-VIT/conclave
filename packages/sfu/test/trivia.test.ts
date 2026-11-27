@@ -9,8 +9,6 @@ const players: GamePlayer[] = [
   { id: "p3", name: "Robin" },
 ];
 
-// Identity shuffle keeps the question bank and option order deterministic, so
-// the first question is Geography ("Canada" first, correctIndex 0).
 const rng: GameRng = {
   next: () => 0,
   int: () => 0,
@@ -59,20 +57,16 @@ describe("trivia game", () => {
   });
 
   it("scores correct answers with a deterministic speed bonus", () => {
-    // questionStart is 1_000, question length 20_000ms. Answering the correct
-    // option (index 0) at now=2_000 uses 1_000ms, ratio 0.95 -> 500 + 475.
     let state = triviaModule.onMove(
       started(),
       { playerId: "host", type: "answer", payload: { choice: 0 } },
       context(2_000),
     );
-    // A wrong answer earns nothing.
     state = triviaModule.onMove(
       state,
       { playerId: "p2", type: "answer", payload: { choice: 1 } },
       context(2_000),
     );
-    // Move into the reveal so scoring has been applied.
     state = triviaModule.onMove(
       state,
       { playerId: "host", type: "skip", payload: undefined },
@@ -121,7 +115,6 @@ describe("trivia game", () => {
   });
 
   it("advances early once every present player answers, ignoring an absent seat", () => {
-    // p3 holds a seat but is disconnected: only host and p2 are active.
     const active = players.filter((player) => player.id !== "p3");
 
     let state = triviaModule.onMove(
@@ -129,7 +122,6 @@ describe("trivia game", () => {
       { playerId: "host", type: "answer", payload: { choice: 0 } },
       context(2_000, { activePlayers: active }),
     );
-    // Still open: not everyone present has answered yet.
     expect(state.deadline).toBe(21_000);
 
     state = triviaModule.onMove(
@@ -137,9 +129,6 @@ describe("trivia game", () => {
       { playerId: "p2", type: "answer", payload: { choice: 0 } },
       context(2_000, { activePlayers: active }),
     );
-    // Both present players answered -> deadline collapses to now without
-    // waiting on the absent p3. Under the old ctx.players logic (length 3)
-    // this would still sit at 21_000.
     expect(state.deadline).toBe(2_000);
 
     const advanced = triviaModule.onTick!(
@@ -170,8 +159,6 @@ describe("trivia game", () => {
       context(2_500, { activePlayers: active }),
     );
 
-    // p3 answered before disconnecting, but p2 is still present and unanswered.
-    // The deadline must stay open until every present player has answered.
     expect(state.deadline).toBe(21_000);
 
     state = triviaModule.onMove(

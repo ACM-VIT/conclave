@@ -15,14 +15,6 @@ import {
   normalizeGeneratedKey,
 } from "../aiContent.js";
 
-/**
- * Would You Rather: a "split the room" party game for groups of any size.
- *
- * Each round shows two options. Everyone picks one, then the room split is
- * revealed (counts plus who landed where). No right answer, no losing - it is
- * about seeing where your friends land and arguing about it on camera.
- */
-
 const CHOOSE_MS = 15_000;
 const ROUNDS_PER_GAME = 6;
 
@@ -165,11 +157,6 @@ const loop = createRoundLoop<WyrState>({
   toResults: (state) => ({ ...state, phase: "results" }),
 });
 
-/**
- * Typed move contract. Decoded from the untrusted `GameMove` at the top of
- * `onMove`. The side pick is validated here to 0 or 1 (throwing "Invalid pick"),
- * replacing the inline payload cast.
- */
 export type WouldYouRatherMove =
   | { type: "start" }
   | { type: "choose"; option: 0 | 1 }

@@ -1,0 +1,93 @@
+// @vitest-environment happy-dom
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+const freshModules = async () => {
+  vi.resetModules();
+  const [{ prewarmVideoEffectsRuntime }, { releaseAllCaptures }] = await Promise.all([
+    import("../src/app/hooks/useVideoEffects"),
+    import("../src/app/lib/media-captures"),
+  ]);
+  return { prewarmVideoEffectsRuntime, releaseAllCaptures };
+};
+
+class FakeGenerator {
+  static created: FakeGenerator[] = [];
+  readonly kind = "video";
+  readyState: MediaStreamTrackState = "live";
+  constructor() {
+    FakeGenerator.created.push(this);
+  }
+  stop() {
+    this.readyState = "ended";
+  }
+}
+
+class FakeWorker {
+  static created: FakeWorker[] = [];
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onerror: ((event: Event) => void) | null = null;
+  terminated = false;
+  constructor() {
+    FakeWorker.created.push(this);
+  }
+  postMessage() {}
+  terminate() {
+    this.terminated = true;
+  }
+  addEventListener() {}
+  removeEventListener() {}
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  FakeWorker.created = [];
+  FakeGenerator.created = [];
+  vi.stubGlobal("MediaStreamTrackGenerator", FakeGenerator);
+  vi.stubGlobal("Worker", FakeWorker);
+  vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 404 })));
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.spyOn(console, "info").mockImplementation(() => {});
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe("the effects output writer warmed up before a call ends", () => {
+  it("is shut down when its output track ended before it reported ready", async () => {
+    const { prewarmVideoEffectsRuntime } = await freshModules();
+    const warming = prewarmVideoEffectsRuntime({ reason: "test" });
+    await vi.waitFor(() => {
+      if (FakeWorker.created.length === 0) throw new Error("the writer worker has not started");
+    });
+    const [writer] = FakeWorker.created;
+    FakeGenerator.created.forEach((track) => track.stop());
+
+    writer!.onmessage?.({
+      data: { type: "READY", hasVideoFrame: true, hasWritableStream: true, hasOffscreenCanvas: true, renderer: "2d" },
+    } as MessageEvent);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await warming;
+
+    expect(writer!.terminated).toBe(true);
+  });
+
+  it("is shut down instead of kept for later when it reports ready after the call ended", async () => {
+    const { prewarmVideoEffectsRuntime, releaseAllCaptures } = await freshModules();
+    const warming = prewarmVideoEffectsRuntime({ reason: "test" });
+    await vi.waitFor(() => {
+      if (FakeWorker.created.length === 0) throw new Error("the writer worker has not started");
+    });
+    const [writer] = FakeWorker.created;
+
+    releaseAllCaptures();
+    writer!.onmessage?.({
+      data: { type: "READY", hasVideoFrame: true, hasWritableStream: true, hasOffscreenCanvas: true, renderer: "2d" },
+    } as MessageEvent);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await warming;
+
+    expect(writer!.terminated).toBe(true);
+  });
+});

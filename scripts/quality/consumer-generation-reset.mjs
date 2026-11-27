@@ -96,12 +96,6 @@ export function shouldExpectStartupConsumerGenerationReset({
   );
 }
 
-/**
- * Assess the one-time overlapping consumer replacement used to discard
- * startup simulcast jitter history. Debug records prove product intent and
- * completion; requestVideoFrameCallback track transitions independently prove
- * the user-visible interruption that ordinary warmup would otherwise hide.
- */
 export function assessConsumerGenerationReset({
   codecScenario,
   receiverCount,

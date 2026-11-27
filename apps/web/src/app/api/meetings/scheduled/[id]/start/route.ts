@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import {
   buildScheduledMeetingHeaders,
+  fetchFromScheduledMeetingSfu,
   readScheduledMeetingError,
-  resolveScheduledMeetingsBase,
 } from "@/lib/scheduled-meetings";
 import { requireSfuSessionUser } from "@/lib/sfu-user-auth";
 
@@ -21,8 +21,8 @@ export async function POST(
   const { id } = await context.params;
 
   try {
-    const response = await fetch(
-      `${resolveScheduledMeetingsBase()}/${encodeURIComponent(id)}/start`,
+    const response = await fetchFromScheduledMeetingSfu(
+      `/${encodeURIComponent(id)}/start`,
       {
         method: "POST",
         headers: buildScheduledMeetingHeaders(authResult.user, request),

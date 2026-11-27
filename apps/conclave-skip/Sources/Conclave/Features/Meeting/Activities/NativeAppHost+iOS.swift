@@ -4,6 +4,29 @@ import SwiftUI
 import UIKit
 import WebKit
 
+extension View {
+    @MainActor
+    func appStageDiscardPrompt(host: AppHostPresenter?) -> some View {
+        let id = host?.stageDiscardPromptId ?? ""
+        return alert(
+            ConclaveStrings.text("Discard Unverified Edits?"),
+            isPresented: Binding(get: { !id.isEmpty }, set: { _ in }),
+            presenting: id
+        ) { shownId in
+            Button(ConclaveStrings.text("Discard and Continue"), role: .destructive) {
+                host?.resolveStageDiscardPrompt(id: shownId, confirmed: true)
+            }
+            .accessibilityIdentifier("app.stageDiscard.confirm")
+            Button(ConclaveStrings.text("Cancel"), role: .cancel) {
+                host?.resolveStageDiscardPrompt(id: shownId, confirmed: false)
+            }
+            .accessibilityIdentifier("app.stageDiscard.cancel")
+        } message: { _ in
+            Text(ConclaveStrings.text("The previous app view stopped before its edits could be verified. Continuing may lose those edits. Changes saved to the room will be kept."))
+        }
+    }
+}
+
 struct NativeAppHostBody: View {
     let host: AppHostPresenter
     let onShowVideo: () -> Void
@@ -61,7 +84,7 @@ struct NativeAppHostBody: View {
         .onChange(of: reduceMotion) { _, value in host.session?.setReduceMotion(value) }
         .onChange(of: host.model.wantsWebView) { _, wants in
 
-            if !wants && !host.model.appSessionId.isEmpty {
+            if !wants && !host.isHiddenLocally && !host.model.appSessionId.isEmpty {
                 ActivityWebViewRegistry.shared.release(appSessionId: host.model.appSessionId)
             }
         }
@@ -128,8 +151,7 @@ struct NativeAppHostMenu: View {
                 Button(ConclaveStrings.text("Close"), role: .destructive) { _ = host.confirmClose() }
                 Button(ConclaveStrings.text("Cancel"), role: .cancel) {}
             } message: {
-                Text(model.appId == "whiteboard" ? ConclaveStrings.text("The board clears for everyone.")
-                     : ConclaveStrings.text("Everyone returns to the meeting."))
+                Text(ActivitiesCopy.closeMessage(model.closeEffect))
             }
         }
     }
@@ -762,9 +784,30 @@ struct AppPageUnavailable: View {
     }
 }
 
+struct AppWheelNotices: View {
+    let host: AppHostPresenter
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(host.wheelNotices, id: \.rawValue) { notice in
+                switch notice {
+                case .unconfirmed:
+                    Text(ConclaveStrings.text("Couldn’t confirm these names were added. Check the list before adding them again."))
+                        .accessibilityIdentifier("app.wheel.unconfirmed")
+                case .waiting:
+                    Text(ConclaveStrings.format("Wheel Waiting Names %lld", host.wheel.waitingNames))
+                        .accessibilityIdentifier("app.wheel.waiting")
+                case .full:
+                    Text(ConclaveStrings.text("The wheel is full."))
+                        .accessibilityIdentifier("app.wheel.full")
+                }
+            }
+        }
+    }
+}
+
 struct AppWheelPage: View {
     let host: AppHostPresenter
-    @State private var draft = ""
     @State private var confirmsClear = false
     @FocusState private var focused: Bool
     @Environment(\.panelPromoteToLargeDetent) private var promoteToLarge
@@ -778,17 +821,14 @@ struct AppWheelPage: View {
             } else {
                 if wheel.canEdit {
                     Section {
-                        TextField(ConclaveStrings.text("Add a Name"), text: $draft, axis: .vertical)
+                        TextField(ConclaveStrings.text("Add a Name"),
+                                  text: Binding(get: { host.wheelDraft.text }, set: { host.editWheelDraft($0) }), axis: .vertical)
                             .lineLimit(1...4)
                             .textInputAutocapitalization(.words)
                             .submitLabel(.done)
                             .focused($focused)
                             .disabled(wheel.isFull)
-                            .onSubmit { addDraft() }
-                            .onChange(of: draft) { _, value in
-
-                                if value.contains("\n") { addDraft() }
-                            }
+                            .onSubmit { host.submitWheelDraft() }
                             .onChange(of: focused) { _, isFocused in if isFocused { promoteToLarge() } }
                             .accessibilityIdentifier("app.wheel.add")
                         Button {
@@ -805,10 +845,13 @@ struct AppWheelPage: View {
                         .disabled(wheel.missingNames.isEmpty || wheel.isFull)
                         .accessibilityIdentifier("app.wheel.addEveryone")
                     } footer: {
-                        if wheel.isFull {
-                            Text(ConclaveStrings.text("The wheel is full."))
-                                .accessibilityIdentifier("app.wheel.full")
-                        }
+                        AppWheelNotices(host: host)
+                    }
+                } else if !host.wheelNotices.isEmpty {
+                    Section {
+                        AppWheelNotices(host: host)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                 }
                 Section {
@@ -818,9 +861,17 @@ struct AppWheelPage: View {
                             .accessibilityIdentifier("app.wheel.empty")
                     } else {
                         ForEach(wheel.entries) { entry in
-                            Text(verbatim: entry.label)
-                                .opacity(wheel.isPending(AppPageCommandKind.removeEntry, target: entry.id) ? HostingTheme.disabledOpacity : 1)
-                                .accessibilityIdentifier("app.wheel.entry")
+                            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                                Text(verbatim: String(entry.number))
+                                    .font(.subheadline.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                                    .frame(minWidth: 20, alignment: .trailing)
+                                Text(verbatim: entry.label)
+                            }
+                            .opacity(wheel.isPending(AppPageCommandKind.removeEntry, target: entry.id) ? HostingTheme.disabledOpacity : 1)
+                            .accessibilityElement(children: .combine)
+                            .accessibilityIdentifier("app.wheel.entry")
+                            .deleteDisabled(!wheel.canReorder)
                         }
                         .onDelete(perform: deleteAction)
                     }
@@ -828,13 +879,13 @@ struct AppWheelPage: View {
                 Section {
                     if wheel.canEdit {
                         Button(ConclaveStrings.text("Shuffle")) { _ = host.shuffleWheel() }
-                            .disabled(wheel.entries.count < 2 || wheel.isPending(AppPageCommandKind.shuffle))
+                            .disabled(!wheel.canReorder || wheel.entries.count < 2 || wheel.isPending(AppPageCommandKind.shuffle))
                             .accessibilityIdentifier("app.wheel.shuffle")
                         Button(ConclaveStrings.text("Sort A to Z")) { _ = host.sortWheel() }
-                            .disabled(wheel.entries.count < 2 || wheel.isPending(AppPageCommandKind.sort))
+                            .disabled(!wheel.canReorder || wheel.entries.count < 2 || wheel.isPending(AppPageCommandKind.sort))
                             .accessibilityIdentifier("app.wheel.sort")
                         Button(ConclaveStrings.text("Clear Names…"), role: .destructive) { confirmsClear = true }
-                            .disabled(wheel.entries.isEmpty || wheel.isPending(AppPageCommandKind.clearEntries))
+                            .disabled(!wheel.canReorder || wheel.entries.isEmpty || wheel.isPending(AppPageCommandKind.clearEntries))
                             .accessibilityIdentifier("app.wheel.clear")
                         Toggle(isOn: Binding(get: { host.wheel.removeWinner }, set: { _ = host.setWheelRemoveWinner($0) })) {
                             VStack(alignment: .leading, spacing: 2) {
@@ -879,15 +930,6 @@ struct AppWheelPage: View {
             Text(ConclaveStrings.text("The wheel empties for everyone."))
         }
         .accessibilityIdentifier("app.wheel.page")
-    }
-
-    private func addDraft() {
-        let text = draft
-        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            if !text.isEmpty { draft = "" }
-            return
-        }
-        if host.addWheelNames(text) == ActivityTapResult.dispatched { draft = "" }
     }
 
     private func remove(_ offsets: IndexSet) {

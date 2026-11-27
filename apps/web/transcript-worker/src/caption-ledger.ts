@@ -1,0 +1,164 @@
+import type { TranscriptSpeaker } from "@conclave/meeting-core/transcript-types";
+import type { LiveTranscriptionSession } from "./transcription/types";
+
+export type LinePlace = { sequence: number; startMs: number };
+
+export type CaptionLineState = "pending_ack" | "open" | "replaying" | "gap" | "final" | "dropped";
+
+export type CaptionLine = {
+  readonly id: string;
+  state: CaptionLineState;
+  place: LinePlace | null;
+  speaker: TranscriptSpeaker | null;
+  heard: boolean;
+  text: string;
+  freshText: boolean;
+  replayed: boolean;
+  epoch: number | null;
+  deadlineAt: number;
+  endedAt?: number;
+};
+
+export type ShownLine = CaptionLine & { place: LinePlace; speaker: TranscriptSpeaker };
+
+export type QueuedCommit = { lineId: string; committedAt: number };
+
+const ACTIVE: ReadonlySet<CaptionLineState> = new Set(["pending_ack", "open", "replaying"]);
+
+export const isActive = (line: CaptionLine): boolean => ACTIVE.has(line.state);
+
+export const isPlaced = (line: CaptionLine): line is ShownLine => line.place !== null && line.speaker !== null;
+
+const placeOrder = (line: CaptionLine): number => line.place?.sequence ?? Number.POSITIVE_INFINITY;
+
+export class CaptionLedger {
+  private readonly lines = new Map<string, CaptionLine>();
+
+  constructor(
+    private readonly limits: {
+      maxEnded: () => number;
+      endedKeptMs: number;
+      shown: () => ReadonlySet<string>;
+      onForget: (lineIds: string[]) => void;
+      onRelease: (lineId: string) => void;
+    },
+  ) {}
+
+  get size(): number {
+    return this.lines.size;
+  }
+
+  get(id: string): CaptionLine | undefined {
+    return this.lines.get(id);
+  }
+
+  all(): CaptionLine[] {
+    return Array.from(this.lines.values()).sort((left, right) => placeOrder(left) - placeOrder(right));
+  }
+
+  active(): CaptionLine[] {
+    return this.all().filter(isActive);
+  }
+
+  activeUnordered(): CaptionLine[] {
+    return Array.from(this.lines.values()).filter(isActive);
+  }
+
+  add(
+    line: Omit<CaptionLine, "id" | "text" | "freshText" | "replayed"> & { text?: string },
+  ): CaptionLine {
+    const created: CaptionLine = {
+      id: crypto.randomUUID(),
+      text: "",
+      freshText: false,
+      replayed: false,
+      ...line,
+    };
+    this.lines.set(created.id, created);
+    return created;
+  }
+
+  end(line: CaptionLine, state: "gap" | "final" | "dropped", text = line.text, now = Date.now()): void {
+    line.state = state;
+    line.text = text;
+    line.deadlineAt = Number.POSITIVE_INFINITY;
+    line.endedAt = now;
+    this.limits.onRelease(line.id);
+    this.forgetOldEnded(now, line.id);
+  }
+
+  forgetOldEnded(now: number, ending?: string): void {
+    const shown = this.limits.shown();
+    const ended = Array.from(this.lines.values())
+      .filter((line) => !isActive(line) && !shown.has(line.id))
+      .sort((left, right) =>
+        left.id === ending ? -1 : right.id === ending ? 1 : placeOrder(right) - placeOrder(left),
+      );
+    const maxEnded = this.limits.maxEnded();
+    const forgotten = ended
+      .filter(
+        (line, index) =>
+          line.id !== ending && (index >= maxEnded || now - (line.endedAt ?? now) > this.limits.endedKeptMs),
+      )
+      .map(({ id }) => id);
+    if (forgotten.length === 0) return;
+    for (const id of forgotten) this.lines.delete(id);
+    this.limits.onForget(forgotten);
+  }
+
+  remove(id: string): void {
+    this.limits.onRelease(id);
+    this.lines.delete(id);
+  }
+
+  forgetEnded(epoch: number): void {
+    for (const line of this.lines.values()) {
+      if (!isActive(line) && line.epoch === epoch) this.lines.delete(line.id);
+    }
+  }
+
+  forgetShownExcept(kept: ReadonlySet<string>): void {
+    for (const line of this.lines.values()) {
+      if (!isActive(line) && !kept.has(line.id)) this.lines.delete(line.id);
+    }
+  }
+
+  clear(): void {
+    for (const id of this.lines.keys()) this.limits.onRelease(id);
+    this.lines.clear();
+  }
+}
+
+export class ProviderConnection {
+  role: "live" | "draining" = "live";
+  readonly providerToLine = new Map<string, string>();
+  readonly commitQueue: QueuedCommit[] = [];
+  quietAt = 0;
+  block: { next: number; end: number } | null = null;
+  timer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(
+    readonly epoch: number,
+    readonly session: LiveTranscriptionSession,
+  ) {}
+
+  bind(providerItemId: string, lineId: string): void {
+    this.providerToLine.set(providerItemId, lineId);
+  }
+
+  providerIdsOf(lineId: string): string[] {
+    return Array.from(this.providerToLine.entries()).flatMap(([providerItemId, id]) =>
+      id === lineId ? [providerItemId] : [],
+    );
+  }
+
+  lineOf(providerItemId: string): string | undefined {
+    return this.providerToLine.get(providerItemId);
+  }
+
+  forgetLinesExcept(kept: (lineId: string) => boolean): void {
+    for (const [providerItemId, lineId] of this.providerToLine) {
+      if (!kept(lineId)) this.providerToLine.delete(providerItemId);
+    }
+  }
+}

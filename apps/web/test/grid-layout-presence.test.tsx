@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import GridLayout from "../src/app/components/GridLayout";
+import MeetingReadyCard from "../src/app/components/MeetingReadyCard";
 import {
   DEFAULT_MEET_VIEW_SETTINGS,
   type MeetSelfViewMode,
@@ -46,6 +47,14 @@ function renderGrid(
       getDisplayName={(id) => id}
       viewSettings={{ ...DEFAULT_MEET_VIEW_SETTINGS, hideTilesWithoutVideo }}
       isMobile={isMobile}
+      meetingReadyCard={
+        <MeetingReadyCard
+          roomId="abc-defg-hij"
+          isHost={false}
+          isMobile={isMobile}
+          onDismiss={() => {}}
+        />
+      }
     />,
   );
 }
@@ -58,12 +67,12 @@ describe("GridLayout meeting presence", () => {
 
       expect(html).toContain('data-meet-view-ordered-count="0"');
       expect(html).not.toContain("You are the only one here");
-      expect(html).not.toContain("Invite people");
+      expect(html).not.toContain("Add others");
     },
   );
 
   it("does not show the mobile solo invite when peers are hidden", () => {
-    expect(renderGrid(["peer"], true, true)).not.toContain("Invite people");
+    expect(renderGrid(["peer"], true, true)).not.toContain("Add others");
   });
 
   it("does not show a solo invite when camera-off peers are visible", () => {
