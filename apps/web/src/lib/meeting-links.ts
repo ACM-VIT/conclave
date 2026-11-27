@@ -13,7 +13,7 @@ export const roomIdFromMeetingPath = (segment: string): string =>
 
 export const buildMeetingPath = (meeting: MeetingLinkInput): string | null => {
   const { roomCode } = meeting;
-  if (APP_ROUTES.has(roomCode) || roomIdFromMeetingPath(roomCode) !== roomCode) return null;
+  if (!roomCode || APP_ROUTES.has(roomCode) || roomIdFromMeetingPath(roomCode) !== roomCode) return null;
   const path = `/${encodeURIComponent(roomCode)}`;
   const clientId = canonicalizeSfuClientId(meeting.clientId);
   return clientId ? `${path}?clientId=${encodeURIComponent(clientId)}` : path;

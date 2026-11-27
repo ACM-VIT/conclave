@@ -99,7 +99,7 @@ function seededIds(count: number): string[] {
 describe("meeting links", () => {
   it("open the room and tenant they name, and are refused only when no link can", async () => {
     const failures: string[] = [];
-    const ids = [...LINKABLE, ...REWRITTEN_BY_THE_ROUTE, ...seededIds(600)];
+    const ids = ["", "null", "undefined", ...LINKABLE, ...REWRITTEN_BY_THE_ROUTE, ...seededIds(600)];
     for (const roomCode of ids) {
       for (const clientId of [TENANT, "conclave", "default"]) {
         const wanted = { roomId: roomCode, clientId: canonicalizeSfuClientId(clientId) };
