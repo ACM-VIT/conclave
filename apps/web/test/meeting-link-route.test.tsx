@@ -16,6 +16,7 @@ vi.mock("@/lib/scheduled-meetings", () => ({
 }));
 vi.mock("@/lib/site-url", () => import("../src/lib/site-url"));
 vi.mock("@/lib/meeting-links", () => import("../src/lib/meeting-links"));
+vi.mock("@/lib/meeting-origin", () => import("../src/lib/meeting-origin"));
 vi.mock("@/lib/sfu-client-id", () => import("../src/lib/sfu-client-id"));
 vi.mock("@/app/lib/utils", () => import("../src/app/lib/utils"));
 vi.mock("next/dynamic", () => ({ default: lazy }));
@@ -29,6 +30,7 @@ vi.mock("../src/app/components/RouteLoadingState", () => ({ default: () => null 
 import MeetRoomPage from "../src/app/[code]/page";
 import JoinScreen from "../src/app/components/JoinScreen";
 import { ActivityDrawer } from "../src/app/sfu-admin/ActivityDrawer";
+import WebinarLandingClient, { type PublicScheduledWebinar } from "../src/app/w/[code]/WebinarLandingClient";
 import { APP_ROUTE_SEGMENTS } from "../src/app/lib/utils";
 import { DEFAULT_VIDEO_EFFECTS } from "../src/app/lib/video-effects";
 import { buildMeetingUrl } from "../src/lib/meeting-links";
@@ -36,6 +38,66 @@ import { canonicalizeSfuClientId, resolveBrowserSfuClientId } from "../src/lib/s
 
 const ORIGIN = "https://conclave.example";
 const TENANT = "acme";
+const webinarFixture = (): PublicScheduledWebinar => ({
+  id: "webinar-1",
+  linkSlug: "launch",
+  title: "Acme launch",
+  description: "A webinar",
+  hostName: "Host",
+  scheduledStartAt: Date.now() + 3_600_000,
+  scheduledEndAt: Date.now() + 7_200_000,
+  status: "scheduled",
+  publicAccess: true,
+  requiresInviteCode: false,
+  waitingRoomEnabled: false,
+  earlyEntryMinutes: 0,
+  qaEnabled: false,
+  webinarLink: `${ORIGIN}/w/launch`,
+  roomId: "webinar-1",
+  clientId: TENANT,
+  totalJoinCount: 0,
+  peakAttendeeCount: 0,
+});
+
+describe("webinar landing destinations", () => {
+  it("uses the selected tenant when refreshing webinar status", async () => {
+    const webinar = webinarFixture();
+    const fetcher = vi.fn(async (url: string) => Response.json({
+      scheduledWebinar: new URL(url, ORIGIN).searchParams.get("clientId") === TENANT
+        ? { ...webinar, status: "cancelled" }
+        : null,
+    }));
+    vi.stubGlobal("fetch", fetcher);
+    const timer = vi.spyOn(window, "setInterval");
+    try {
+      await act(async () => root.render(
+        <WebinarLandingClient webinarLinkCode="launch" clientId={TENANT} initialWebinar={webinar} />,
+      ));
+      const refresh = timer.mock.calls.find(([, delay]) => delay === 20_000)?.[0];
+      if (typeof refresh !== "function") throw new Error("Webinar did not schedule a refresh");
+      await act(async () => { refresh(); });
+      expect(fetcher).toHaveBeenCalledWith("/api/webinars/by-slug/launch?clientId=acme", { cache: "no-store" });
+      expect(container.textContent).toContain("Webinar cancelled");
+    } finally {
+      timer.mockRestore();
+    }
+  });
+
+  it("uses the same tenant-scoped URL for clipboard and calendar", async () => {
+    await act(async () => root.render(
+      <WebinarLandingClient webinarLinkCode="launch" clientId={TENANT} initialWebinar={webinarFixture()} />,
+    ));
+    const copy = Array.from(container.querySelectorAll("button")).find(button => button.textContent?.includes("Copy the link"));
+    const calendar = Array.from(container.querySelectorAll("a")).find(link => link.textContent?.includes("Add to calendar"));
+    if (!copy || !calendar) throw new Error("Webinar sharing controls are missing");
+    await act(async () => copy.click());
+    const expected = `${ORIGIN}/w/launch?clientId=acme`;
+    const params = new URL(calendar.href).searchParams;
+    expect(clipboard).toEqual([expected]);
+    expect(params.get("location")).toBe(expected);
+    expect(params.get("details")).toContain(`Join: ${expected}`);
+  });
+});
 const LINKABLE = ["team-room", "abc-defg-hij", "a".repeat(64)];
 const REWRITTEN_BY_THE_ROUTE = [
   "team_room",
