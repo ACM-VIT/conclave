@@ -1344,12 +1344,14 @@ internal class SocketIOManager {
     }
 
     internal suspend fun syncApp(appId: String, stateVector: Data): AppsSyncResponse {
+        val wheelFormat = if (appId == "wheel") 2 else null
         val payload = JSONObject()
             .put("appId", appId)
             .put("syncMessage", encodeBase64(stateVector))
             .put("wholeChanges", true)
+        if (wheelFormat != null) payload.put("wheelFormat", wheelFormat)
         val data = emit(SocketEvent.appsYjsSync, payload)
-        val response = decodeAppsSyncResponse(data)
+        val response = decodeAppsSyncResponse(data, wheelFormat)
             ?: throw ErrorException("Invalid app sync acknowledgement.")
         return response
     }
@@ -2101,12 +2103,13 @@ internal class SocketIOManager {
         }
     }
 
-    private fun decodeAppsSyncResponse(data: Data): AppsSyncResponse? {
+    private fun decodeAppsSyncResponse(data: Data, wheelFormat: Int?): AppsSyncResponse? {
         val obj = try {
             JSONObject(dataToString(data))
         } catch (_: Throwable) {
             return null
         }
+        if (wheelFormat != null && intField(obj, "wheelFormat") != wheelFormat) return null
         val syncMessage = byteData(obj.opt("syncMessage"), allowEmpty = true) ?: return null
         return AppsSyncResponse(
             syncMessage = syncMessage,

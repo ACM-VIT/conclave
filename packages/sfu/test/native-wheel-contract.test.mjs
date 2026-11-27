@@ -93,6 +93,24 @@ it("refuses an unversioned top-level write instead of hiding it in a released Wh
   expect(cold.getArray("wheel.entries").length).toBe(0);
 });
 
+it("keeps names already committed in the top-level list before version negotiation", async () => {
+  const pool = createAppDocumentPool({ workers: 1, deadlineMs: 5_000, maxDocumentBytes: 1024 * 1024 });
+  const doc = new Y.Doc();
+  const cold = new Y.Doc();
+  cleanups.push(() => pool.close(), () => doc.destroy(), () => cold.destroy());
+  const saved = pool.open();
+  addEntries(doc, ["Kay"]);
+  expect(await saved.apply(Y.encodeStateAsUpdate(doc))).toEqual({ ok: true });
+
+  const oldWrite = Buffer.from(releasedAda, "base64");
+  expect(await saved.applyValidated([oldWrite], false, { preflight: () => null, authorize: () => null }, 1))
+    .toMatchObject({ ok: false, reason: "wheel-format" });
+  const snapshot = await saved.sync(Y.encodeStateVector(cold));
+  expect(snapshot.ok).toBe(true);
+  Y.applyUpdate(cold, snapshot.update);
+  expect(labels(cold)).toEqual(["Kay"]);
+});
+
 it.each([64, 65])("handles released sort, remove and clear with %s committed names", async (count) => {
   const room = await wheelRoom(`wheel-legacy-policy-${count}`);
   expect((await room.acknowledged({ update: releasedAda })).receipt).toEqual({ committed: true });

@@ -9,11 +9,12 @@ export const watchWheelWrite = (doc: Y.Doc, format: WheelFormat) => {
   const nested = wheel.get("entries");
   const topLevel = doc.getArray("wheel.entries");
   const receipts = doc.getArray("wheel.addReceipts");
+  const hasTopLevelNames = topLevel.length > 0;
   let compatible = true;
   const watchRoot = ({ keysChanged }: Y.YMapEvent<unknown>) => {
     if (format === 1) {
       compatible &&= !keysChanged.has("order") &&
-        (!keysChanged.has("entries") || (nested === undefined && wheel.get("entries") instanceof Y.Array));
+        (!keysChanged.has("entries") || (nested === undefined && !hasTopLevelNames && wheel.get("entries") instanceof Y.Array));
     } else {
       compatible &&= !keysChanged.has("entries");
     }
