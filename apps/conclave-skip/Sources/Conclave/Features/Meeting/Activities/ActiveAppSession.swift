@@ -155,6 +155,7 @@ final class ActiveAppSession {
 
     func end() {
         if appSessionId.isEmpty { return }
+        cancelAddProbe()
         finishLeave(requestId: leaveRequestId, saved: false)
         send(AppBridgeOutboundType.close, requestId: nextRequestId(), payload: [:])
         let ended = appSessionId
@@ -238,6 +239,7 @@ final class ActiveAppSession {
         if isConnectionLive == live { return }
         isConnectionLive = live
         if !live {
+            cancelAddProbe()
             finishLeave(requestId: leaveRequestId, saved: false)
             connectionEpoch += 1
             primeTask?.cancel()
@@ -370,8 +372,7 @@ final class ActiveAppSession {
         snapshotDelivered = false
         syncTask?.cancel()
         syncTask = nil
-        addProbeTask?.cancel()
-        addProbeTask = nil
+        cancelAddProbe()
     }
 
     func embedFailed(appSessionId id: String, issue: AppHostIssue, mount: Int = 0) {
@@ -532,14 +533,23 @@ final class ActiveAppSession {
         return AppBridgeRejection.none
     }
 
-    private func confirmWheelAdds(stateVector: Data, requestId: String) {
+    private func cancelAddProbe() {
         addProbeTask?.cancel()
-        let mount = bridgeGeneration
-        let epoch = connectionEpoch
+        addProbeTask = nil
+    }
+
+    private func confirmWheelAdds(stateVector: Data, requestId: String) {
+        guard isConnectionLive else { return }
+        cancelAddProbe()
+        let expectedSession = appSessionId
+        let expectedMount = bridgeGeneration
+        let expectedEpoch = connectionEpoch
         addProbeTask = Task { @MainActor [weak self] in
-            guard let self else { return }
+            guard let self, !Task.isCancelled, self.isConnectionLive, self.appSessionId == expectedSession,
+                  self.bridgeGeneration == expectedMount, self.connectionEpoch == expectedEpoch else { return }
             let response = try? await self.syncActiveApp(stateVector: stateVector)
-            if Task.isCancelled || self.bridgeGeneration != mount || self.connectionEpoch != epoch { return }
+            guard !Task.isCancelled, self.isConnectionLive, self.appSessionId == expectedSession,
+                  self.bridgeGeneration == expectedMount, self.connectionEpoch == expectedEpoch else { return }
             self.addProbeTask = nil
             _ = self.send(.snapshot, requestId: requestId, payload: [
                 "syncMessage": response?.syncMessage.base64EncodedString() ?? "",

@@ -233,6 +233,7 @@ export class NativeEmbedSession {
         return "none";
       case "resync":
         this.synced = false;
+        this.resetAddProbe();
         this.send("sync", { stateVector: this.roomVector() });
         this.notify();
         return "none";
@@ -290,7 +291,7 @@ export class NativeEmbedSession {
     this.uploads.clear();
     this.held.length = 0;
     this.pendingAdds.clear();
-    clearTimeout(this.addProbeTimer);
+    this.resetAddProbe();
     this.roomDoc?.destroy();
     this.commandHandler = null;
     this.doc.off("update", this.handleDocUpdate);
@@ -399,12 +400,7 @@ export class NativeEmbedSession {
       userName: typeof payload.userName === "string" ? cutText(payload.userName, 128) : "",
     };
     if (wasReadOnly !== this.host.readOnly) this.lastStatus = "";
-    if (this.host.connection !== "live") {
-      this.addProbeId = null;
-      this.addProbeAttempts = 0;
-      clearTimeout(this.addProbeTimer);
-      this.addProbeTimer = undefined;
-    }
+    if (this.host.connection !== "live") this.resetAddProbe();
     this.uploads.wake();
     this.advanceLeave();
     this.scheduleAddProbe();
@@ -475,6 +471,13 @@ export class NativeEmbedSession {
     }, 750);
   }
 
+  private resetAddProbe(): void {
+    clearTimeout(this.addProbeTimer);
+    this.addProbeTimer = undefined;
+    this.addProbeId = null;
+    this.addProbeAttempts = 0;
+  }
+
   private canProbeAdds(): boolean {
     return !this.closed && this.synced && this.pendingAdds.size > 0 &&
       this.addProbeAttempts < 3 && this.host.connection === "live" && !this.uploads.hasPending(this.scope.appId);
@@ -487,6 +490,7 @@ export class NativeEmbedSession {
       this.pendingAdds.delete(id);
       this.acknowledge(id, add.result);
     }
+    if (this.pendingAdds.size === 0) this.resetAddProbe();
   }
 
   private acknowledge(requestId: string, result: CommandResult): void {
