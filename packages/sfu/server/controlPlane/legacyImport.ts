@@ -85,13 +85,18 @@ export const finishLegacyImport =
 const legacyImportState: Query<LegacyImportState | null> = (view) =>
   view.get("legacyImport", LEGACY_IMPORT_ID)?.value ?? null;
 
-const deletedHere = (tx: Tx, kind: DataKind, id: string, copy: HashedLegacyRecord): "new" | "same" | "changed" => {
-  if (tx.tombstone(kind, id) === null) return "new";
+type Removed = "new" | "same" | "changed";
+
+const removedHere = (tx: Tx, kind: DataKind, id: string, copy: HashedLegacyRecord): Removed => {
   const removal = tx.get("removal", legacyCopyKey(kind, id))?.value ?? null;
-  if (!removal) return "changed";
-  const matching = removal.deleted.filter((entry) => entry.identity === copy.identity);
+  const matching = removal?.deleted.filter((entry) => entry.identity === copy.identity) ?? [];
   if (matching.length === 0) return "new";
   return matching.some((entry) => entry.hash === copy.hash) ? "same" : "changed";
+};
+
+const deletedHere = (tx: Tx, kind: DataKind, id: string, copy: HashedLegacyRecord): Removed => {
+  if (tx.tombstone(kind, id) === null) return "new";
+  return tx.get("removal", legacyCopyKey(kind, id)) ? removedHere(tx, kind, id, copy) : "changed";
 };
 
 const where = (source: string): string => (source === PRIMARY_SOURCE ? "the old store" : `the container copy ${source}`);
@@ -144,6 +149,12 @@ const reconcileOne = (tx: Tx, source: string, item: LegacyItem, counts: ImportCo
   }
   if (liveHash === copy.hash) {
     counts.kept += 1;
+    return;
+  }
+  const removed = removedHere(tx, kind, id, copy);
+  if (removed !== "new") {
+    if (removed === "same") counts.kept += 1;
+    else conflict(kind, id, `was changed in ${origin} and deleted here`, counts);
     return;
   }
   if (!fromHere && live.legacy === null) {

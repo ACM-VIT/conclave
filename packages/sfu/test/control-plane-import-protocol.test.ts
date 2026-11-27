@@ -168,6 +168,30 @@ describe.each(modes)("a %s store following an old SFU's calendar", (mode) => {
     expect(await second.read(hostCalendar("q"))).toBeNull();
     expect(conflictsLogged()).toEqual(["calendar q"]);
   });
+
+  it.each([
+    ["changed since", { updatedAt: 600 }, ["calendar p"]],
+    ["exactly as it was", {}, []],
+  ] as const)(
+    "keeps the newer connection when the old store shows the one disconnected here again, %s",
+    async (_, staleFields, conflicts) => {
+      const old = await oldSfu(mode);
+      await old.putProfile(legacyProfile("p"));
+      await old.putCalendar(legacyCalendar("p", SECRET, { id: "connection-a" }));
+      const first = await start();
+      expect((await first.commit(disconnectHostCalendar("p"))).ok).toBe(true);
+
+      await old.putCalendar(legacyCalendar("p", SECRET, { id: "connection-b", updatedAt: 500 }));
+      const second = await restart(first);
+      expect((await second.read(hostCalendar("p")))?.id).toBe("connection-b");
+
+      await old.putCalendar(legacyCalendar("p", SECRET, { id: "connection-a", ...staleFields }));
+      const third = await restart(second);
+      expect((await third.read(hostCalendar("p")))?.id).toBe("connection-b");
+      expect(conflictsLogged()).toEqual(conflicts);
+      expect((await (await restart(third)).read(hostCalendar("p")))?.id).toBe("connection-b");
+    },
+  );
 });
 
 describe("an SFU whose import a newer one superseded", () => {
