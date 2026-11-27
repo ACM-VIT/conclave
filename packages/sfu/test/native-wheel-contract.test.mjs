@@ -89,3 +89,62 @@ it.each(["echo", "snapshot"])("acknowledges a native Wheel add only after the se
     setSounds: () => ({ ok: false }),
   })).toEqual({ ok: true, added: [0] });
 });
+
+it.each(["echo", "resync", "resync with a probe in flight"])("gives the next Wheel upload a full echo window after %s", async (boundary) => {
+  vi.useFakeTimers();
+  const scope = { callSessionId: "timing-call", appSessionId: "timing-wheel", appId: "wheel" };
+  const local = new Y.Doc();
+  const messages = [];
+  let receive = () => undefined;
+  const session = new NativeEmbedSession({
+    platform: "ios",
+    post: (raw) => messages.push(JSON.parse(raw)),
+    onMessage: (handler) => { receive = handler; },
+  }, scope, local);
+  cleanups.push(() => { session.close(); local.destroy(); });
+  session.start((envelope, repeat, doc) => runWheelCommand(doc, envelope.type, envelope.payload, {
+    repeat, synced: true, canEdit: true, spinning: false,
+    requestSpin: () => ({ ok: false }),
+    setSounds: () => ({ ok: false }),
+  }));
+  const host = (type, id, payload) => expect(receive(encodeEnvelope(type, scope, id, payload))).toBe("none");
+  const snapshot = { syncMessage: "AAA=", stateVector: "AA==" };
+  const add = (label, id) => host("addEntries", id, { labels: [label], tokens: [id], sentAt: Date.now() });
+  const uploads = () => messages.filter(({ type }) => type === "update");
+  const probes = () => messages.filter(({ type, payload }) => type === "sync" && payload.purpose === "wheel-add-confirmation");
+  const firstAck = () => messages.find(({ type, requestId }) => type === "ack" && requestId === "add-a");
+  host("status", "live", { connection: "live" });
+  host("snapshot", "initial", snapshot);
+  add("Ada", "add-a");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(uploads()).toHaveLength(1);
+
+  if (boundary === "echo") {
+    host("update", "echo-a", uploads()[0].payload);
+    expect(firstAck()?.payload).toEqual({ ok: true, added: [0] });
+    await vi.advanceTimersByTimeAsync(700);
+    add("Lin", "add-b");
+  } else {
+    if (boundary === "resync") {
+      host("status", "reconnecting", { connection: "reconnecting" });
+      host("status", "live-again", { connection: "live" });
+      host("resync", "resync", {});
+      await vi.advanceTimersByTimeAsync(700);
+    } else {
+      await vi.advanceTimersByTimeAsync(750);
+      expect(probes()).toHaveLength(1);
+      host("resync", "resync", {});
+      host("snapshot", probes()[0].requestId, { syncMessage: uploads()[0].payload.update });
+      expect(firstAck()).toBeUndefined();
+    }
+    host("snapshot", "after-resync", snapshot);
+  }
+
+  const previousProbes = boundary === "resync with a probe in flight" ? 1 : 0;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(uploads()).toHaveLength(2);
+  await vi.advanceTimersByTimeAsync(100);
+  expect(probes()).toHaveLength(previousProbes);
+  await vi.advanceTimersByTimeAsync(650);
+  expect(probes()).toHaveLength(previousProbes + 1);
+});

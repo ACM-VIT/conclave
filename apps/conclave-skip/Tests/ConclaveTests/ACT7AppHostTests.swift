@@ -207,6 +207,25 @@ struct ACT7AppHostTests {
         #expect(relay.snapshotDelivered && relay.isReady)
     }
 
+    @Test(arguments: ["disconnect", "switch", "offline"])
+    func aWheelConfirmationCannotSyncAfterItsConnectionOrSessionEnds(_ exit: String) async {
+        let wire = Wire()
+        let relay = session(wire, appId: "wheel")
+        #expect(ready(relay) == .none)
+        await settle { relay.snapshotDelivered }
+        #expect(wire.syncs == [Data([0])])
+        if exit == "offline" { relay.setConnection(live: false) }
+
+        let request = envelope(relay, "sync", ["stateVector": "AQ==", "purpose": "wheel-add-confirmation"],
+                               requestId: "wheel-confirm-1")
+        #expect(relay.receiveFromEmbed(raw: request, origin: AppBridgeProtocol.iosOrigin, isMainFrame: true) == .none)
+        if exit == "disconnect" { relay.setConnection(live: false) }
+        if exit == "switch" { relay.begin(appId: "whiteboard", callSessionId: Self.call, isReadOnly: false) }
+
+        await settle { wire.syncs.count > 1 }
+        #expect(wire.syncs == [Data([0])])
+    }
+
     @Test func readyGetsHostStatusThenTheSnapshotThenBufferedRoomBytes() async throws {
         let wire = Wire()
         let relay = session(wire)
