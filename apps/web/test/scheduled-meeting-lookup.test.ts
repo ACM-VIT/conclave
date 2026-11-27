@@ -133,7 +133,8 @@ describe("looking up whether a link is a scheduled meeting", () => {
     sfuUrls = ["http://sfu-a.test", "http://sfu-b.test"];
     const request = vi.fn(async (_url: string) => new Response(null, { status: 404 }));
     vi.stubGlobal("fetch", request);
-    await expect(lookupScheduledMeetingForCode(destination)).rejects.toMatchObject({ name: "SfuTooOldForBookingsError" });
+    await expect(lookupScheduledMeetingForCode(destination, { allowLegacyBooking: true })).resolves.toEqual({ kind: "unknown" });
+    expect(request.mock.calls.map(([url]) => new URL(url).searchParams.get("clientId"))).toEqual(["conclave", "conclave"]);
     expect(request.mock.calls.map(([url]) => new URL(url).pathname)).toEqual([
       "/scheduled-meetings/public/v2/by-room/abc-mnop-xyz",
       "/scheduled-meetings/public/v2/by-room/abc-mnop-xyz",

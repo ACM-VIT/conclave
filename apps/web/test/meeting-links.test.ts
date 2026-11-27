@@ -5,7 +5,6 @@ import {
   findScheduledMeetingForLink,
   resolveBrowserSfuClientId,
 } from "../src/lib/sfu-client-id";
-import { SfuTooOldForBookingsError } from "../src/lib/scheduled-meeting-lookup";
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -121,13 +120,14 @@ describe("meeting links", () => {
     expect(await findScheduledMeetingForLink("acme", answer({ id: "b", roomCode: ROOM }))).toBeNull();
   });
 
-  it("passes an older SFU's refusal on instead of guessing a tenant", async () => {
+  it("passes a lookup failure on instead of guessing a tenant", async () => {
     deployment("conclave", "conclave");
-    const olderSfu = async () => {
-      throw new SfuTooOldForBookingsError();
+    const failure = new Error("lookup unavailable");
+    const unavailable = async () => {
+      throw failure;
     };
 
-    await expect(findScheduledMeetingForLink("acme", olderSfu)).rejects.toBeInstanceOf(SfuTooOldForBookingsError);
-    await expect(findScheduledMeetingForLink(undefined, olderSfu)).rejects.toBeInstanceOf(SfuTooOldForBookingsError);
+    await expect(findScheduledMeetingForLink("acme", unavailable)).rejects.toBe(failure);
+    await expect(findScheduledMeetingForLink(undefined, unavailable)).rejects.toBe(failure);
   });
 });

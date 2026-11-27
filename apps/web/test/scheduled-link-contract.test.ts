@@ -15,7 +15,6 @@ import { registerSchedulingRoutes } from "../../../packages/sfu/server/http/sche
 import { buildSchedulingMeetingLink } from "../../../packages/sfu/server/schedulingLinks.js";
 import type { SfuState } from "../../../packages/sfu/server/state.js";
 import { roomIdFromMeetingPath } from "../src/lib/meeting-links";
-import { isSfuTooOldForBookings } from "../src/lib/scheduled-meeting-lookup";
 import { lookupScheduledMeetingForCode } from "../src/lib/scheduled-meetings";
 import { resolveMeetingClientId } from "../src/lib/sfu-client-id";
 
@@ -208,8 +207,8 @@ describe("scheduled links against the current SFU", () => {
   });
 
   it.each([
+    [true, true],
     [undefined, true],
-    [undefined, false],
     [false, true],
   ] as const)("uses booking-link evidence in either SFU order (%s and %s)", async (first, bookingLink) => {
     vi.stubEnv("SFU_CLIENT_ID", "acme");
@@ -222,14 +221,14 @@ describe("scheduled links against the current SFU", () => {
       app.get("/rooms/:roomId", (_req, res) => res.json({ room: null }));
     });
     await addSfu({ ...meeting, bookingLink: first });
-    const upgraded = await addSfu({ ...meeting, bookingLink });
-    const expected = bookingLink && first !== false
-      ? { kind: "scheduled", clientId: "conclave", sfuUrl: upgraded, meeting: { ...meeting, bookingLink } }
+    await addSfu({ ...meeting, bookingLink });
+    const expected = bookingLink && first === true
+      ? { kind: "scheduled", clientId: "conclave", meeting: { ...meeting, bookingLink } }
       : { kind: "unscheduled" };
 
-    expect(await open(`${ORIGIN}/${ROOM}`)).toEqual(expected);
+    expect(await open(`${ORIGIN}/${ROOM}`)).toMatchObject(expected);
     sfuUrls.reverse();
-    expect(await open(`${ORIGIN}/${ROOM}`)).toEqual(expected);
+    expect(await open(`${ORIGIN}/${ROOM}`)).toMatchObject(expected);
   });
 
   it("keeps a bare link in the default tenant when a local room outlives its registry lease", async () => {
@@ -250,7 +249,7 @@ describe("scheduled links against the current SFU", () => {
     expect(await open(buildSchedulingMeetingLink(ORIGIN, booking))).toMatchObject({ kind: "scheduled", clientId: "conclave" });
   });
 
-  it("reports an unsupported service without trying a different endpoint", async () => {
+  it("treats a missing endpoint as unknown without trying a different endpoint", async () => {
     const requested: string[] = [];
     await startSfu((app) => {
       app.use((req, res) => {
@@ -258,7 +257,7 @@ describe("scheduled links against the current SFU", () => {
         res.sendStatus(404);
       });
     });
-    await expect(open(`${ORIGIN}/${ROOM}?clientId=conclave`)).rejects.toSatisfy(isSfuTooOldForBookings);
+    expect(await open(`${ORIGIN}/${ROOM}?clientId=conclave`)).toEqual({ kind: "unknown" });
     expect(requested).toEqual([`/scheduled-meetings/public/v2/by-room/${ROOM}`]);
   });
 });

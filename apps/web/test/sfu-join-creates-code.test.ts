@@ -74,3 +74,63 @@ describe("the claim that a join makes its code", () => {
     expect((await tokenFor(body)).createsCode).toBeUndefined();
   });
 });
+
+describe("room placement for an unassigned code", () => {
+  it("returns the reserved SFU and a signed token when status omits capabilities", async () => {
+    getSession.mockResolvedValue(ana);
+    const selectedUrl = "http://localhost:3031";
+    const reservedUrl = "http://localhost:3032";
+    vi.stubEnv("SFU_URLS", `${selectedUrl},${reservedUrl}`);
+    const reserve = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const { origin, pathname } = new URL(url);
+      if (pathname === "/status") {
+        return origin === selectedUrl ? Response.json({ healthy: true }) : new Response(null, { status: 503 });
+      }
+      if (pathname.startsWith("/routing/rooms/")) return Response.json({ owner: null, placement: null });
+      if (pathname.startsWith("/routing/placements/")) {
+        reserve(origin, pathname, init?.method);
+        return Response.json({
+          registryMode: "redis",
+          assignment: { kind: "placement", instanceId: "reserved-sfu", instanceUrl: reservedUrl },
+        });
+      }
+      throw new Error(`Unexpected request ${url}`);
+    }));
+
+    const response = await POST(new Request("http://localhost/api/sfu/join", {
+      method: "POST",
+      body: JSON.stringify({
+        clientId: "acme", roomId: "abc-mnop-xyz", sessionId: "session", isHost: true, createsMeeting: true,
+      }),
+    }));
+    expect(reserve).toHaveBeenCalledExactlyOnceWith(selectedUrl, "/routing/placements/acme/abc-mnop-xyz", "POST");
+    expect(response.status).toBe(200);
+    const { token, sfuUrl } = (await response.json()) as { token: string; sfuUrl: string };
+    expect(sfuUrl).toBe(reservedUrl);
+    expect(jwt.verify(token, SECRET)).toMatchObject({ email: ana.user.email, clientId: "acme", createsCode: true });
+  });
+
+  it.each([404, 405, 501])("does not sign a join token when placement returns %s", async (status) => {
+    getSession.mockResolvedValue(ana);
+    const reserve = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const { pathname } = new URL(url);
+      if (pathname === "/status") return Response.json({ healthy: true, draining: false });
+      if (pathname.startsWith("/routing/rooms/")) return Response.json({ owner: null, placement: null });
+      if (pathname.startsWith("/routing/placements/")) {
+        reserve(init?.method);
+        return new Response(null, { status });
+      }
+      throw new Error(`Unexpected request ${url}`);
+    }));
+
+    const response = await POST(new Request("http://localhost/api/sfu/join", {
+      method: "POST",
+      body: JSON.stringify({ roomId: "abc-mnop-xyz", sessionId: "session", isHost: true, createsMeeting: true }),
+    }));
+    expect(reserve).toHaveBeenCalledExactlyOnceWith("POST");
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "Meeting placement is temporarily unavailable. Try again shortly." });
+  });
+});

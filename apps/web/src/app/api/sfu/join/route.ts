@@ -17,7 +17,6 @@ import {
 } from "@/lib/sfu-url";
 import {
   resolveConfiguredOwnerSfuUrl,
-  resolveRoomPlacementCapability,
   resolveReservedSfuUrl,
   selectPreOwnerSfu,
   type PreOwnerSfuSelection,
@@ -108,9 +107,6 @@ type SfuStatusResponse = {
   draining?: boolean;
   healthy?: boolean;
   rooms?: number;
-  capabilities?: {
-    roomPlacement?: number;
-  };
 };
 
 const splitUrls = (value: string | undefined): string[] =>
@@ -139,7 +135,6 @@ const isScheduledRoomId = (value: string): boolean =>
 
 let roomRoutingWarningLogged = false;
 let sfuStatusWarningLogged = false;
-let legacyPlacementWarningLogged = false;
 
 const fetchWithTimeout = async (
   input: string,
@@ -273,7 +268,6 @@ const resolveNonDrainingSfuUrl = async (options: {
         ...(typeof status?.region === "string" && status.region.trim()
           ? { region: status.region.trim() }
           : {}),
-        roomPlacementCapability: resolveRoomPlacementCapability(status),
         latencyMs: Date.now() - startedAt,
       } satisfies SfuRoutingCandidate;
     }),
@@ -285,7 +279,6 @@ const resolveNonDrainingSfuUrl = async (options: {
         index,
         url: options.candidateSfuUrls[index] ?? "",
         availability: "unknown",
-        roomPlacementCapability: "unknown",
       } satisfies SfuRoutingCandidate;
     }
     return status.value;
@@ -301,7 +294,6 @@ type RoutedSfuResolution =
       ok: false;
       reason:
         | "all-draining"
-        | "placement-unsupported"
         | "placement-unavailable"
         | "unsafe-local-registry";
     };
@@ -339,14 +331,7 @@ const reserveRoomPlacement = async (options: {
   if (!response.ok) {
     return {
       ok: false,
-      reason:
-        response.status === 409
-          ? "all-draining"
-          : response.status === 404 ||
-              response.status === 405 ||
-              response.status === 501
-            ? "placement-unsupported"
-          : "placement-unavailable",
+      reason: response.status === 409 ? "all-draining" : "placement-unavailable",
     };
   }
 
@@ -406,24 +391,12 @@ const resolveRoutedSfuUrl = async (options: {
       );
       sfuStatusWarningLogged = true;
     }
-    if (selection.candidate.roomPlacementCapability === "legacy") {
-      if (!legacyPlacementWarningLogged) {
-        console.warn(
-          "[SFU Join] Selected SFU predates atomic room placement; using the stable deterministic route during the rolling upgrade.",
-        );
-        legacyPlacementWarningLogged = true;
-      }
-      return { ok: true, url: selection.candidate.url };
-    }
-
     let everyAttemptWasDraining = true;
     const reservationCandidates = [
       selection.candidate,
       ...selection.alternatives,
     ];
-    for (let index = 0; index < reservationCandidates.length; index += 1) {
-      const candidate = reservationCandidates[index];
-      if (!candidate) continue;
+    for (const candidate of reservationCandidates) {
       const reservation = await reserveRoomPlacement({
         candidate,
         candidateSfuUrls,
@@ -436,15 +409,6 @@ const resolveRoutedSfuUrl = async (options: {
       }
       if (reservation.reason === "unsafe-local-registry") {
         return reservation;
-      }
-      if (index === 0 && reservation.reason === "placement-unsupported") {
-        if (!legacyPlacementWarningLogged) {
-          console.warn(
-            "[SFU Join] Selected SFU does not expose atomic room placement; using the stable deterministic route during the rolling upgrade.",
-          );
-          legacyPlacementWarningLogged = true;
-        }
-        return { ok: true, url: selection.candidate.url };
       }
       if (reservation.reason !== "all-draining") {
         everyAttemptWasDraining = false;
