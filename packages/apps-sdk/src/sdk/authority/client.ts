@@ -114,12 +114,18 @@ const LOST = Symbol("lost");
 
 type Listener = () => void;
 
+type ActionEnd = "forbidden" | "not-in-room" | "unsupported" | "unknown-outcome";
 type ActionLifetime = {
-  ended: "forbidden" | "unknown-outcome" | null;
+  roomEpoch: string | null;
+  ended: ActionEnd | null;
   waits: Set<Listener>;
 };
 
-const actionLifetime = (): ActionLifetime => ({ ended: null, waits: new Set() });
+const actionLifetime = (): ActionLifetime => ({
+  roomEpoch: null,
+  ended: null,
+  waits: new Set(),
+});
 
 /** Codes that mean "ask again once the view is back", not "refused". */
 const RESUBSCRIBE_CODES: ReadonlySet<AuthorityFailureCode> = new Set([
@@ -164,6 +170,10 @@ export class AuthorityClient {
 
   get capabilities(): CapabilityState {
     return this.state;
+  }
+
+  get isAway(): boolean {
+    return this.away;
   }
 
   /** The server's clock less this one's, from its last capability answer, if any. */
@@ -282,10 +292,11 @@ export class AuthorityClient {
   request<Reply>(
     event: string,
     payload: unknown,
-    within = Number.POSITIVE_INFINITY,
+    deadline = Number.POSITIVE_INFINITY,
     lifetime?: ActionLifetime,
   ): Promise<Reply | typeof LOST> {
     return new Promise((resolve) => {
+      const within = deadline - this.now();
       if (!this.socket.connected || within <= 0 || lifetime?.ended) {
         resolve(LOST);
         return;
@@ -301,7 +312,9 @@ export class AuthorityClient {
       const lost = () => finish(LOST);
       const timer = setTimeout(lost, Math.max(0, Math.min(this.ackTimeoutMs, within)));
       lifetime?.waits.add(lost);
-      this.socket.emit(event, payload, (reply: unknown) => finish(reply as Reply));
+      this.socket.emit(event, payload, (reply: unknown) => {
+        finish(this.now() < deadline ? (reply as Reply) : LOST);
+      });
     });
   }
 
@@ -380,7 +393,6 @@ export class AuthoritySession<C extends AuthorityContract> {
   private refs = 0;
   private closed = false;
   private subscription: string | null = null;
-  private subscribedEpoch: string | null = null;
   private generation = 0;
   private seq = 0;
   private incoming: { generation: number; frames: ReplaceFrame[] } | null = null;
@@ -439,23 +451,16 @@ export class AuthoritySession<C extends AuthorityContract> {
     this.listeners.clear();
   }
 
-  /**
-   * Sends an action and resolves with the server's answer. If the answer is
-   * lost, or the view is being replaced, the same operation id is sent again
-   * until it is answered or the id expires, so one press is one action however
-   * many times it is sent. A resend stays in the room the action was first
-   * sent to: if the socket is in another room by then, or the room was
-   * recreated, the action ends as `unknown-outcome`.
-   */
   async act<K extends ActionName<C>>(
     action: K,
     input: ActionInput<C, K>,
   ): Promise<AuthorityResult<ActionReceipt<C, K>>> {
+    if (this.closed) return failure("unknown-outcome");
+    if (this.client.isAway) return failure("not-in-room");
     // Stamped once the view is in, so with the server's clock as it is told.
     let operation: OperationId | null = null;
     const deadline =
       this.client.now() + AUTHORITY_LIMITS.operationMaxAgeMs - RETRY_PAUSE_MS * 4;
-    let sentToEpoch: string | null = null;
     let mayHaveRun = false;
     const lifetime = this.actionLifetime;
     const timeLeft = () => deadline - this.client.now();
@@ -477,13 +482,8 @@ export class AuthoritySession<C extends AuthorityContract> {
       const afterReady = stopped();
       if (afterReady) return afterReady;
       if (!ready) continue;
-      const epoch = this.subscribedEpoch;
+      const epoch = lifetime.roomEpoch;
       if (this.state.kind !== "ready" || !this.subscription || !epoch) continue;
-      // A new room keeps no record of the operation and would run it afresh.
-      if (sentToEpoch !== null && epoch !== sentToEpoch) {
-        return failure("unknown-outcome");
-      }
-      sentToEpoch = epoch;
       operation ??= { issuedAtMs: Math.round(this.serverNow()), nonce: randomId() };
 
       const request: ActRequest = {
@@ -500,20 +500,27 @@ export class AuthoritySession<C extends AuthorityContract> {
       const reply = await this.client.request<AuthorityResult<Json>>(
         AUTHORITY_EVENTS.act,
         request,
-        timeLeft(),
+        deadline,
         lifetime,
       );
       const retryAfterResubscribe =
         reply !== LOST && !reply.ok && RESUBSCRIBE_CODES.has(reply.code);
       const rateLimited = reply !== LOST && !reply.ok && reply.code === "rate-limited";
       if (retryAfterResubscribe || rateLimited) mayHaveRun = hadUnansweredAttempt;
+      if (reply !== LOST && !retryAfterResubscribe && !(rateLimited && mayHaveRun)) {
+        const answer =
+          reply.ok && reply.revision !== undefined
+            ? { ...reply, revision: base + reply.revision }
+            : reply;
+        return answer as AuthorityResult<ActionReceipt<C, K>>;
+      }
       const afterReply = stopped();
       if (afterReply) return afterReply;
       if (reply === LOST) {
         await waitWithin(RETRY_PAUSE_MS);
         continue;
       }
-      if (rateLimited && mayHaveRun) {
+      if (rateLimited) {
         const wait = Math.max(RETRY_PAUSE_MS, reply.retryAfterMs ?? 0);
         if (wait >= timeLeft()) return failure("unknown-outcome");
         await waitWithin(wait);
@@ -528,13 +535,7 @@ export class AuthoritySession<C extends AuthorityContract> {
         const replaced =
           this.state.kind === "ready" && this.generation !== request.generation;
         if (!replaced) await waitWithin(RETRY_PAUSE_MS);
-        continue;
       }
-      const answer =
-        reply.ok && reply.revision !== undefined
-          ? { ...reply, revision: base + reply.revision }
-          : reply;
-      return answer as AuthorityResult<ActionReceipt<C, K>>;
     }
   }
 
@@ -543,7 +544,7 @@ export class AuthoritySession<C extends AuthorityContract> {
     query: K,
     input: QueryInput<C, K>,
   ): Promise<AuthorityResult<QueryOutput<C, K>>> {
-    const epoch = this.subscribedEpoch;
+    const epoch = this.actionLifetime.roomEpoch;
     if (this.state.kind !== "ready" || !this.subscription || !epoch) {
       return failure("not-subscribed");
     }
@@ -586,6 +587,7 @@ export class AuthoritySession<C extends AuthorityContract> {
     if (this.closed) return;
     const capabilities = this.client.capabilities;
     if (capabilities.kind === "unknown") {
+      if (this.client.isAway) this.endActions("not-in-room");
       this.clearRestart();
       this.refusals = 0;
       this.reset({ kind: "connecting" });
@@ -599,7 +601,7 @@ export class AuthoritySession<C extends AuthorityContract> {
       return;
     }
     const epoch = capabilities.capability.roomEpoch;
-    if (this.subscription && this.subscribedEpoch === epoch) return;
+    if (this.subscription && this.actionLifetime.roomEpoch === epoch) return;
     // Refused a moment ago in this same room: the wait already set asks again.
     if (this.restartTimer && this.restartEpoch === epoch) return;
     this.start(entry, epoch);
@@ -687,11 +689,13 @@ export class AuthoritySession<C extends AuthorityContract> {
   /* ---- Internals --------------------------------------------------------- */
 
   private start(entry: AuthorityAppEntry, epoch: string): void {
+    const previousEpoch = this.actionLifetime.roomEpoch;
+    if (previousEpoch !== null && previousEpoch !== epoch) this.endActions("not-in-room");
+    this.actionLifetime.roomEpoch = epoch;
     this.clearRestart();
     this.unsubscribe();
     this.failStreams();
     this.subscription = randomId();
-    this.subscribedEpoch = epoch;
     this.generation = 0;
     this.seq = 0;
     this.incoming = null;
@@ -858,7 +862,6 @@ export class AuthoritySession<C extends AuthorityContract> {
     options?: { keepSubscription?: boolean },
   ): void {
     if (!options?.keepSubscription) this.unsubscribe();
-    this.subscribedEpoch = null;
     this.generation = 0;
     this.seq = 0;
     this.incoming = null;
@@ -873,15 +876,16 @@ export class AuthoritySession<C extends AuthorityContract> {
       (next.kind === "connecting" || next.kind === "unsupported");
     if (unchanged) return;
     this.state = next;
+    if (next.kind === "unsupported") this.endActions("unsupported");
     if (next.kind === "revoked") {
       this.endActions(next.reason === "forbidden" ? "forbidden" : "unknown-outcome");
-      this.actionLifetime = actionLifetime();
     }
     for (const listener of [...this.listeners]) listener();
   }
 
-  private endActions(reason: NonNullable<ActionLifetime["ended"]>): void {
+  private endActions(reason: ActionEnd): void {
     const lifetime = this.actionLifetime;
+    this.actionLifetime = actionLifetime();
     lifetime.ended = reason;
     for (const done of lifetime.waits) done();
   }
