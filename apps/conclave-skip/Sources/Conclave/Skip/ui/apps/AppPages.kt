@@ -25,6 +25,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -44,17 +45,40 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+
+@Composable
+internal fun AppWheelNotices(
+    host: AppHostPresenter,
+    modifier: Modifier = Modifier,
+    style: TextStyle = LocalTextStyle.current,
+    color: Color = Color.Unspecified,
+) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        for (notice in host.wheelNotices) {
+            when (notice) {
+                WheelPageNotice.unconfirmed ->
+                    Text(conclaveString("app_wheel_unconfirmed"), Modifier.testTag("app.wheel.unconfirmed"), color = color, style = style)
+                WheelPageNotice.waiting ->
+                    Text(conclavePlural("app_wheel_waiting", host.wheel.waitingNames, host.wheel.waitingNames),
+                        Modifier.testTag("app.wheel.waiting"), color = color, style = style)
+                WheelPageNotice.full -> Text(conclaveString("app_wheel_full"), Modifier.testTag("app.wheel.full"), color = color, style = style)
+            }
+        }
+    }
+}
 
 @Composable
 internal fun AppWheelPage(host: AppHostPresenter, reservation: PaddingValues) {
@@ -76,12 +100,7 @@ internal fun AppWheelPage(host: AppHostPresenter, reservation: PaddingValues) {
                         enabled = !wheel.isFull,
                         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Done),
                         keyboardActions = KeyboardActions(onDone = { host.submitWheelDraft() }),
-                        supportingText = if (wheel.waitingNames > 0) ({
-                            Text(conclavePlural("app_wheel_waiting", wheel.waitingNames, wheel.waitingNames), Modifier.testTag("app.wheel.waiting"))
-                        })
-                        else if (wheel.isFull) ({ Text(conclaveString("app_wheel_full")) })
-                        else if (host.wheelDraft.isUnconfirmed) ({ Text(conclaveString("app_wheel_unconfirmed"), Modifier.testTag("app.wheel.unconfirmed")) })
-                        else null,
+                        supportingText = if (host.wheelNotices.count > 0) ({ AppWheelNotices(host) }) else null,
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("app.wheel.add"),
                     )
                 }
@@ -103,6 +122,12 @@ internal fun AppWheelPage(host: AppHostPresenter, reservation: PaddingValues) {
                             host.addEveryoneToWheel()
                         },
                     )
+                }
+            }
+            if (!wheel.canEdit && host.wheelNotices.count > 0) {
+                item(key = "notices") {
+                    AppWheelNotices(host, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                        MaterialTheme.typography.bodySmall, MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             if (wheel.entries.count == 0) {

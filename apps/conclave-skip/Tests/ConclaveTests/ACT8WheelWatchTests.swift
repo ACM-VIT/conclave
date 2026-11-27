@@ -597,6 +597,44 @@ struct ACT8WheelWatchTests {
         #expect(AppEmbedAppCodec.parse(["kind": "wheel", "waiting": AppWheelLimits.waiting + 1]) == nil)
     }
 
+    @Test func theNamesPageShowsEveryNoticeThatApplies() {
+        #expect(AppPagePolicy.wheelNotices(canEdit: true, isFull: true, waitingNames: 0, isUnconfirmed: true) == [.unconfirmed, .full])
+        #expect(AppPagePolicy.wheelNotices(canEdit: true, isFull: true, waitingNames: 2, isUnconfirmed: true) == [.unconfirmed, .waiting])
+        #expect(AppPagePolicy.wheelNotices(canEdit: true, isFull: false, waitingNames: 0, isUnconfirmed: true) == [.unconfirmed])
+        #expect(AppPagePolicy.wheelNotices(canEdit: true, isFull: true, waitingNames: 0, isUnconfirmed: false) == [.full])
+        #expect(AppPagePolicy.wheelNotices(canEdit: true, isFull: true, waitingNames: 1, isUnconfirmed: false) == [.waiting])
+        #expect(AppPagePolicy.wheelNotices(canEdit: false, isFull: true, waitingNames: 3, isUnconfirmed: true) == [.waiting])
+        #expect(AppPagePolicy.wheelNotices(canEdit: false, isFull: true, waitingNames: 0, isUnconfirmed: true).isEmpty)
+        #expect(AppPagePolicy.wheelNotices(canEdit: true, isFull: false, waitingNames: 0, isUnconfirmed: false).isEmpty)
+    }
+
+    @Test func aFullWheelStillSaysAnAddCouldNotBeConfirmedAndSomeoneWhoCannotEditStillSeesNamesWaiting() throws {
+        let wire = Wire()
+        let (presenter, relay) = wheelReady(wire)
+        presenter.editWheelDraft("Ada\nBo\n")
+        let add = try #require(addRequests(wire).first)
+        var full = Self.wheelApp(Self.names(64))
+        send(relay, "status", ["app": full], id: "e-3")
+        #expect(presenter.wheelNotices == [.full])
+        presenter.fireCommandTimeout(requestId: add.id)
+        let query = try #require(outcomeQueries(wire).last)
+        send(relay, "ack", ["ok": false, "error": "outcomeUnknown"], id: query.id)
+        #expect(presenter.wheel.isFull && presenter.wheelDraft.isUnconfirmed && presenter.wheelDraft.text == "Ada\nBo")
+        #expect(presenter.wheelNotices == [.unconfirmed, .full], "a full wheel does not hide that the add is unconfirmed")
+        full["waiting"] = 2
+        send(relay, "status", ["app": full], id: "e-4")
+        #expect(presenter.wheelNotices == [.unconfirmed, .waiting])
+
+        presenter.apply(AppHostInputs.make(callSession: 1, appId: "wheel", isHost: false, isLocked: true))
+        #expect(!presenter.wheel.canEdit && presenter.wheel.waitingNames == 2)
+        #expect(presenter.wheelNotices == [.waiting], "someone who cannot edit still sees that names wait")
+
+        presenter.apply(AppHostInputs.make(callSession: 1, appId: "wheel", isHost: true))
+        #expect(presenter.wheelNotices == [.unconfirmed, .waiting])
+        presenter.editWheelDraft("Ada\nBob")
+        #expect(presenter.wheelNotices == [.waiting], "the unconfirmed notice goes once the person edits the names")
+    }
+
     @Test func theWindowEndsTheWaitHoweverTheClockMoves() throws {
         for ending in ["deadline timer", "deadline timer while detached", "late wake", "clock ran backwards"] {
             let wire = Wire()

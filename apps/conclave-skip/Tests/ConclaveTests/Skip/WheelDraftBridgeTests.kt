@@ -406,6 +406,50 @@ class WheelDraftBridgeTests {
         assertEquals(true, wheel.presenter.wheel.isFull)
     }
 
+    private fun notices(wheel: Wheel): List<WheelPageNotice> = wheel.presenter.wheelNotices.toList()
+
+    @Test fun theNamesPageShowsEveryNoticeThatApplies() {
+        fun shown(canEdit: Boolean, isFull: Boolean, waiting: Int, unconfirmed: Boolean): List<WheelPageNotice> =
+            AppPagePolicy.wheelNotices(canEdit = canEdit, isFull = isFull, waitingNames = waiting, isUnconfirmed = unconfirmed).toList()
+        assertEquals(listOf(WheelPageNotice.unconfirmed, WheelPageNotice.full), shown(true, true, 0, true))
+        assertEquals(listOf(WheelPageNotice.unconfirmed, WheelPageNotice.waiting), shown(true, true, 2, true))
+        assertEquals(listOf(WheelPageNotice.unconfirmed), shown(true, false, 0, true))
+        assertEquals(listOf(WheelPageNotice.full), shown(true, true, 0, false))
+        assertEquals(listOf(WheelPageNotice.waiting), shown(true, true, 1, false))
+        assertEquals(listOf(WheelPageNotice.waiting), shown(false, true, 3, true))
+        assertEquals(emptyList<WheelPageNotice>(), shown(false, true, 0, true))
+        assertEquals(emptyList<WheelPageNotice>(), shown(true, false, 0, false))
+    }
+
+    @Test fun aFullWheelStillSaysAnAddCouldNotBeConfirmedAndSomeoneWhoCannotEditStillSeesNamesWaiting() {
+        val wheel = readyWheel()
+        wheel.presenter.editWheelDraft("Ada\nBo\n")
+        val add = adds(wheel)[0].first
+        val entries = JSONArray()
+        for (index in 0 until 64) entries.put(JSONObject().put("id", "e$index").put("label", "N$index"))
+        fun status(waiting: Int): JSONObject = JSONObject().put("app", JSONObject().put("kind", "wheel").put("entries", entries)
+            .put("results", JSONArray()).put("removeWinner", false).put("sounds", true).put("spinning", false)
+            .put("winnerSpinId", "").put("winnerLabel", "").put("waiting", waiting))
+        receive(wheel, "status", "e-3", status(0))
+        assertEquals(listOf(WheelPageNotice.full), notices(wheel))
+        wheel.presenter.fireCommandTimeout(requestId = add)
+        receive(wheel, "ack", outcomeQueries(wheel).last().first, JSONObject().put("ok", false).put("error", "outcomeUnknown"))
+        assertEquals(true, wheel.presenter.wheel.isFull)
+        assertEquals("Ada\nBo", wheel.presenter.wheelDraft.text)
+        assertEquals(listOf(WheelPageNotice.unconfirmed, WheelPageNotice.full), notices(wheel))
+        receive(wheel, "status", "e-4", status(2))
+        assertEquals(listOf(WheelPageNotice.unconfirmed, WheelPageNotice.waiting), notices(wheel))
+
+        wheel.presenter.apply(AppHostInputs.make(callSession = 1, appId = "wheel", isHost = false, isLocked = true))
+        assertEquals(false, wheel.presenter.wheel.canEdit)
+        assertEquals(listOf(WheelPageNotice.waiting), notices(wheel))
+
+        wheel.presenter.apply(AppHostInputs.make(callSession = 1, appId = "wheel", isHost = true))
+        assertEquals(listOf(WheelPageNotice.unconfirmed, WheelPageNotice.waiting), notices(wheel))
+        wheel.presenter.editWheelDraft("Ada\nBob")
+        assertEquals(listOf(WheelPageNotice.waiting), notices(wheel))
+    }
+
     @Test fun theWindowEndsTheWaitHoweverTheClockMoves() {
         for (ending in listOf("deadline timer", "deadline timer while detached", "late wake", "clock ran backwards")) {
             val wheel = readyWheel()

@@ -499,6 +499,10 @@ struct WheelNameDraft: Equatable {
     }
 }
 
+enum WheelPageNotice: String, CaseIterable, Equatable {
+    case unconfirmed, waiting, full
+}
+
 struct WheelPageModel: Equatable {
     let revision: Int
     let entries: [WheelEntryModel]
@@ -674,6 +678,17 @@ enum AppPagePolicy {
         return batch
     }
 
+    static func wheelNotices(canEdit: Bool, isFull: Bool, waitingNames: Int, isUnconfirmed: Bool) -> [WheelPageNotice] {
+        var notices: [WheelPageNotice] = []
+        if canEdit && isUnconfirmed { notices.append(WheelPageNotice.unconfirmed) }
+        if waitingNames > 0 {
+            notices.append(WheelPageNotice.waiting)
+        } else if canEdit && isFull {
+            notices.append(WheelPageNotice.full)
+        }
+        return notices
+    }
+
     static func missingNames(roster: [String], entries: [WheelEntryModel]) -> [String] {
         var existing: [String] = []
         for entry in entries {
@@ -812,6 +827,11 @@ final class AppHostPresenter {
     @ObservationIgnored private var lastWinnerSpinId = ""
     @ObservationIgnored private var winnerSequence = 0
     private(set) var wheelDraft = WheelNameDraft()
+
+    var wheelNotices: [WheelPageNotice] {
+        return AppPagePolicy.wheelNotices(canEdit: wheel.canEdit, isFull: wheel.isFull, waitingNames: wheel.waitingNames,
+                                          isUnconfirmed: wheelDraft.isUnconfirmed)
+    }
     @ObservationIgnored private var winnerLabel = ""
     @ObservationIgnored private var announcedVideoId = ""
     @ObservationIgnored private var titleSequence = 0
