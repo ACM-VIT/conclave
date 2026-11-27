@@ -3,7 +3,8 @@ import SwiftUI
 import UIKit
 
 enum HostingTheme {
-    static let coralFill = Color(uiColor: color(DesignTokens.coral))
+    static let coralUIColor = color(DesignTokens.coral)
+    static let coralFill = Color(uiColor: coralUIColor)
     static let onCoral = Color(uiColor: UIColor { traits in
         color(traits.accessibilityContrast == .high ? DesignTokens.iosAppOnCoralHighContrast : DesignTokens.iosAppOnCoral)
     })
