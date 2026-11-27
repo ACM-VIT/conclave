@@ -398,6 +398,7 @@ export class CallRig {
   burstyVideo = false;
   videoQuiet = false;
   dropEveryOtherOwnCountAnswer = false;
+  omittedOwnCountKinds = new Set<string>();
   ownCountQueries = 0;
   ownCountAckDelayMs = 0;
   sendStatic = false;
@@ -726,7 +727,13 @@ export class CallRig {
         const counts: Record<string, number> = {};
         for (const transport of this.transports) {
           for (const stream of transport.sending) {
-            if (ids.has(stream.producer.id) && !stream.producer.closed) counts[stream.producer.id] = stream.sfuPackets;
+            if (
+              ids.has(stream.producer.id) &&
+              !stream.producer.closed &&
+              !this.omittedOwnCountKinds.has(stream.producer.kind)
+            ) {
+              counts[stream.producer.id] = stream.sfuPackets;
+            }
           }
         }
         return this.ack(ack, { counts }, this.ownCountAckDelayMs);

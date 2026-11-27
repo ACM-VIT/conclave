@@ -105,28 +105,41 @@ describe("a send path rebuilt while no TURN credentials were usable", () => {
     expect(target.moves).toEqual([]);
   });
 
-  it("stays where it is when credentials return while it delivers and the SFU's count replies go missing", async () => {
-    const { target, second } = await rebuiltWithoutTurn((call) => {
-      call.outgoingDropped = true;
-    });
-    target.outgoingDropped = false;
-    target.answersSenderCounts = false;
-    target.provider = "up";
-    const since = Date.now();
+  it.each(["omits the camera count", "omits the entire count reply"])(
+    "stays where it is when credentials return while it delivers and the SFU %s",
+    async (missing) => {
+      const { target, second } = await rebuiltWithoutTurn((call) => {
+        call.outgoingDropped = true;
+      });
+      target.outgoingDropped = false;
+      if (missing === "omits the camera count") {
+        target.omittedOwnCountKinds.add("video");
+      } else {
+        target.answersSenderCounts = false;
+      }
+      target.provider = "up";
+      const since = Date.now();
 
-    expect(
-      await waitFor(target, () => target.lastRelayAnswerAt !== null && target.lastRelayAnswerAt >= since, 15_000),
-    ).toBe(true);
-    await target.advance(8_000);
-    expect(target.send).toBe(second);
-    target.answersSenderCounts = true;
-    await target.advance(20_000);
+      expect(
+        await waitFor(
+          target,
+          () => target.lastRelayAnswerAt !== null && target.lastRelayAnswerAt >= since,
+          15_000,
+        ),
+      ).toBe(true);
+      await target.advance(8_000);
+      expect(reachedSfu(second)).toBeGreaterThan(0);
+      expect(target.send).toBe(second);
+      target.omittedOwnCountKinds.clear();
+      target.answersSenderCounts = true;
+      await target.advance(20_000);
 
-    expect(reachedSfu(second)).toBeGreaterThan(0);
-    expect(target.send).toBe(second);
-    expect(target.moves).toEqual([]);
-    expect(target.health.producer).toBe("healthy");
-  });
+      expect(reachedSfu(second)).toBeGreaterThan(0);
+      expect(target.send).toBe(second);
+      expect(target.moves).toEqual([]);
+      expect(target.health.producer).toBe("healthy");
+    },
+  );
 });
 
 describe("a send path that never delivered a packet", () => {

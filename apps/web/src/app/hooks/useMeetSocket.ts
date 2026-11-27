@@ -6980,7 +6980,12 @@ export function useMeetSocket({
           readPath(kind, transport),
         ]);
         const sfuCounts = sentIn(own);
-        if (sfuReports && producers.length > 0 && sfuCounts === null) return "unread";
+        if (
+          sfuReports &&
+          producers.some(({ producerId }) => sfuCounts?.[producerId] === undefined)
+        ) {
+          return "unread";
+        }
         if (
           !hasCarriedMedia(
             reading,
