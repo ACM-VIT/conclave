@@ -242,6 +242,7 @@ describe("a sender's slot", () => {
     const finished: { outcome: WriteOutcome; at: number }[] = [];
     const write = (update: Uint8Array) => [{
       sender,
+      seat: sender,
       appId: BOARD,
       key,
       host: false,
@@ -366,6 +367,21 @@ describe("a sender's slot", () => {
 });
 
 describe("the update budget", () => {
+  it("keeps a returning legacy seat's edits separate from its departed seat's held edits", () => {
+    const { connect, room } = presentedBoard();
+    const writer = connect("writer#1", { legacy: true });
+    writer.sync();
+    writer.write(UPDATE_BURST);
+    const [departed] = writer.write(1);
+
+    writer.rejoinSeat();
+    const [current] = writer.write(1);
+    advance(1000);
+
+    expect(boardHas(room, departed)).toBe(false);
+    expect(boardHas(room, current)).toBe(true);
+  });
+
   it("delivers held edits to a named replacement copy that synced before they landed", () => {
     const { connect, room } = presentedBoard();
     const writer = connect("writer#1");
@@ -423,19 +439,22 @@ describe("the update budget", () => {
     expect(boardHas(room, afterSync)).toBe(true);
   });
 
-  it("keeps a leaving participant's held strokes under the participant who wrote them", () => {
+  it("keeps committed strokes but drops held strokes after the writer leaves", () => {
     const { connect, room } = presentedBoard();
     const calls = recordWrites();
     const artist = connect("artist#1");
     artist.sync();
 
     const strokes = artist.write(UPDATE_BURST + 20);
+    const committed = strokes.filter((writeId) => boardHas(room, writeId));
+    expect(committed.length).toBeGreaterThan(0);
+    expect(committed.length).toBeLessThan(strokes.length);
     artist.leave();
     advance(2000);
 
     expect(calls.filter((call) => call.socketId === artist.socketId).length).toBeGreaterThan(0);
     expect(calls.filter((call) => call.result === "foreign-id")).toEqual([]);
-    expect(strokes.filter((writeId) => !boardHas(room, writeId))).toEqual([]);
+    expect(strokes.filter((writeId) => boardHas(room, writeId))).toEqual(committed);
   });
 
   it("keeps a guest's two linked tabs writing as one participant, and their ids theirs", () => {
@@ -449,9 +468,10 @@ describe("the update budget", () => {
     const strokes = [...first.write(3), ...second.write(3)];
     const firstClient = first.doc.clientID;
     strokes.push(...first.write(UPDATE_BURST + 10));
+    const committed = strokes.filter((writeId) => boardHas(room, writeId));
     first.leave();
     advance(2000);
-    strokes.push(...second.write(2));
+    const stillSeated = second.write(2);
     const forger = new Y.Doc();
     Y.applyUpdate(forger, Y.encodeStateAsUpdate(room.apps.liveDoc(BOARD)!));
     forger.clientID = firstClient;
@@ -463,7 +483,8 @@ describe("the update budget", () => {
     const byParticipant = (participant: string) => calls.filter((call) => call.participant === participant);
     expect(byParticipant("guest-gp_pass").length).toBeGreaterThan(0);
     expect(byParticipant("guest-gp_pass").filter((call) => call.result !== null)).toEqual([]);
-    expect(strokes.filter((writeId) => !boardHas(room, writeId))).toEqual([]);
+    expect(strokes.filter((writeId) => boardHas(room, writeId))).toEqual(committed);
+    expect(stillSeated.every((writeId) => boardHas(room, writeId))).toBe(true);
     expect(byParticipant("guest-gp_other").map((call) => call.result)).toEqual(["foreign-id"]);
     expect(room.apps.liveDoc(BOARD)!.getMap("m").has("forged")).toBe(false);
   });
@@ -855,6 +876,7 @@ describe("what a payload costs before it is paid for", () => {
     let heldBytes = 0;
     const write = (payload: unknown, held: boolean) => [{
       sender,
+      seat: sender,
       appId: BOARD,
       key: "copy-1",
       host: false,
@@ -908,7 +930,7 @@ describe("what a payload costs before it is paid for", () => {
     const scheduler = new RoomAppsScheduler();
     const sender = {} as Socket;
     const finish = vi.fn();
-    const work = (): SlotWrite => ({ sender, appId: BOARD, key: "copy-1", host: false, run: (updates) => updates.map(() => null), finish });
+    const work = (): SlotWrite => ({ sender, seat: sender, appId: BOARD, key: "copy-1", host: false, run: (updates) => updates.map(() => null), finish });
     for (let index = 0; index < UPDATE_BURST; index += 1) scheduler.submit(work(), wireBytes(EMPTY_UPDATE)!);
     finish.mockClear();
     const read = vi.fn(() => null);

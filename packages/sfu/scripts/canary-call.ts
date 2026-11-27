@@ -127,15 +127,14 @@ type CanaryClient = {
   stopAudio?: () => void;
 };
 
-const connectClient = async (name: string): Promise<CanaryClient> => {
+const connectClient = async (name: "Alice" | "Bob", host?: CanaryClient): Promise<CanaryClient> => {
   const sessionId = randomUUID();
+  const userId = `conclave-canary-${name.toLowerCase()}`;
   const token = jwt.sign(
     {
-      userId: `conclave-canary-${name.toLowerCase()}`,
+      userId,
       name: `Canary ${name}`,
-      isHost: true,
-      isAdmin: true,
-      allowRoomCreation: true,
+      allowRoomCreation: name === "Alice",
       clientId,
       sessionId,
       joinMode: "meeting",
@@ -154,8 +153,17 @@ const connectClient = async (name: string): Promise<CanaryClient> => {
     socket.once("connect", () => resolve());
     socket.once("connect_error", (error) => reject(error));
   });
-  const joined = await request(socket, "joinRoom", { roomId, sessionId, displayName: `Canary ${name}` });
-  check(`${name} joined ${roomId}`, readString(joined, "status") === "joined", readString(joined, "status") ?? "no status");
+  const joinData = { roomId, sessionId, displayName: `Canary ${name}` };
+  let joined = await request(socket, "joinRoom", joinData);
+  if (host && readString(joined, "status") === "waiting") {
+    const admitted = await request(host.socket, "admitUser", { userId });
+    if (readBoolean(admitted, "success") !== true) throw new Error(`${host.name} could not admit ${name}`);
+    check(`${host.name} admitted ${name}`, true);
+    joined = await request(socket, "joinRoom", joinData);
+  }
+  const status = readString(joined, "status") ?? "no status";
+  if (status !== "joined") throw new Error(`${name} could not join ${roomId}: ${status}`);
+  check(`${name} joined ${roomId}`, true, status);
   await client.device.load({ routerRtpCapabilities: joined.rtpCapabilities as RtpCapabilities });
   return client;
 };
@@ -275,7 +283,7 @@ try {
 
   const alice = await connectClient("Alice");
   clients.push(alice);
-  const bob = await connectClient("Bob");
+  const bob = await connectClient("Bob", alice);
   clients.push(bob);
   await publishAudio(alice);
   await publishAudio(bob);

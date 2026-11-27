@@ -19,9 +19,11 @@ import type {
   AppsUpdateData,
 } from "../../../types.js";
 import { Admin } from "../../../config/classes/Admin.js";
+import type { Client } from "../../../config/classes/Client.js";
 import type { Room } from "../../../config/classes/Room.js";
 import {
   type AppAwarenessRemoval,
+  type AppSeatRole,
   type AppSyncMark,
   type RoomApps,
   type StageCommand,
@@ -51,7 +53,8 @@ type Admission = {
   readonly socketId: string;
   readonly userId: string;
   readonly participant: string;
-  readonly host: boolean;
+  readonly seat: Client;
+  readonly role: () => AppSeatRole;
   readonly appId: string;
   readonly replicaId: string | undefined;
   readonly room: Room;
@@ -188,9 +191,6 @@ const STAGE_COMMAND_ERRORS = {
   full: { error: "Clear an app to present another.", code: "room_full" },
 } as const satisfies Record<string, { error: string; code: AppsStageErrorCode }>;
 
-const canControlStage = (context: ConnectionContext): boolean =>
-  context.currentClient instanceof Admin && !context.currentClient.isObserver;
-
 export const registerAppsHandlers = (context: ConnectionContext): void => {
   const { socket, io } = context;
   let scope: RoomScope | null = null;
@@ -211,6 +211,12 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   };
   const stillIn = (apps: RoomApps): boolean => context.currentRoom?.apps === apps && scope?.apps === apps;
   const inScope = (apps: RoomApps): boolean => socket.connected && stillIn(apps);
+  const roleOf = (room: Room, client: Client): AppSeatRole => {
+    if (!socket.connected || context.currentRoom !== room || context.currentClient !== client ||
+        room.clients.get(client.id) !== client || client.isObserver) return "absent";
+    return client instanceof Admin ? "host" : "participant";
+  };
+  const roleFor = (room: Room, client: Client): (() => AppSeatRole) => () => roleOf(room, client);
   const showsRestartedApp = (restart: ActiveRestart): boolean => {
     const stage = restart.apps.snapshot();
     return inScope(restart.apps) && stage.activeAppId === restart.appId && stage.docGeneration !== null;
@@ -304,7 +310,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     Logger.warn(`[Apps] Dropping update for ${admission.appId} from ${admission.userId}: ${reason}${unlogged}`);
   };
   const refuse = (admission: Admission, reason: WriteRefusal): void => {
-    if (!inScope(admission.apps) || !scope) return;
+    if (!inScope(admission.apps) || !scope || admission.role() === "absent") return;
     logRefusal(admission, reason);
     if (admission.replicaId) signalRefused(scope, admission.appId, admission.replicaId, reason);
     else if (reason !== "not-live") restartCopy(admission);
@@ -312,7 +318,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   const relay = (admission: Admission, mark: AppSyncMark, landed: Uint8Array[]): void => {
     if (!admission.apps.isCurrentSync(mark)) return;
     const includeWriter =
-      (admission.replicaId !== undefined || admission.appId === "wheel") && inScope(admission.apps);
+      (admission.replicaId !== undefined || admission.appId === "wheel") && admission.role() !== "absent";
     for (const update of landed) {
       const message: AppsUpdateData = { appId: admission.appId, update };
       if (update.length <= APP_DOCUMENT_UPDATE_MAX_BYTES) {
@@ -337,17 +343,18 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     admission: Admission, mark: AppSyncMark, done: (committed?: boolean) => void, mode: "single" | "list" | "assembled",
     direct: boolean,
   ): SlotWrite => {
-    const { apps, appId, host, participant, replicaId, socketId } = admission;
+    const { apps, appId, role, participant, replicaId, socketId } = admission;
     return {
       sender: socket,
+      seat: admission.seat,
       appId,
-      key: JSON.stringify([appId, mark.generation, replicaId, host]),
-      host,
+      key: JSON.stringify([appId, mark.generation, replicaId, role()]),
+      get host() { return role() === "host"; },
       direct,
       run: (updates) => {
         const latest = scope?.apps === apps && apps.isCurrentSync(scope.synced) ? scope.synced : mark;
         const identity = {
-          participant, host, origin: socketId, mark: latest, separate: mode === "list",
+          participant, role, origin: socketId, mark: latest, separate: mode === "list",
           assembled: mode === "assembled" ? true as const : undefined,
         };
         return whenSettled(apps.executor.write(appId, identity, updates), (result) => {
@@ -386,7 +393,9 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       reply({ success: false, error: "Not in a room" });
       return;
     }
-    if (!canControlStage(context)) {
+    const room = context.currentRoom;
+    const client = context.currentClient;
+    if (roleOf(room, client) !== "host") {
       reply({ success: false, error: deniedError });
       return;
     }
@@ -399,8 +408,6 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       reply({ success: false, error: "Invalid stage revision" });
       return;
     }
-    const room = context.currentRoom;
-    const client = context.currentClient;
     if (expectedRoomId !== undefined && expectedRoomId !== room.id) {
       reply({ success: false, ...STAGE_COMMAND_ERRORS.stale });
       return;
@@ -416,8 +423,13 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       return;
     }
     const execute = (): void => {
-      if (!socket.connected || context.currentRoom !== room || context.currentClient !== client) {
+      const role = roleOf(room, client);
+      if (role === "absent") {
         reply({ success: false, ...STAGE_COMMAND_ERRORS.stale });
+        return;
+      }
+      if (role !== "host") {
+        reply({ success: false, error: deniedError });
         return;
       }
       const next = apps.plan(command, revision);
@@ -442,6 +454,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     if (command.kind === "present" || command.kind === "close") {
       apps.scheduler.afterHeld(apps.activeAppId, {
         changes: () => {
+          if (roleOf(room, client) !== "host") return false;
           const next = apps.plan(command, revision);
           return next.ok && next.changed;
         },
@@ -667,20 +680,36 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   type StagedChange = {
     admission: Admission;
     revision: number;
+    stay: object;
     id: string;
     count: number;
     parts: Uint8Array[];
     bytes: number;
     idle?: ReturnType<typeof setTimeout>;
+    refreshLegacyCopy?: Admission;
   };
   let staged: StagedChange | null = null;
   const staging = context.state.appChangeStaging;
+  const refreshAfterStagedChange = (change: StagedChange): void => {
+    const admission = change.refreshLegacyCopy;
+    if (!admission) return;
+    queueMicrotask(() => {
+      if (admission.role() === "absent" || admission.apps.stayToken !== change.stay) return;
+      if (staged?.admission.seat === admission.seat && staged.stay === change.stay) {
+        staged.refreshLegacyCopy ??= admission;
+      } else {
+        restartCopy(admission);
+      }
+    });
+  };
   const dropStaged = (): void => {
     if (!staged) return;
-    clearTimeout(staged.idle);
-    staged.admission.apps.unfollow(followStaged);
-    staging.give(staged.bytes);
+    const change = staged;
+    clearTimeout(change.idle);
+    change.admission.apps.unfollow(followStaged);
+    staging.give(change.bytes);
     staged = null;
+    refreshAfterStagedChange(change);
   };
   const followStaged = (): void => {
     if (staged && staged.revision !== staged.admission.apps.stageRevision) dropStaged();
@@ -727,7 +756,8 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       socketId: socket.id,
       userId: client.id,
       participant: apps.participantFor(client.id),
-      host: canControlStage(context),
+      seat: client,
+      role: roleFor(room, client),
       appId,
       replicaId: normalizeReplicaId(data?.replicaId),
       room,
@@ -738,6 +768,16 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       done();
     };
     const part = readChangePart(data?.part);
+    const refuseCheckedUpdate = (reason: WriteRefusal): void => {
+      if (part) return reject(reason);
+      if (admission.replicaId || staged?.admission.seat !== admission.seat) {
+        refuse(admission, reason);
+      } else {
+        logRefusal(admission, reason);
+        staged.refreshLegacyCopy ??= admission;
+      }
+      done();
+    };
     const hasList = data.updates !== undefined;
     const list = hasList ? readList(data.updates) : null;
     if (part === "invalid" || (part && (hasList || (changedScope && part.index !== 0)))) return reject("interrupted");
@@ -745,6 +785,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     if ((list?.length ?? size) > APP_DOCUMENT_UPDATE_MAX_BYTES) return reject("too-large");
     if (current.restart.state === "blank-sent") return done();
     const revision = apps.stageRevision;
+    const stay = apps.stayToken;
     const checkNoop = (decide: (changesNothing: boolean | null) => void): void => {
       if (!wire || part) {
         decide(null);
@@ -767,7 +808,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         return;
       }
       afterSettled("Checking an app update", apps.executor.changesNothing(appId, update), (changesNothing) => {
-        if (scope === current && stillIn(apps) && apps.stageRevision === revision) decide(changesNothing);
+        if (scope === current && admission.role() !== "absent" && apps.stayToken === stay) decide(changesNothing);
         else done();
       });
     };
@@ -786,9 +827,9 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     if (stage.activeAppId !== appId || stage.docGeneration === null) {
       return reject("not-live");
     }
-    if (stage.locked && !admission.host) {
+    if (stage.locked && admission.role() !== "host") {
       checkNoop((changesNothing) => {
-        if (changesNothing !== true) reject("locked");
+        if (changesNothing !== true) refuseCheckedUpdate("locked");
         else {
           if (!apps.isCurrentSync(current.synced)) sendRoomCopy(current, appId);
           done();
@@ -802,7 +843,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         if (changesNothing === true) {
           sendRoomCopy(current, appId);
           done();
-        } else reject("not-synced");
+        } else refuseCheckedUpdate("not-synced");
       });
       return;
     }
@@ -820,12 +861,12 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     if (!takeToken(socket, "apps:change-part", RATE_LIMITS.appsYjsUpdate)) return reject("rate-limited");
     if (part.index === 0) {
       dropStaged();
-      staged = { admission, revision, id: part.id, count: part.count, parts: [], bytes: 0 };
+      staged = { admission, revision, stay, id: part.id, count: part.count, parts: [], bytes: 0 };
       apps.follow(followStaged);
     }
     const change = staged;
     if (
-      !change || change.admission.apps !== apps || change.admission.appId !== appId ||
+      !change || change.admission.seat !== client || change.admission.apps !== apps || change.admission.appId !== appId ||
       change.admission.replicaId !== admission.replicaId || change.revision !== revision ||
       change.id !== part.id || change.count !== part.count || change.parts.length !== part.index
     ) return reject("interrupted");
@@ -856,6 +897,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     }
     apps.scheduler.submit(writeFor(admission, mark, (committed) => {
       staging.give(change.bytes);
+      refreshAfterStagedChange(change);
       done(committed);
     }, "assembled", true), wireBytes(whole)!);
   };

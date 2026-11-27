@@ -53,9 +53,11 @@ export type AppSyncMark = {
 
 export type WriteRefusal = ContentRefusal | "too-large" | "invalid" | "rate-limited" | "interrupted" | "queue-full" | "timed-out" | "crashed" | "unavailable";
 
+export type AppSeatRole = "host" | "participant" | "absent";
+
 export type WriteIdentity = {
   readonly participant: string;
-  readonly host: boolean;
+  readonly role: () => AppSeatRole;
   readonly origin: string;
   readonly mark: AppSyncMark | null;
   readonly assembled?: true;
@@ -512,15 +514,18 @@ export class RoomApps {
     });
     const entry = this.activeEntry(appId);
     if (!entry?.worker) return rejected("not-live");
-    const { mark, participant, host } = identity;
+    const { mark, participant } = identity;
     if (!this.isCurrentSync(mark)) return rejected("not-synced");
-    if (this.locked && !host) return rejected("locked");
     const stay = this.stay;
     const preflight = (): WriteRefusal | null => {
       if (this.activeEntry(appId) !== entry || stay !== this.stay) return "not-live";
-      if (this.locked && !host) return "locked";
+      const role = identity.role();
+      if (role === "absent") return "not-live";
+      if (this.locked && role !== "host") return "locked";
       return null;
     };
+    const refused = preflight();
+    if (refused) return rejected(refused);
     const authorize = (candidate: WorkerProposal): WriteRefusal | null => {
       const stale = preflight();
       if (stale) return stale;
@@ -959,6 +964,8 @@ class InProcessDocuments implements DocumentExecutor {
 
   write(appId: string, identity: WriteIdentity, updates: Uint8Array[]): WriteResult {
     if (updates.length === 0) return { outcomes: [], landed: [] };
+    const role = identity.role();
+    if (role === "absent") return { outcomes: updates.map(() => "not-live"), landed: [] };
     const merged = guarded("Merging app updates", null, () =>
       updates.length === 1 ? updates[0] : Y.mergeUpdates(updates),
     );
@@ -968,7 +975,7 @@ class InProcessDocuments implements DocumentExecutor {
         : guarded<WriteOutcome>("Writing an app update", "invalid", () =>
             this.apps.write(appId, identity.participant, merged, identity.mark, {
               origin: identity.origin,
-              host: identity.host,
+              host: role === "host",
             }),
           );
     return { outcomes: updates.map(() => outcome), landed: outcome === null && merged ? [merged] : [] };

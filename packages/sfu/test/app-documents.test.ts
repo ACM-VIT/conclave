@@ -990,6 +990,46 @@ describe("app documents", { timeout: 30_000 }, () => {
     expect(await room.join()).toBe("HOLD this stroke");
   });
 
+  it("uses the current role for a pending write and queued stage change", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const fixture = createFixture();
+    const room = inRoom(createPool({ workerUrl: STALLING_WORKER, workerData: fixture.workerData }), "demoted-writer");
+    await room.open();
+    expect(await room.lock()).toMatchObject({ success: true });
+    const update = edit(new Y.Doc(), (text) => text.insert(0, "HOLD pending stroke"));
+    const upload = room.acknowledged({ update }, "stroke");
+    await fixture.next("held");
+    const close = room.close();
+    expect(await settledNow(close)).toBeUndefined();
+
+    room.demote();
+    fixture.release();
+    expect(await close).toMatchObject({ success: false, error: "Only admins can close apps" });
+    expect(await upload).toMatchObject({ receipt: undefined, relayed: 0 });
+    expect(room.refused).toContainEqual(expect.objectContaining({ replicaId: "stroke", reason: "locked" }));
+    expect(await room.join()).toBe("");
+  });
+
+  it("does not commit a pending change for a writer who left the room", async () => {
+    const fixture = createFixture();
+    const room = inRoom(createPool({ workerUrl: STALLING_WORKER, workerData: fixture.workerData }), "departed-writer");
+    await room.open();
+    const peer = await room.peer();
+    const update = edit(new Y.Doc(), (text) => text.insert(0, "HOLD pending stroke"));
+    const upload = room.acknowledged({ update }, "stroke");
+    await fixture.next("held");
+
+    room.leave();
+    fixture.release();
+    expect(await upload).toMatchObject({ receipt: undefined, relayed: 0 });
+    const response = await peer.settle();
+    if (!("syncMessage" in response)) throw new Error(response.error);
+    const doc = new Y.Doc();
+    Y.applyUpdate(doc, response.syncMessage);
+    expect(textOf(doc)).toBe("");
+    expect(peer.updates()).toEqual([]);
+  });
+
   it("never echoes the worker's speculative Wheel add before commit", async () => {
     const fixture = createFixture();
     const room = inRoom(createPool({ workerUrl: STALLING_WORKER, workerData: fixture.workerData }), "wheel-commit", { appId: "wheel" });

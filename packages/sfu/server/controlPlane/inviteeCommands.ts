@@ -34,8 +34,9 @@ export const roomInviteeDecision = (clientId: string, roomCode: string, email: s
 } | null> => (view) => {
   const meeting = meetingByRoomCode(clientId, roomCode)(view);
   if (!meeting || !isInvitee(meeting, email)) return null;
-  const decisions = stateOf(view, meeting.id).decisions;
-  return { meeting, at: Object.hasOwn(decisions, email) ? decisions[email].at : undefined };
+  const { decisions, endedAt } = stateOf(view, meeting.id);
+  const decisionAt = Object.hasOwn(decisions, email) ? decisions[email].at : undefined;
+  return { meeting, at: endedAt === null ? decisionAt : Math.max(endedAt, decisionAt ?? -1) };
 };
 
 const isInvitee = (meeting: ScheduledMeeting, email: string): boolean =>
@@ -63,10 +64,16 @@ export const updateRoomInvitation = (ref: MeetingRef, change: InvitationChange):
     return fail("conflict");
   }
   if (change.kind === "decide" && !isInvitee(meeting, change.email)) return done(undefined);
+  const endedAt = change.kind === "end"
+    ? Object.values(current.decisions).reduce(
+        (latest, decision) => Math.max(latest, decision.at),
+        Math.max(change.at, current.endedAt ?? -1),
+      )
+    : null;
   const next = mergeInviteeState(current, {
     meetingId: ref.id,
     decisions: change.kind === "decide" ? { [change.email]: { removed: change.removed, at: change.at } } : {},
-    endedAt: change.kind === "end" ? change.at : null,
+    endedAt,
     generation: generation ?? null,
   });
   if (change.kind !== "fence" || next.generation !== current.generation) tx.put("inviteeState", next);

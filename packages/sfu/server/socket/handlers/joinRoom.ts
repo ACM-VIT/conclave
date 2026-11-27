@@ -66,13 +66,13 @@ import {
 } from "../../scheduledWebinars.js";
 import {
   recordWebinarJoin,
-  webinarBySlug,
-  webinarForRoom,
+  webinarScheduleBySlug,
+  webinarScheduleForRoom,
 } from "../../controlPlane/webinarCommands.js";
 import {
   deferWebinarRoomNotice,
-  ensureWebinarRoomConfig,
   notifyRoomConfig,
+  readWebinarScheduleForJoin,
   takeDeferredWebinarRoomNotice,
 } from "../../scheduledWebinarScheduler.js";
 import { bookingInvites } from "../../controlPlane/inviteeCommands.js";
@@ -269,8 +269,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
       // Only the newest join this socket asked for acts. One that a newer
       // join overtook while it waited answers so, and changes nothing.
       const attempt = ++context.joinAttempts;
+      const isLatestJoin = (): boolean => context.joinAttempts === attempt;
       const overtaken = (): boolean => {
-        if (context.joinAttempts === attempt) return false;
+        if (isLatestJoin()) return false;
         respond(callback, { error: JOIN_OVERTAKEN });
         return true;
       };
@@ -369,9 +370,16 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           typeof resolveScheduledWebinarAttendeeEntry
         >["webinar"] = null;
         if (isWebinarAttendeeJoin) {
-          const scheduledEntry = resolveScheduledWebinarAttendeeEntry(
-            await state.controlPlane.read(webinarBySlug(requestedRoomId)),
-            clientId,
+          const scheduledEntry = await readWebinarScheduleForJoin(
+            state, webinarScheduleBySlug(requestedRoomId), deferWebinarNotice,
+            (schedule) => {
+              const result = resolveScheduledWebinarAttendeeEntry(schedule?.value ?? null, clientId);
+              return {
+                result,
+                publish: isLatestJoin() && socket.connected && result.kind === "open" &&
+                  resolveWebinarLinkTarget(state.webinarLinks, requestedRoomId, clientId)?.roomId !== result.webinar?.roomId,
+              };
+            },
           );
           if (overtaken() || !socket.connected) return;
           if (scheduledEntry.kind === "closed") {
@@ -388,9 +396,6 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             // A scheduled webinar's link always leads to its own room. Another
             // room that bound the same code (before the scheduler did, e.g.
             // after a restart) must not receive the webinar's audience.
-            if (webinarTarget?.roomId !== scheduledWebinarForAttendee.roomId) {
-              ensureWebinarRoomConfig(state, scheduledWebinarForAttendee, deferWebinarNotice);
-            }
             webinarTarget = {
               roomChannelId: getRoomChannelId(
                 scheduledWebinarForAttendee.clientId,
@@ -409,17 +414,15 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         let scheduledWebinarForRoom: ScheduledWebinar | null = null;
         if (!isWebinarAttendeeJoin) {
-          scheduledWebinarForRoom = await state.controlPlane.read(
-            webinarForRoom(clientId, roomId),
+          scheduledWebinarForRoom = await readWebinarScheduleForJoin(
+            state, webinarScheduleForRoom(clientId, roomId), deferWebinarNotice,
+            (schedule) => ({
+              result: schedule?.value ?? null,
+              publish: isLatestJoin() && socket.connected && schedule !== null &&
+                schedule.value.status !== "ended" && schedule.value.status !== "cancelled",
+            }),
           );
           if (overtaken() || !socket.connected) return;
-          if (
-            scheduledWebinarForRoom &&
-            scheduledWebinarForRoom.status !== "ended" &&
-            scheduledWebinarForRoom.status !== "cancelled"
-          ) {
-            ensureWebinarRoomConfig(state, scheduledWebinarForRoom, deferWebinarNotice);
-          }
         }
 
         if (!socket.connected) return;

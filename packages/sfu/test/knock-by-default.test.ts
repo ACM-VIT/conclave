@@ -23,7 +23,7 @@ import {
 } from "../server/roomRegistry.js";
 import { forceCloseRoom, renewRoomOwnerships } from "../server/rooms.js";
 import { createMeeting } from "../server/controlPlane/meetingCommands.js";
-import { bookingInvites, roomBooking } from "../server/controlPlane/inviteeCommands.js";
+import { bookingInvites, roomBooking, roomInviteeDecision } from "../server/controlPlane/inviteeCommands.js";
 import { createSqliteBackend } from "../server/controlPlane/backends/sqlite.js";
 import { createMemoryBackend } from "../server/controlPlane/backends/memory.js";
 import { controlPlaneStore, type ControlPlaneStore } from "../server/controlPlane/store.js";
@@ -1469,6 +1469,32 @@ describe("the account a code belongs to", () => {
     ).toBe(true);
   });
 
+  it.each([false, true])("keeps the demoted host admitted only if readmission is not required (%s)", async (readmissionRequired) => {
+    useClock();
+    const policy = config.clientPolicies.conclave;
+    config.clientPolicies.conclave = { ...policy, useWaitingRoom: true, knockByDefault: false };
+    try {
+      const state = makeState();
+      await emptyOut(state, (await join(state, creator)).peer);
+      const opener = await join(state, guestOpener);
+      expect(opener.context.currentClient).toBeInstanceOf(Admin);
+      if (readmissionRequired) roomOf(state).requireReadmission(guestOpener.userId);
+
+      const returningOwner = await join(state, owner);
+      expect(returningOwner.context.currentClient).toBeInstanceOf(Admin);
+      expect(opener.context.currentClient).not.toBeInstanceOf(Admin);
+      expect(roomOf(state).isLocked).toBe(false);
+      await hangUp(opener.peer);
+
+      const returningOpener = await join(state, guestOpener);
+      expect(returningOpener.status).toBe(readmissionRequired ? "waiting" : "joined");
+      expect(returningOpener.context.currentClient).not.toBeInstanceOf(Admin);
+      expect((await join(state, knocker)).status).toBe("waiting");
+    } finally {
+      config.clientPolicies.conclave = policy;
+    }
+  });
+
   it("is let in without knocking even though the guest locked the meeting", async () => {
     useClock();
     const state = makeState();
@@ -2144,6 +2170,49 @@ describe.skipIf(!redisServerPath)("knockers waiting on an SFU when the next meet
       expect(bookingInvites(await store.read(roomBooking("conclave", "abc-mnop-xyz")), "invitee@example.com")).toBe(true);
     } finally {
       await store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a newer owner's invitee removal even when its clock is behind", async () => {
+    const dir = mkdtempSync(joinPath(tmpdir(), "invitee-owner-clock-"));
+    const path = joinPath(dir, "conclave.sqlite");
+    const firstStore = controlPlaneStore(createSqliteBackend(path));
+    const secondStore = controlPlaneStore(createSqliteBackend(path));
+    const decision = roomInviteeDecision("conclave", "abc-mnop-xyz", invitee.email);
+    const invited = async (store: ControlPlaneStore) =>
+      bookingInvites(await store.read(roomBooking("conclave", "abc-mnop-xyz")), invitee.email);
+    try {
+      const { a, b } = await twoSfus();
+      a.controlPlane = firstStore;
+      b.controlPlane = secondStore;
+      const now = Date.now();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(now + 60_000);
+      await schedule(a);
+      const scheduledHost = { ...host, userId: "host@example.com", email: "host@example.com" };
+      const first = await join(a, scheduledHost);
+      const generation = roomOf(a).ownershipGeneration;
+      expect((await join(a, invitee)).status).toBe("joined");
+      expect(await send(first.peer, "kickUser", { userId: "invitee@example.com#i" })).toEqual({ success: true });
+      expect(await invited(firstStore)).toBe(false);
+      expect((await join(a, invitee)).status).toBe("waiting");
+      expect(await send(first.peer, "admitUser", { userId: invitee.email })).toEqual({ success: true });
+      expect(await invited(firstStore)).toBe(true);
+      const earlierStamp = (await firstStore.read(decision))?.at;
+      expect(earlierStamp).toBeGreaterThan(now);
+
+      await a.roomRegistry.releaseRoom(CHANNEL);
+      vi.setSystemTime(now);
+      const second = await join(b, { ...scheduledHost, sessionId: "hb" });
+      expect(roomOf(b).ownershipGeneration).toBeGreaterThan(generation!);
+      expect((await join(b, invitee)).status).toBe("joined");
+      expect(await send(second.peer, "kickUser", { userId: "invitee@example.com#i" })).toEqual({ success: true });
+      expect(await invited(firstStore)).toBe(false);
+      expect((await secondStore.read(decision))?.at).toBeGreaterThan(earlierStamp!);
+    } finally {
+      await firstStore.close();
+      await secondStore.close();
       rmSync(dir, { recursive: true, force: true });
     }
   });
