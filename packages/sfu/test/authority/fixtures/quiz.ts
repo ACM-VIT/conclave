@@ -5,13 +5,14 @@
  */
 import { defineContract, s, type Infer } from "@conclave/apps-sdk/authority";
 import {
+  actionOrderTable,
   defineAuthority,
   key,
+  nextActionOrder,
   reject,
   table,
   type Subject,
 } from "@conclave/apps-sdk/authority/server";
-import { actionOrderTable, nextActionOrder } from "./action-order.js";
 
 const REVEAL_MS = 5_000;
 const BASE_POINTS = 500;

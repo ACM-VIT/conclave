@@ -108,6 +108,36 @@ export const authorityNameSchema: Schema<string> = s.string({
 export const isAuthorityName = (value: unknown): value is string =>
   problemOf(authorityNameSchema, value) === null;
 
+/** The most actions, and the most queries, one contract may name. */
+export const CONTRACT_MAX_ACTIONS = 256;
+export const CONTRACT_MAX_QUERIES = 256;
+
+/**
+ * The most bytes a viewer's grants may take, with every action and every
+ * query granted. Grants go in the first part of every view, whose whole
+ * frame must fit in one part, so they stay well within it and leave room
+ * for rows.
+ */
+export const CONTRACT_MAX_GRANT_BYTES = 16 * 1024;
+
+/** Refuses a contract whose grants could not travel in a view's first part. */
+const assertGrantsFit = (appId: string, actions: string[], queries: string[]): void => {
+  if (actions.length > CONTRACT_MAX_ACTIONS) {
+    throw new Error(`App ${appId}: more than ${CONTRACT_MAX_ACTIONS} actions`);
+  }
+  if (queries.length > CONTRACT_MAX_QUERIES) {
+    throw new Error(`App ${appId}: more than ${CONTRACT_MAX_QUERIES} queries`);
+  }
+  const bytes = new TextEncoder().encode(
+    JSON.stringify({ actions, needsIdentity: [], queries }),
+  ).length;
+  if (bytes > CONTRACT_MAX_GRANT_BYTES) {
+    throw new Error(
+      `App ${appId}: its action and query names take ${bytes} bytes as grants, more than ${CONTRACT_MAX_GRANT_BYTES} bytes`,
+    );
+  }
+};
+
 const assertNames = (appId: string, kind: string, names: string[]): void => {
   for (const name of names) {
     if (!isAuthorityName(name)) {
@@ -133,6 +163,7 @@ export const defineContract = <
   assertNames(contract.id, "action", Object.keys(contract.actions));
   assertNames(contract.id, "query", Object.keys(contract.queries));
   assertNames(contract.id, "view", Object.keys(contract.views));
+  assertGrantsFit(contract.id, Object.keys(contract.actions), Object.keys(contract.queries));
   return contract;
 };
 

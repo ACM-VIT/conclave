@@ -103,11 +103,33 @@ export const table = <Row extends object>(options: {
   maxRowBytes: options.maxRowBytes ?? DEFAULT_MAX_ROW_BYTES,
 });
 
+export type ActionOrder = { last: number };
+
+export const ACTION_ORDER_TABLE = "order";
+
+const ACTION_ORDER_COUNTER = key("last");
+
+type ActionOrderTransaction = {
+  get(table: typeof ACTION_ORDER_TABLE, key: TableKey): Readonly<ActionOrder> | undefined;
+  put(table: typeof ACTION_ORDER_TABLE, key: TableKey, row: ActionOrder): void;
+};
+
+export const actionOrderTable = (): TableSpec<ActionOrder> => table<ActionOrder>({ maxRows: 1 });
+
+export const nextActionOrder = (tx: ActionOrderTransaction): number => {
+  const order = (tx.get(ACTION_ORDER_TABLE, ACTION_ORDER_COUNTER)?.last ?? 0) + 1;
+  tx.put(ACTION_ORDER_TABLE, ACTION_ORDER_COUNTER, { last: order });
+  return order;
+};
+
 export type Tables = Record<string, TableSpec<object>>;
 type TimerSchemas = Record<string, Schema<unknown>>;
 type RowOf<T extends Tables, K extends keyof T> =
   T[K] extends TableSpec<infer Row> ? Row : never;
 type TableName<T extends Tables> = keyof T & string;
+
+/** A stretch of a scan: pass over `offset` rows, then return at most `limit`. */
+export type ScanPage = { offset?: number; limit: number };
 
 export interface AuthorityRead<T extends Tables> {
   get<K extends TableName<T>>(
@@ -115,10 +137,17 @@ export interface AuthorityRead<T extends Tables> {
     key: TableKey,
   ): Readonly<RowOf<T, K>> | undefined;
   count<K extends TableName<T>>(table: K, prefix?: TableKey): number;
-  /** Rows under `prefix`, oldest insert first. Bounded by the table's cap. */
+  /**
+   * Rows under `prefix`, oldest insert first. Without `page` it returns them
+   * all, which a transaction can afford only for a table of modest size.
+   * With `page` it returns one stretch and costs little more than the rows
+   * it returns, so a large table is read a page at a time. Rows are never
+   * reordered, so in a table that only grows a page stays where it was.
+   */
   scan<K extends TableName<T>>(
     table: K,
     prefix?: TableKey,
+    page?: ScanPage,
   ): readonly (readonly [TableKey, Readonly<RowOf<T, K>>])[];
 }
 
@@ -318,7 +347,11 @@ export type AuthorityDefinition<
 export interface RuntimeRead {
   get(table: string, key: TableKey): object | undefined;
   count(table: string, prefix?: TableKey): number;
-  scan(table: string, prefix?: TableKey): readonly (readonly [TableKey, object])[];
+  scan(
+    table: string,
+    prefix?: TableKey,
+    page?: ScanPage,
+  ): readonly (readonly [TableKey, object])[];
 }
 
 export interface RuntimeTransaction extends RuntimeRead {
