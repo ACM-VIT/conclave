@@ -695,21 +695,25 @@ def state_view_problems(state, containers):
     return problems
 
 
-def json_store_problems(state, container, containers, env=None):
+def configured_json_stores(state, container, containers, env=None):
     env = os.environ if env is None else env
     roots = mount_roots(state, container)
     sources = [("the backup config", json_store_paths(env), lambda path: under_root(path, roots))]
     for found in containers:
         if found["relation"] in ("exact", "related") and is_sfu(found):
             sources.append((f"the container {found['id']}", json_store_paths(found["env"]), lambda path, mounts=found["mounts"]: state_path(path, mounts, state)))
+    stores = []
     for where, picked, locate in sources:
         for mode, variable, value in picked:
             if not value:
                 raise Refused(f"{mode} keeps its file at the SFU's working directory default ({where}), outside the state dir, so it is not on the volume; set {variable} under {container}")
             if not value.startswith("/"):
                 raise Refused(f"{variable}={value} ({where}) is not an absolute path, so it is not on the volume; set it under {container}")
-            if not locate(posixpath.normpath(value)):
+            rel = locate(posixpath.normpath(value))
+            if not rel:
                 raise Refused(f"{variable}={value} ({where}) is outside the state dir, so it is not on the volume; move it under {container}")
+            stores.append({"rel": rel, "variable": variable, "where": where})
+    return stores
 
 
 def configured_stores(state, container, containers, env=None):

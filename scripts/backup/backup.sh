@@ -166,12 +166,6 @@ done
 writers_fenced
 (( ${#fenced[@]} > 0 )) && log "Holding the write fence on ${#fenced[@]} SFU(s)"
 
-# SQLite: the online backup API copies a consistent snapshot while the SFUs
-# keep writing; copying the file (or its WAL) directly would not. Each
-# database keeps its path below the state dir, so a restore puts it back
-# where the SFU opens it. A database the SFU opens through a link is copied
-# once, at the path the link reaches, and every link on the way is recorded
-# relative, so the chain comes back with it and never on its own.
 state_py copy "$STATE_DIR" "$CONTAINER_STATE_DIR" "$payload" || die "the SQLite copies failed; nothing was archived"
 
 renew_fences

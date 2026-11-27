@@ -303,7 +303,8 @@ without changing anything.
 Run it as before: as `azureuser` in the repo, under `nohup` with a log file.
 The log ends with `SFU deploy complete`, `Deploy paused` (exit 3) or
 `Deploy stopped` (exit 4, or 5 when the instance is not serving). The script
-needs bash 4 or newer and says so on an older one (macOS ships 3.2).
+needs Bash 4 or newer (macOS ships 3.2), Docker Compose, `flock`, Node.js,
+and Python 3 for validating the host deploy lock.
 
 ## Test it locally
 

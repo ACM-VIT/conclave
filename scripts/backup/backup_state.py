@@ -16,12 +16,15 @@ variable, else CONCLAVE_SQLITE_PATH, else the compose default). Each is
 copied with SQLite's online backup API, so no path or name ever passes
 through a shell. Links are recorded relative.
 """
+from contextlib import ExitStack
 import hashlib
 import os
 import sqlite3
 import stat
 import sys
 import tarfile
+import tempfile
+import time
 import urllib.parse
 
 # Root runs these from the checkout; no bytecode is left beside them.
@@ -43,7 +46,7 @@ from statelib import (  # noqa: E402
     docker_containers,
     is_database_name,
     is_sfu,
-    json_store_problems,
+    configured_json_stores,
     log,
     mount_roots,
     name_room,
@@ -116,24 +119,62 @@ def plan(state_fd, state, roots, configured):
     return databases, links, chains, sorted(dirs)
 
 
-def file_id(state_fd, rel, state):
-    """The device and inode of the regular file rel, every step on its way a
-    real directory."""
+def file_signature(info):
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+
+def stage_database(state_fd, rel, state, staging):
     parts = rel.split("/")
-    parent = open_parts(state_fd, parts[:-1], state)
-    try:
-        fd = os.open(parts[-1], READ_FLAGS, dir_fd=parent)
-    except OSError as error:
-        raise Refused(f"cannot open {state}/{rel}: {error.strerror}")
-    finally:
-        os.close(parent)
-    try:
-        info = os.fstat(fd)
-    finally:
-        os.close(fd)
-    if not stat.S_ISREG(info.st_mode):
-        raise Refused(f"{state}/{rel} is not a regular file")
-    return info.st_dev, info.st_ino
+    basename = parts[-1]
+    with ExitStack() as opened:
+        parent = open_parts(state_fd, parts[:-1], state)
+        opened.callback(os.close, parent)
+        inputs = {}
+        for suffix in ("", "-wal", "-journal"):
+            name = basename + suffix
+            try:
+                fd = os.open(name, READ_FLAGS, dir_fd=parent)
+            except FileNotFoundError:
+                if not suffix:
+                    return False
+                inputs[suffix] = (None, None)
+                continue
+            opened.callback(os.close, fd)
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode):
+                raise Refused(f"{state}/{rel}{suffix} is not a regular file")
+            inputs[suffix] = (fd, file_signature(info))
+        for suffix, (fd, signature) in inputs.items():
+            if fd is None:
+                continue
+            remaining = signature[2]
+            with open(staging + suffix, "xb") as out:
+                while remaining:
+                    chunk = os.read(fd, min(remaining, 1024 * 1024))
+                    if not chunk:
+                        return False
+                    out.write(chunk)
+                    remaining -= len(chunk)
+        for suffix, (fd, signature) in inputs.items():
+            try:
+                current = file_signature(os.stat(basename + suffix, dir_fd=parent, follow_symlinks=False))
+            except FileNotFoundError:
+                current = None
+            if current != signature or (fd is not None and file_signature(os.fstat(fd)) != signature):
+                return False
+    return True
+
+
+def snapshot_database(state_fd, rel, state, payload, target):
+    for attempt in range(8):
+        with tempfile.TemporaryDirectory(prefix=".sqlite-input-", dir=payload) as work:
+            source = os.path.join(work, "input.sqlite")
+            if stage_database(state_fd, rel, state, source):
+                copy_database(source, target)
+                return
+        if attempt < 7:
+            time.sleep(0.02)
+    raise Refused(f"{state}/{rel} changed while it was copied; rerun the backup")
 
 
 def uri(path, query):
@@ -141,9 +182,6 @@ def uri(path, query):
 
 
 def copy_database(source, target):
-    """SQLite's online backup of source into target: a consistent snapshot
-    while other connections keep writing. mode=rw never creates a missing
-    database."""
     reader = sqlite3.connect(uri(source, "mode=rw"), uri=True, timeout=15)
     try:
         writer = sqlite3.connect(target)
@@ -182,7 +220,7 @@ def write_lines(path, lines):
 
 
 def copy_command(state, container, payload):
-    real, state_fd = open_state(state)
+    _, state_fd = open_state(state)
     try:
         roots = mount_roots(state, container)
         configured = [store["rel"] for store in configured_stores(state, container, state_mounts(docker_containers(), state))]
@@ -197,12 +235,9 @@ def copy_command(state, container, payload):
         manifest = [f"sqlite.link.{shown_name(link)}={shown_name(target)}" for link, target in links]
         for rel in databases:
             log(f"SQLite online backup of {state}/{rel}")
-            before = file_id(state_fd, rel, state)
             copy = os.path.join(payload, "sqlite", rel)
             os.makedirs(os.path.dirname(copy), mode=0o700, exist_ok=True)
-            copy_database(os.path.join(real, rel), copy)
-            if file_id(state_fd, rel, state) != before:
-                raise Refused(f"{state}/{rel} was replaced while it was copied; rerun the backup")
+            snapshot_database(state_fd, rel, state, payload, copy)
             for table, count in describe_copy(copy):
                 manifest.append(f"sqlite.{shown_name(rel)}.{shown_name(table)}={count}")
         with open(os.path.join(payload, "MANIFEST"), "a", encoding="utf-8") as out:
@@ -219,7 +254,7 @@ def preflight_command(state, container, local_dir):
             raise Refused(f"BACKUP_LOCAL_DIR ({local_dir}) and the state dir ({state}) overlap; keep the archives outside the state dir")
         containers = state_mounts(docker_containers(), state)
         configured = [store["rel"] for store in configured_stores(state, container, containers)]
-        json_store_problems(state, container, containers)
+        configured_json_stores(state, container, containers)
         plan(state_fd, state, mount_roots(state, container), configured)
     finally:
         os.close(state_fd)

@@ -54,7 +54,7 @@ from statelib import (  # noqa: E402
     database_paths,
     docker_containers,
     folded,
-    json_store_problems,
+    configured_json_stores,
     log,
     mount_roots,
     open_dir,
@@ -808,6 +808,25 @@ def coverage_problems(archive, state, container):
             for store in stores if store["rel"] not in covered]
 
 
+def require_redis_pattern(archive, pattern):
+    prefix = "redis.pattern="
+    with open(os.path.join(archive.payload, "MANIFEST"), encoding="utf-8") as manifest:
+        recorded = [line[len(prefix):].rstrip("\n") for line in manifest if line.startswith(prefix)]
+    if len(recorded) != 1 or not recorded[0]:
+        raise Refused("the backup does not record exactly one Redis key pattern; nothing was changed")
+    if recorded[0] != pattern:
+        raise Refused(f"the backup's Redis key pattern {recorded[0]!r} does not match the requested pattern {pattern!r}; use a backup for the configured prefix or leave Redis out; nothing was changed")
+
+
+def require_json_coverage(archive, state, container):
+    files = {rel for rel, kind in restore_writes(archive, False, True) if kind == "file"}
+    stores = configured_json_stores(state, container, state_mounts(docker_containers(), state))
+    missing = [f"the backup has no copy of {store['rel']}, the JSON file {store['variable']} ({store['where']}) names"
+               for store in stores if store["rel"] not in files]
+    if missing:
+        raise Refused("\n".join(missing + ["use a backup that has the configured JSON files or leave files out; nothing was changed"]))
+
+
 def parse_owner(value):
     if not value:
         return None
@@ -854,12 +873,14 @@ def restore(args):
         if missing:
             raise Refused("\n".join(missing + ["use a backup that has it, or leave SQLite out with --only redis,files (or --only files); nothing was changed"]))
     if "files" in wants:
-        json_store_problems(args.state, args.container, state_mounts(docker_containers(), args.state))
+        require_json_coverage(archive, args.state, args.container)
     redis = None
+    redis_pattern = os.environ.get("REDIS_KEY_PATTERN", "conclave:sfu:persistence:*")
     if "redis" in wants:
         if os.environ.get("REDIS_SOURCE_URL") and not archive.has_redis:
             raise Refused("Redis is configured (REDIS_SOURCE_URL) but this backup has no Redis snapshot, so the persistence keys written since it was taken would outlive the restore and shadow the restored databases; pass --only sqlite,files to leave Redis out; nothing was changed")
         if archive.has_redis:
+            require_redis_pattern(archive, redis_pattern)
             redis = redis_target()
     writes = restore_writes(archive, sqlite, "files" in wants)
     sides = side_files(database_files(archive)) if sqlite else set()
@@ -878,7 +899,7 @@ def restore(args):
         refuse_live_sfus(state, archive)
         owner = parse_owner(args.owner)
         if redis:
-            redis_step = RedisRestore(work_real, archive, redis, os.environ.get("REDIS_KEY_PATTERN", "conclave:sfu:persistence:*"))
+            redis_step = RedisRestore(work_real, archive, redis, redis_pattern)
             redis_step.prepare()
         if writes:
             aside = apply_restore(state, archive, writes, sides, roots, args.stamp, owner, sqlite)

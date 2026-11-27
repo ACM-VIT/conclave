@@ -349,6 +349,10 @@ file_id() {
 # A regular file no other user can open, made and checked by host_lock.py
 # under the rules backup.sh and restore.sh follow too: a lock any user can
 # open is one any user can hold, stopping every deploy and backup.
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "deploy-sfu.sh needs python3 to validate the host deploy lock. Install Python 3 and rerun." >&2
+  exit 1
+fi
 python3 -I "${ROOT_DIR}/scripts/host_lock.py" prepare "$DEPLOY_LOCK" || exit 1
 lock_id="$(file_id "$DEPLOY_LOCK")"
 # A restarted run inherits fd 9; SFU_DEPLOY_LOCK_HELD only says to look at

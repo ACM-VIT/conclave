@@ -8,7 +8,7 @@ IST to Azure Blob Storage in another region.
 
 | Data | Where it lives | How it is copied |
 | --- | --- | --- |
-| Scheduled meetings, scheduling, webinars | Every `*.sqlite` under the state dir (`/var/lib/conclave/recordings`, the SFU volume), at any depth, and each store's own database: `SCHEDULING_SQLITE_PATH`, `SCHEDULED_MEETINGS_SQLITE_PATH` or `SCHEDULED_WEBINARS_SQLITE_PATH`, else `CONCLAVE_SQLITE_PATH`, else the compose default `conclave.sqlite`, as the host config and every SFU container's env set them | SQLite's online backup API (from Python, so no path passes through a shell), then `PRAGMA integrity_check`. Each keeps its path below the state dir. |
+| Scheduled meetings, scheduling, webinars | Every `*.sqlite` under the state dir (`/var/lib/conclave/recordings`, the SFU volume), at any depth, and each store's own database: `SCHEDULING_SQLITE_PATH`, `SCHEDULED_MEETINGS_SQLITE_PATH` or `SCHEDULED_WEBINARS_SQLITE_PATH`, else `CONCLAVE_SQLITE_PATH`, else the compose default `conclave.sqlite`, as the host config and every SFU container's env set them | A private copy of the pinned SQLite inputs, then SQLite's backup API and `PRAGMA integrity_check`. Each keeps its path below the state dir. |
 | Scheduled meetings and scheduling (Redis mode) | Host Redis, keys `conclave:sfu:persistence:*` | `redis-cli --rdb`: the server forks a fresh snapshot, the same way `BGSAVE` does, and streams it. The host's `redis-check-rdb` checks it when installed; when that rejects it (an older package than the live Redis), `redis:<live major.minor>` checks it in Docker, and only a rejection there fails the backup |
 | Anything else in the state dir | JSON stores and similar files | A tar written in Python while the fence still holds |
 
@@ -179,7 +179,7 @@ SFU container that mounts another host dir inside its view of the state dir
 (say `/srv/other` at `/var/lib/conclave/recordings/data`) opens files the
 backup cannot see there, so the backup and the restore refuse that layout. A path outside the volume lives inside
 the container and is lost on every deploy, so the backup fails until it is
-moved. Each gets the online backup whatever it is named (`live.db` as much as
+moved. Each gets the SQLite backup whatever it is named (`live.db` as much as
 `conclave.sqlite`). If it is reached through links, the file they reach is
 backed up once, and every link on the way is recorded relative
 (`conclave.sqlite -> data/live.db`, whether it was written with the
@@ -322,3 +322,11 @@ A backup that has never been restored is not a backup.
   run `BACKUP_CONFIG=/root/drill.env restore.sh ... --yes`, and count the
   restored rows and keys. Delete the scratch data afterwards: it is real user
   data.
+
+The SQLite copy uses temporary space for the database and any WAL or rollback
+journal. The backup opens those inputs beneath the state directory, checks
+that they stay stable while copying, and opens only the resulting private
+copies with SQLite. A restore that selects Redis requires the archive's
+recorded key pattern to match the requested pattern. A restore that selects
+files requires every configured JSON store file to be present in the archive.
+Both checks run before the restore changes data.
