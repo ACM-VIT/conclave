@@ -608,16 +608,23 @@ test("compose forwards the control-plane store choice and JSON path to both SFUs
     assert.equal(rendered.status, 0, rendered.stderr);
     return JSON.parse(rendered.stdout).services;
   };
-  const chosen = render({ CONTROL_PLANE_PERSISTENCE: "sqlite", CONTROL_PLANE_JSON_PATH: "/var/lib/conclave/recordings/elsewhere.json" });
+  const chosen = render({
+    CONTROL_PLANE_PERSISTENCE: "sqlite",
+    CONTROL_PLANE_JSON_PATH: "/var/lib/conclave/recordings/elsewhere.json",
+    RECORDING_STORAGE_PATH: "/srv/conclave/recordings",
+  });
   const defaults = render({});
   for (const name of ["sfu-a", "sfu-b"]) {
     assert.equal(chosen[name].environment.CONTROL_PLANE_PERSISTENCE, "sqlite", name);
     assert.equal(chosen[name].environment.CONTROL_PLANE_JSON_PATH, "/var/lib/conclave/recordings/elsewhere.json", name);
     assert.equal(defaults[name].environment.CONTROL_PLANE_JSON_PATH, "/var/lib/conclave/recordings/control-plane.json", name);
+    assert.equal(chosen[name].environment.RECORDING_STORAGE_PATH, "/var/lib/conclave/recordings", name);
+    assert.ok(chosen[name].volumes.some(({ source, target }) =>
+      source === "/srv/conclave/recordings" && target === "/var/lib/conclave/recordings"), name);
   }
 });
 
-const storePathErrors = (environment, volumes) => {
+const storePathErrors = (environment, volumes, workDir) => {
   const compose = makeCompose();
   for (const service of Object.values(compose.services)) {
     Object.assign(service.environment, environment);
@@ -625,12 +632,13 @@ const storePathErrors = (environment, volumes) => {
       if (value === undefined) delete service.environment[key];
     }
     if (volumes) service.volumes = volumes;
+    if (workDir) service.working_dir = workDir;
   }
   try {
     resolveSfuTargets({ compose });
     return [];
   } catch (error) {
-    return error.errors.filter((message) => /writable volume mount/.test(message));
+    return error.errors.filter((message) => /writable volume mount|CONCLAVE_FALLBACK_IMPORT_DIR must name a directory/.test(message));
   }
 };
 
@@ -671,6 +679,106 @@ test("explicit and inferred Redis do not require the image SQLite default on a w
     SCHEDULED_WEBINARS_PERSISTENCE: "sqlite",
     CONCLAVE_SQLITE_PATH: undefined,
   }).join("\n"), /not on a writable volume mount/);
+});
+
+test("recovery data needs a writable mount even with a Redis control plane", () => {
+  const redis = { CONTROL_PLANE_PERSISTENCE: "redis", CONCLAVE_SQLITE_PATH: undefined };
+  assert.deepEqual(storePathErrors(redis), []);
+  const unmapped = storePathErrors({ ...redis, RECORDING_STORAGE_PATH: "/srv/conclave/recordings" });
+  assert.equal(unmapped.filter((message) => message.startsWith("edge-dxb")).length, 1);
+  assert.match(unmapped.join("\n"),
+    /SFU_ROOM_RECOVERY_PATH \(from RECORDING_STORAGE_PATH\) resolves to \/srv\/conclave\/recordings\/room-recovery/);
+  assert.match(
+    storePathErrors({ ...redis, SFU_ROOM_RECOVERY_PATH: "/srv/recovery" }).join("\n"),
+    /SFU_ROOM_RECOVERY_PATH resolves to \/srv\/recovery/,
+  );
+  assert.deepEqual(
+    storePathErrors({ ...redis, SFU_ROOM_RECOVERY_PATH: "/var/lib/conclave/recordings/recovery" }),
+    [],
+  );
+  assert.match(
+    storePathErrors(redis, [
+      { type: "bind", source: "/srv/recordings", target: "/var/lib/conclave/recordings" },
+      { type: "bind", source: "/srv/frozen", target: "/var/lib/conclave/recordings/room-recovery", read_only: true },
+    ]).join("\n"),
+    /SFU_ROOM_RECOVERY_PATH \(from RECORDING_STORAGE_PATH\) resolves to \/var\/lib\/conclave\/recordings\/room-recovery/,
+  );
+});
+
+test("does not require the configured recordings path when the deploy and recovery paths are writable", () => {
+  const recordings = { type: "bind", target: "/var/lib/conclave/recordings" };
+  const configured = "/srv/archive";
+  const frozen = { type: "bind", target: configured, read_only: true };
+  const redis = {
+    CONTROL_PLANE_PERSISTENCE: "redis",
+    CONCLAVE_SQLITE_PATH: undefined,
+    RECORDING_STORAGE_PATH: configured,
+  };
+  const recovery = "/srv/recovery";
+  const writable = { type: "bind", target: recovery };
+
+  for (const mounts of [[recordings, writable], [recordings, frozen, writable]]) {
+    assert.deepEqual(storePathErrors({ ...redis, SFU_ROOM_RECOVERY_PATH: recovery }, mounts), []);
+  }
+  assert.deepEqual(
+    storePathErrors(redis, [recordings, frozen, { type: "bind", target: configured + "/room-recovery" }]),
+    [],
+  );
+});
+
+test("validates the runtime's default recovery directory when both path variables are unset", () => {
+  const redis = {
+    CONTROL_PLANE_PERSISTENCE: "redis",
+    CONCLAVE_SQLITE_PATH: undefined,
+    RECORDING_STORAGE_PATH: undefined,
+  };
+  const recordings = { type: "bind", target: "/var/lib/conclave/recordings" };
+  assert.match(storePathErrors(redis, [recordings]).join("\n"),
+    /SFU_ROOM_RECOVERY_PATH resolves to \/app\/packages\/sfu\/data\/room-recovery/);
+  assert.deepEqual(storePathErrors(redis, [recordings, { type: "bind", target: "/app/packages/sfu/data" }]), []);
+});
+
+test("refuses a read-only deployment recordings mount even when recovery uses its own volume", () => {
+  const recordings = "/var/lib/conclave/recordings";
+  const recovery = "/srv/recovery";
+  const redis = {
+    CONTROL_PLANE_PERSISTENCE: "redis",
+    CONCLAVE_SQLITE_PATH: undefined,
+    SFU_ROOM_RECOVERY_PATH: recovery,
+    CONCLAVE_FALLBACK_IMPORT_DIR: "/srv/import",
+  };
+  const errors = storePathErrors(redis, [
+    { type: "bind", target: recordings, read_only: true },
+    { type: "bind", target: recovery },
+    { type: "bind", target: "/srv/import" },
+  ]);
+  assert.match(errors.join("\n"), /recordings ownership handoff.*writable volume mount/);
+});
+
+test("refuses a read-only fallback import directory even when recovery and recordings are writable", () => {
+  const recordings = "/var/lib/conclave/recordings";
+  const recovery = "/srv/recovery";
+  const redis = {
+    CONTROL_PLANE_PERSISTENCE: "redis",
+    CONCLAVE_SQLITE_PATH: undefined,
+    SFU_ROOM_RECOVERY_PATH: recovery,
+    CONCLAVE_FALLBACK_IMPORT_DIR: "/srv/import",
+  };
+  const volumes = [{ type: "bind", target: recordings }, { type: "bind", target: recovery }];
+  assert.match(storePathErrors(redis, [...volumes, { type: "bind", target: "/srv/import", read_only: true }]).join("\n"),
+    /CONCLAVE_FALLBACK_IMPORT_DIR resolves to \/srv\/import.*writable volume mount/);
+  assert.deepEqual(storePathErrors(redis, [...volumes, { type: "bind", target: "/srv/import" }]), []);
+  assert.deepEqual(storePathErrors({ ...redis, CONCLAVE_FALLBACK_IMPORT_DIR: "import" }, [
+    ...volumes, { type: "bind", target: "/srv/import" },
+  ], "/srv"), []);
+  for (const path of ["", " /srv/import "]) {
+    assert.match(storePathErrors({ ...redis, CONCLAVE_FALLBACK_IMPORT_DIR: path }, [
+      ...volumes, { type: "bind", target: "/srv/import" },
+    ]).join("\n"), /CONCLAVE_FALLBACK_IMPORT_DIR must name a directory/);
+  }
+  assert.match(storePathErrors({ ...redis, CONCLAVE_FALLBACK_IMPORT_DIR: undefined }, [
+    ...volumes, { type: "bind", target: recordings + "/json-fallback-import", read_only: true },
+  ]).join("\n"), /CONCLAVE_FALLBACK_IMPORT_DIR resolves to \/var\/lib\/conclave\/recordings\/json-fallback-import/);
 });
 
 test("SFU services must run in production mode", () => {

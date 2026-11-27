@@ -88,7 +88,7 @@ services:
       BROWSER_SERVICE_URL: ${BROWSER_SERVICE_URL:-http://localhost:3040}
       BROWSER_SERVICE_TOKEN: ${BROWSER_SERVICE_TOKEN:-}
       BROWSER_SERVICE_TIMEOUT_MS: ${BROWSER_SERVICE_TIMEOUT_MS:-5000}
-      RECORDING_STORAGE_PATH: ${RECORDING_STORAGE_PATH:-/var/lib/conclave/recordings}
+      RECORDING_STORAGE_PATH: /var/lib/conclave/recordings
       CONCLAVE_SQLITE_PATH: ${CONCLAVE_SQLITE_PATH:-/var/lib/conclave/recordings/conclave.sqlite}
       CONTROL_PLANE_PERSISTENCE: ${CONTROL_PLANE_PERSISTENCE:-}
       CONTROL_PLANE_JSON_PATH: ${CONTROL_PLANE_JSON_PATH:-/var/lib/conclave/recordings/control-plane.json}
@@ -165,7 +165,7 @@ services:
       BROWSER_SERVICE_URL: ${BROWSER_SERVICE_URL:-http://localhost:3040}
       BROWSER_SERVICE_TOKEN: ${BROWSER_SERVICE_TOKEN:-}
       BROWSER_SERVICE_TIMEOUT_MS: ${BROWSER_SERVICE_TIMEOUT_MS:-5000}
-      RECORDING_STORAGE_PATH: ${RECORDING_STORAGE_PATH:-/var/lib/conclave/recordings}
+      RECORDING_STORAGE_PATH: /var/lib/conclave/recordings
       CONCLAVE_SQLITE_PATH: ${CONCLAVE_SQLITE_PATH:-/var/lib/conclave/recordings/conclave.sqlite}
       CONTROL_PLANE_PERSISTENCE: ${CONTROL_PLANE_PERSISTENCE:-}
       CONTROL_PLANE_JSON_PATH: ${CONTROL_PLANE_JSON_PATH:-/var/lib/conclave/recordings/control-plane.json}
