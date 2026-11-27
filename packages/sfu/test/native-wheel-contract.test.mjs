@@ -14,6 +14,20 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+it("shows a released Wheel entry after a current client joins the same room", async () => {
+  const pool = createAppDocumentPool({ workers: 1, deadlineMs: 5_000, maxDocumentBytes: 1024 * 1024 });
+  cleanups.push(() => pool.close());
+  const room = inAppRoom(pool, "released-wheel-list", { appId: "wheel" });
+  await room.open();
+  // Captured from createWheelDoc() and addEntry(doc, "Ada") at 859c81a2 with Yjs 13.6.33.
+  const update = "AQJlACcBBXdoZWVsB2VudHJpZXMACABlAAF2AgJpZHcKbG95dzN2MjgtaQVsYWJlbHcDQWRhAA==";
+  expect((await room.acknowledged({ update })).receipt).toEqual({ committed: true });
+
+  const { doc } = await room.joinDocument();
+  cleanups.push(() => doc.destroy());
+  expect(getEntries(doc).map(({ label }) => label)).toEqual(["Ada"]);
+});
+
 it.each(["echo", "snapshot"])("acknowledges a native Wheel add only after the server provides a committed %s", async (confirmation) => {
   const pool = createAppDocumentPool({ workers: 1, deadlineMs: 5_000, maxDocumentBytes: 1024 * 1024 });
   cleanups.push(() => pool.close());
