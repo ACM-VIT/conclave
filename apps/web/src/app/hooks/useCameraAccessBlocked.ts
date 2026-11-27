@@ -2,7 +2,7 @@
 
 import type { MeetError } from "../lib/types";
 import { isCameraAccessBlocked } from "../lib/utils";
-import { useCameraPermissionState } from "./useCameraPermissionState";
+import { useMediaPermissionState } from "./useMediaPermissionState";
 
 export function useCameraAccessBlocked({
   hasLiveCamera,
@@ -11,6 +11,6 @@ export function useCameraAccessBlocked({
   hasLiveCamera: boolean;
   mediaError: MeetError | null | undefined;
 }): boolean {
-  const permissionState = useCameraPermissionState();
+  const permissionState = useMediaPermissionState("camera");
   return isCameraAccessBlocked({ hasLiveCamera, permissionState, mediaError });
 }

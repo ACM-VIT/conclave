@@ -47,6 +47,7 @@ export type OtherGuestSeat = z.infer<typeof otherGuestSeatSchema>;
  * cross, which Web Locks prevent.
  */
 export const MAX_OTHER_GUEST_SEATS = 15;
+export const MAX_BROWSER_GUEST_PASSES = MAX_OTHER_GUEST_SEATS + 1;
 
 /** A guest token issued from a pass. It is good for `guestRoom` only. */
 export const roomScopedClaimsSchema = z.object({

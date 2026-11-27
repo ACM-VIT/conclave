@@ -108,9 +108,16 @@ jobs:
       CI_JOB: test-backup
     steps: *ci-steps
 
+  test-sfu-app-model:
+    runs-on: *ci-runner
+    timeout-minutes: 10
+    env:
+      CI_JOB: test-sfu-app-model
+    steps: *ci-steps
+
   test-result:
     name: test
-    needs: [test-unit, test-sfu, test-backup]
+    needs: [test-unit, test-sfu, test-backup, test-sfu-app-model]
     if: ${{ always() }}
     runs-on: *ci-runner
     timeout-minutes: 1
@@ -119,4 +126,9 @@ jobs:
           TEST_UNIT_RESULT: ${{ needs.test-unit.result }}
           TEST_SFU_RESULT: ${{ needs.test-sfu.result }}
           TEST_BACKUP_RESULT: ${{ needs.test-backup.result }}
-        run: test "$TEST_UNIT_RESULT" = success && test "$TEST_SFU_RESULT" = success && test "$TEST_BACKUP_RESULT" = success
+          TEST_SFU_APP_MODEL_RESULT: ${{ needs.test-sfu-app-model.result }}
+        run: |
+          test "$TEST_UNIT_RESULT" = success &&
+          test "$TEST_SFU_RESULT" = success &&
+          test "$TEST_BACKUP_RESULT" = success &&
+          test "$TEST_SFU_APP_MODEL_RESULT" = success

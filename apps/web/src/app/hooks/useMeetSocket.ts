@@ -26,6 +26,15 @@ import {
   buildScreenShareAudioOpusCodecOptions,
 } from "../lib/constants";
 import { emitWithAckTimeout } from "../lib/socket-ack";
+import { retireSocket } from "../lib/retire-socket";
+import { beginJoinRequest } from "../lib/join-requests";
+import { JOIN_ROOM_ACK_TIMEOUT_MS } from "../lib/join-timeouts";
+import {
+  forgetJoinedRoom,
+  getJoinedRoom,
+  rememberJoinedRoom,
+  renewRoomRecoveryPass,
+} from "../lib/joined-room";
 import type { JoinInfoAnswer } from "../lib/join-info-request";
 import { joinAnswerReportsSenderPacketCounts } from "@conclave/meeting-core/sender-packet-counts";
 import {
@@ -309,7 +318,12 @@ import {
   type StaleConsumerReason,
   type WebcamResetFailure,
 } from "../lib/telemetry-schema";
-import { endedNotice, joinRejectedUpdate, type SetupNotice } from "../lib/setup-notice";
+import {
+  endedNotice,
+  joinRejectedUpdate,
+  removedNotice,
+  type SetupNotice,
+} from "../lib/setup-notice";
 
 type ConsumerTelemetryPayload = Omit<
   ConsumerTelemetrySnapshot,
@@ -370,7 +384,6 @@ const RESUME_CONSUMER_MAX_ATTEMPTS = 6;
 
 const getResumeConsumerRetryDelayMs = (attempt: number): number =>
   Math.min(8000, 400 * 2 ** attempt) + Math.floor(Math.random() * 250);
-const JOIN_ROOM_ACK_TIMEOUT_MS = 15000;
 const HELD_JOIN_INFO_TTL_MS = 30000;
 const RESTART_ICE_ACK_TIMEOUT_MS = 5000;
 const MEDIA_PATH_SAMPLE_INTERVAL_MS = 2500;
@@ -605,6 +618,9 @@ const getReconnectFailureKind = (error: unknown): ReconnectFailureKind =>
     message: reconnectErrorMessage(error),
     responseStatus: getResponseStatusFromError(error),
   });
+
+export const isRecoverableReconnectFailure = (error: unknown): boolean =>
+  getReconnectFailureKind(error) !== "final";
 
 type InitialConsumerPreferences = {
   preferredLayers?: {
@@ -1261,6 +1277,7 @@ export function useMeetSocket({
   const reconnectPhaseRef =
     useRef<ReconnectRecoveryStatus["phase"] | "idle">("idle");
   const serverRestartNoticeRef = useRef<string | null>(null);
+  const newestJoinRequestRef = useRef(0);
   const adminNoticeTimeoutRef = useRef<number | null>(null);
   const consumeRetryAttemptsRef = useRef<Map<string, number>>(new Map());
   const consumerConsumeInFlightRef = useRef<Map<string, symbol>>(new Map());
@@ -1388,6 +1405,7 @@ export function useMeetSocket({
     currentRoomIdRef,
     handleRedirectRef,
     handleReconnectRef,
+    connectSocketRef,
     shouldAutoJoinRef,
     joinOptionsRef,
     localStreamRef,
@@ -2475,9 +2493,7 @@ export function useMeetSocket({
     localStreamRef.current = null;
     localTracks.forEach((track) => stopLocalTrack(track));
 
-    socketRef.current?.disconnect();
-    socketRef.current = null;
-    onSocketReady?.(null);
+    retireSocket(socketRef, onSocketReady);
     joinInfoRequestRef.current?.abort();
     joinInfoRequestRef.current = null;
     heldJoinInfoRef.current = null;
@@ -2560,6 +2576,7 @@ export function useMeetSocket({
   const finishLocalRoomEnded = useCallback(() => {
     if (localRoomEndedHandledRef.current) return;
     localRoomEndedHandledRef.current = true;
+    forgetJoinedRoom();
     setMeetError(null);
     setSetupNotice?.(null);
     setWaitingMessage(null);
@@ -7730,14 +7747,18 @@ export function useMeetSocket({
         webinarInviteCode?: string;
         meetingInviteCode?: string;
       },
-    ): Promise<"joined" | "waiting"> => {
+    ): Promise<"joined" | "waiting" | "overtaken"> => {
       const socket = socketRef.current;
       if (!socket) throw new Error("Socket not connected");
+      // A newer join this tab begins while this one waits makes this one
+      // settle as "overtaken": its answer and its setup never apply.
+      const request = beginJoinRequest(newestJoinRequestRef);
       const assertJoinCurrent = () => {
         if (
           intentionalDisconnectRef.current ||
           socketRef.current !== socket ||
-          !socket.connected
+          !socket.connected ||
+          !request.isNewest()
         ) {
           throw new Error("Meeting join was cancelled");
         }
@@ -7756,12 +7777,14 @@ export function useMeetSocket({
         },
       );
 
+      if (!request.isNewest()) return "overtaken";
       assertJoinCurrent();
       setWaitingMessage(null);
       setConnectionState("joining");
 
       const joinRequestedAt = producerSlotOrder.markListRequested();
-      return new Promise<"joined" | "waiting">((resolve, reject) => {
+      return new Promise<"joined" | "waiting" | "overtaken">((settle, fail) => {
+        const { resolve, reject } = request.settleWith<"joined" | "waiting">(settle, fail);
         const settleJoinRoom = startSocketAckTimeout(
           "joinRoom",
           reject,
@@ -7776,6 +7799,8 @@ export function useMeetSocket({
             webinarInviteCode: joinOptions.webinarInviteCode,
             meetingInviteCode: joinOptions.meetingInviteCode,
             mediaCapabilities,
+            roomRecoveryPass:
+              getJoinedRoom(targetRoomId)?.recoveryPass ?? undefined,
           },
           async (response: JoinRoomResponse | JoinRoomErrorResponse) => {
             if (!settleJoinRoom()) return;
@@ -7872,6 +7897,11 @@ export function useMeetSocket({
                 response.existingProducers,
                 joinRequestedAt,
               );
+              // Only being let into a meeting counts: a tab that was left
+              // knocking must not reopen the room or skip the knock later.
+              if (joinOptions.joinMode === "meeting") {
+                rememberJoinedRoom(targetRoomId, response.roomRecoveryPass);
+              }
               currentRoomIdRef.current = targetRoomId;
               serverRoomIdRef.current = response.roomId ?? targetRoomId;
               setIsRoomLocked(response.isLocked ?? false);
@@ -8215,11 +8245,7 @@ export function useMeetSocket({
               resolve(socketRef.current);
               return;
             }
-            if (socketRef.current) {
-              socketRef.current.disconnect();
-              socketRef.current = null;
-              onSocketReady?.(null);
-            }
+            if (socketRef.current) retireSocket(socketRef, onSocketReady);
 
             setConnectionState("connecting");
 
@@ -8399,6 +8425,7 @@ export function useMeetSocket({
 
             onLive("roomClosed", ({ reason }: { reason: string }) => {
               console.info("[Meets] Room closed:", reason);
+              forgetJoinedRoom();
               setMeetError({
                 code: "UNKNOWN",
                 message: `Room closed: ${reason}`,
@@ -8423,6 +8450,7 @@ export function useMeetSocket({
                   return;
                 }
 
+                forgetJoinedRoom();
                 setMeetError(null);
                 setWaitingMessage(null);
                 cleanup();
@@ -8474,6 +8502,23 @@ export function useMeetSocket({
                   return Array.from(next);
                 });
                 setWaitingMessage(null);
+              },
+            );
+
+            onLive(
+              "hostRemoved",
+              ({
+                roomId: eventRoomId,
+                hostUserId,
+              }: {
+                roomId?: string;
+                hostUserId?: string | null;
+              }) => {
+                if (!isRoomEvent(eventRoomId)) return;
+                setIsAdmin(false);
+                setHostUserId(hostUserId ?? null);
+                setHostUserIds((prev) => prev.filter((id) => id !== userId));
+                setPendingUsers(new Map());
               },
             );
 
@@ -9468,17 +9513,31 @@ export function useMeetSocket({
               },
             );
 
+            onLive(
+              "roomRecoveryPass",
+              (renewal: { roomId?: string; roomRecoveryPass?: string }) => {
+                const joinedRoomId = currentRoomIdRef.current;
+                if (
+                  !joinedRoomId ||
+                  !isRoomEvent(renewal.roomId) ||
+                  typeof renewal.roomRecoveryPass !== "string"
+                ) {
+                  return;
+                }
+                renewRoomRecoveryPass(joinedRoomId, renewal.roomRecoveryPass);
+              },
+            );
+
             onLive("kicked", (payload?: { reason?: string }) => {
+              forgetJoinedRoom();
+              setMeetError(null);
+              setWaitingMessage(null);
               cleanup();
-              setMeetError({
-                code: "UNKNOWN",
-                message: "You have been kicked from the meeting.",
-                recoverable: false,
-              });
-              onCallEnded?.({
+              const shownAsEndScreen = onCallEnded?.({
                 kind: "removed",
                 detail: customServerText(payload?.reason, DEFAULT_KICK_REASON),
               });
+              if (!shownAsEndScreen) setSetupNotice?.(removedNotice());
             });
 
             onLive(
@@ -9631,19 +9690,45 @@ export function useMeetSocket({
                   bypassMediaPermissions ||
                   joinOptions.joinMode === "webinar_attendee")
               ) {
-                await joinRoomInternal(
-                  currentRoomIdRef.current,
-                  stream,
-                  joinOptions,
-                ).catch((joinError: unknown) => {
+                const approvedRoomId = currentRoomIdRef.current;
+                const stale = () =>
+                  approvalGeneration !== reconnectGenerationRef.current ||
+                  intentionalDisconnectRef.current;
+                let rerouted = false;
+                try {
+                  try {
+                    await joinRoomInternal(approvedRoomId, stream, joinOptions);
+                  } catch (joinError) {
+                    const connectToRoutedSfu = connectSocketRef.current;
                     if (
-                      approvalGeneration !== reconnectGenerationRef.current ||
-                      intentionalDisconnectRef.current ||
+                      !(joinError instanceof JoinRoomRedirectError) ||
+                      !connectToRoutedSfu ||
+                      stale() ||
                       socketRef.current !== socket
-                    ) return;
-                    logCallError("[Meets] Join after approval failed", joinError);
-                    refuseEntry(createMeetError(joinError));
-                  });
+                    ) {
+                      throw joinError;
+                    }
+                    console.info(
+                      `[Meets] Reconnecting to routed SFU ${joinError.redirectUrl}`,
+                      {
+                        roomId: approvedRoomId,
+                        redirectInstanceId: joinError.response.redirectInstanceId,
+                      },
+                    );
+                    rerouted = true;
+                    cleanupRoomResources({ resetRoomId: false });
+                    retireSocket(socketRef, onSocketReady);
+                    await connectToRoutedSfu(approvedRoomId, {
+                      sfuUrlOverride: joinError.redirectUrl,
+                    });
+                    if (stale()) return;
+                    await joinRoomInternal(approvedRoomId, stream, joinOptions);
+                  }
+                } catch (joinError) {
+                  if (stale() || (!rerouted && socketRef.current !== socket)) return;
+                  logCallError("[Meets] Join after approval failed", joinError);
+                  refuseEntry(createMeetError(joinError));
+                }
               } else {
                 logCallError(
                   "[Meets] Cannot re-join: missing room ID or local stream",
@@ -10082,6 +10167,8 @@ export function useMeetSocket({
       userId,
       onTtsMessage,
       onSocketReady,
+      cleanupRoomResources,
+      connectSocketRef,
       applyJoinAnswerIceServers,
     ],
   );
@@ -10197,6 +10284,10 @@ export function useMeetSocket({
       updateReconnectRecoveryStatus,
     ],
   );
+
+  useEffect(() => {
+    connectSocketRef.current = connectSocket;
+  }, [connectSocket, connectSocketRef]);
 
   const handleReconnect = useCallback(async (options?: ReconnectRequest) => {
     const failedPath = options?.failedPath;
@@ -10459,9 +10550,7 @@ export function useMeetSocket({
           });
           lastJoinInfoSourceRef.current = "fresh";
           if (!canReuseSocket) {
-            socketRef.current?.disconnect();
-            socketRef.current = null;
-            onSocketReady?.(null);
+            retireSocket(socketRef, onSocketReady);
             const reconnectJoinInfo = attemptState.heldJoinInfoTried
               ? "fresh-first"
               : "held-first";
@@ -10506,8 +10595,9 @@ export function useMeetSocket({
               ),
             );
           }
+          let joinResult: Awaited<ReturnType<typeof joinRoomInternal>>;
           try {
-            await joinRoomInternal(reconnectRoomId, stream, joinOptions);
+            joinResult = await joinRoomInternal(reconnectRoomId, stream, joinOptions);
           } catch (joinError) {
             if (!(joinError instanceof JoinRoomRedirectError)) {
               throw joinError;
@@ -10516,15 +10606,21 @@ export function useMeetSocket({
               resetRoomId: false,
               preserveMeetingState: true,
             });
-            socketRef.current?.disconnect();
-            socketRef.current = null;
-            onSocketReady?.(null);
+            retireSocket(socketRef, onSocketReady);
             await connectSocket(reconnectRoomId, {
               sfuUrlOverride: joinError.redirectUrl,
               reconnectJoinInfo: "fresh-first",
             });
             if (intentionalDisconnectRef.current) return;
-            await joinRoomInternal(reconnectRoomId, stream, joinOptions);
+            joinResult = await joinRoomInternal(reconnectRoomId, stream, joinOptions);
+          }
+          // A newer join this tab began, such as one on "joinApproved",
+          // owns the meeting now: this reconnect only stands down.
+          if (joinResult === "overtaken") {
+            reconnectAttemptsRef.current = 0;
+            manualReconnectRetryRequestedRef.current = false;
+            updateReconnectRecoveryStatus(null);
+            return;
           }
           if (shouldRetryLocalMediaAfterJoin) {
             if (mediaNeeds.needsAudio) {
@@ -10973,6 +11069,7 @@ export function useMeetSocket({
               streamForJoin,
               nextJoinOptions,
             );
+            if (joinResult === "overtaken") return;
             telemetry.capture("meet_join_success", {
               joinMode: nextJoinOptions.joinMode,
               status: joinResult,
@@ -10992,9 +11089,7 @@ export function useMeetSocket({
                 },
               );
               cleanupRoomResources({ resetRoomId: false });
-              socketRef.current?.disconnect();
-              socketRef.current = null;
-              onSocketReady?.(null);
+              retireSocket(socketRef, onSocketReady);
               await connectSocket(targetRoomId, {
                 sfuUrlOverride: joinError.redirectUrl,
               });
@@ -11057,12 +11152,17 @@ export function useMeetSocket({
           void mediaRequest.catch(() => undefined);
           return;
         }
-        logCallError("[Meets] Error joining room", err);
+        const joinError = createMeetError(err);
+        if (joinError.code === "ROOM_NOT_FOUND") {
+          console.info("[Meets] No room at this code:", targetRoomId);
+        } else {
+          logCallError("[Meets] Error joining room", err);
+        }
         telemetry.capture("meet_join_failure", {
           joinMode,
-          failure_reason: joinFailureReason(createMeetError(err)),
+          failure_reason: joinFailureReason(joinError),
         });
-        refuseEntry(createMeetError(err));
+        refuseEntry(joinError);
       }
     },
     [

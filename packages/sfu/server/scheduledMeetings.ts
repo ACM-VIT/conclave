@@ -8,6 +8,7 @@ import type {
 import { asRecord } from "../utilities/untrusted.js";
 import { InvalidInput } from "./controlPlane/model.js";
 import { canonicalizeClientId } from "./clientIds.js";
+import { generateMeetingCode } from "./meetingCodes.js";
 import { storedTimestampOrNull } from "./storedValues.js";
 
 const MAX_TITLE_LENGTH = 140;
@@ -16,27 +17,6 @@ const ROOM_CODE_MIN_LENGTH = 3;
 const ROOM_CODE_MAX_LENGTH = 64;
 const DEFAULT_DURATION_MS = 60 * 60 * 1000;
 const ROOM_CODE_ATTEMPTS = 64;
-
-const ROOM_CODE_ADJECTIVES = [
-  "swift",
-  "lucid",
-  "amber",
-  "calm",
-  "still",
-  "bright",
-  "quiet",
-  "vivid",
-];
-const ROOM_CODE_NOUNS = [
-  "river",
-  "harbor",
-  "ember",
-  "thicket",
-  "atrium",
-  "summit",
-  "meadow",
-  "comet",
-];
 
 export const ROOM_CODE_TAKEN_MESSAGE =
   "That meeting code is already booked for another scheduled meeting.";
@@ -85,13 +65,6 @@ const normalizeEmailNotificationStatus = (
 const positiveStampOrNull = (value: unknown): number | null =>
   Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : null;
 
-export const generateRoomCode = (random: () => number): string => {
-  const a = ROOM_CODE_ADJECTIVES[Math.floor(random() * ROOM_CODE_ADJECTIVES.length)];
-  const n = ROOM_CODE_NOUNS[Math.floor(random() * ROOM_CODE_NOUNS.length)];
-  const suffix = Math.floor(1000 + random() * 9000);
-  return `${a}-${n}-${suffix}`;
-};
-
 export const isActiveMeetingStatus = (status: ScheduledMeetingStatus): boolean =>
   status === "scheduled" || status === "live";
 
@@ -109,7 +82,7 @@ const pickRoomCode = (
   request: CreateScheduledMeetingRequest,
   clientId: string,
   activeOwner: RoomCodeOwner,
-  random: () => number,
+  random: (max: number) => number,
 ): string => {
   const requested = sanitizeRoomCode(request.roomCode);
   if (requested) {
@@ -120,7 +93,7 @@ const pickRoomCode = (
     return requested;
   }
   for (let attempt = 0; attempt < ROOM_CODE_ATTEMPTS; attempt += 1) {
-    const candidate = generateRoomCode(random);
+    const candidate = generateMeetingCode(random);
     if (!activeOwner(clientId, candidate)) return candidate;
   }
   throw new InvalidInput("Could not pick a free meeting code. Try again.");
@@ -129,7 +102,7 @@ const pickRoomCode = (
 export const buildScheduledMeeting = (
   request: CreateScheduledMeetingRequest,
   options: CreateScheduledMeetingOptions,
-  context: { id: string; now: number; random: () => number; activeOwner: RoomCodeOwner },
+  context: { id: string; now: number; random: (max: number) => number; activeOwner: RoomCodeOwner },
 ): ScheduledMeeting => {
   const clientId = canonicalizeClientId(options.clientId);
   const title = sanitizeTitle(request.title);

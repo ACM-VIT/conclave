@@ -47,6 +47,22 @@ describe("room placement registry", () => {
     });
   });
 
+  it("allocates fresh generations across released rooms even if its clock moves backwards", async () => {
+    let now = 1000;
+    const registry = new LocalRoomRegistry({ instanceId: "local", ttlMs: 45_000, now: () => now });
+    const generations = [];
+    for (const roomId of ["first", "second", "first"]) {
+      const input = { clientId: ROOM.clientId, roomId, channelId: `${ROOM.clientId}:${roomId}` };
+      const claim = await registry.claimRoom(input);
+      expect(claim.ok).toBe(true);
+      if (!claim.ok) throw new Error("Room claim failed");
+      generations.push(claim.generation);
+      await registry.releaseRoom(input.channelId);
+      now -= 1;
+    }
+    expect(generations).toEqual([1000, 1001, 1002]);
+  });
+
   it("lets an abandoned reservation expire without claiming room ownership", async () => {
     let now = 1_000;
     const registry = new LocalRoomRegistry({

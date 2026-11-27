@@ -16,9 +16,10 @@ import type { StoreMode } from "./backends/backend.js";
 import { openSqliteDatabase, type SqliteDatabase } from "./backends/sqlite.js";
 import { identityOf, specOf } from "./entities.js";
 import { LEGACY_DOMAINS, legacyCopyKey, type DataKind, type DataMap, type Kind, type LegacyDomain } from "./model.js";
+import { emptyInviteeState, legacyInviteeState, mergeInviteeState, storedNumber, type InviteeState } from "./inviteeState.js";
 import { hashLegacyValue } from "./legacyHash.js";
 
-export type LegacyRecord = { [K in DataKind]: { kind: K; value: DataMap[K]; stamp: number } }[DataKind];
+export type LegacyRecord = { [K in DataKind]: { kind: K; value: DataMap[K]; stamp: number; inviteeState?: InviteeState } }[DataKind];
 
 export type HashedLegacyRecord = LegacyRecord & { id: string; key: string; identity: string; hash: string };
 
@@ -155,10 +156,71 @@ const jsonArray = (path: string): unknown[] | null =>
 const jsonScheduling = (path: string): RawScheduling | null =>
   existsSync(path) ? snapshotScheduling(parseJson(readFileSync(path, "utf8"), path)) : null;
 
-const redisMeetings = async (client: RedisPersistenceClient, prefix: string): Promise<unknown[]> =>
-  (await client.hVals(`${prefix}:scheduled-meetings`)).map((value) =>
-    parseJson(value, `${prefix}:scheduled-meetings`),
-  );
+type LegacyInvitees = {
+  states: Map<string, InviteeState>;
+  moved: Set<string>;
+};
+
+const legacyInvitees = (): LegacyInvitees => ({ states: new Map(), moved: new Set() });
+
+const stateFor = ({ states }: LegacyInvitees, id: string): InviteeState => {
+  const current = states.get(id) ?? emptyInviteeState(id);
+  states.set(id, current);
+  return current;
+};
+
+const sqliteMeetings = (path: string): LegacyRecord[] | null =>
+  withLegacySqlite(path, (db) => {
+    if (!hasTable(db, "scheduled_meetings")) return null;
+    const sidecar = legacyInvitees();
+    db.exec("BEGIN");
+    try {
+      const rows = (table: string) => hasTable(db, table) ? db.prepare(`SELECT * FROM ${table}`).all().map(asRecord) : [];
+      for (const row of rows("scheduled_meeting_removed_invitees")) {
+        if (typeof row.meeting_id !== "string" || typeof row.email !== "string") continue;
+        const state = stateFor(sidecar, row.meeting_id);
+        state.decisions = { ...state.decisions, [row.email]: { removed: row.readmitted !== 1, at: storedNumber(row.removed_at) ?? 0 } };
+        sidecar.moved.add(row.meeting_id);
+      }
+      for (const row of rows("scheduled_meeting_removals_ended")) {
+        if (typeof row.meeting_id === "string") stateFor(sidecar, row.meeting_id).endedAt = storedNumber(row.ended_at);
+      }
+      for (const row of rows("scheduled_meeting_write_generations")) {
+        if (typeof row.meeting_id === "string") stateFor(sidecar, row.meeting_id).generation = storedNumber(row.generation);
+      }
+      for (const row of rows("scheduled_meeting_removals_moved")) {
+        if (typeof row.meeting_id === "string") sidecar.moved.add(row.meeting_id);
+      }
+      return meetingRecords(payloads(db, "SELECT payload_json FROM scheduled_meetings", path), sidecar);
+    } finally {
+      db.exec("ROLLBACK");
+    }
+  });
+
+const redisMeetings = async (client: RedisPersistenceClient, prefix: string): Promise<LegacyRecord[]> => {
+  const key = `${prefix}:scheduled-meetings`;
+  const [records, decisions, ended, generations, moved] = await client.multi()
+    .hVals(key)
+    .hGetAll(`${key}:removed-invitees`)
+    .hGetAll(`${key}:removed-invitees-ended`)
+    .hGetAll(`${key}:write-generations`)
+    .sMembers(`${key}:removed-invitees-moved`)
+    .execTyped();
+  const sidecar: LegacyInvitees = { states: new Map(), moved: new Set(moved) };
+  for (const [member, value] of Object.entries(decisions)) {
+    const split = member.indexOf(" ");
+    if (split <= 0) continue;
+    const id = member.slice(0, split);
+    const email = member.slice(split + 1);
+    const [at, status] = value.split(":");
+    const state = stateFor(sidecar, id);
+    state.decisions = { ...state.decisions, [email]: { removed: status !== "readmitted", at: storedNumber(Number(at)) ?? 0 } };
+    sidecar.moved.add(id);
+  }
+  for (const [id, at] of Object.entries(ended)) stateFor(sidecar, id).endedAt = storedNumber(Number(at));
+  for (const [id, generation] of Object.entries(generations)) stateFor(sidecar, id).generation = storedNumber(Number(generation));
+  return meetingRecords(records.map((record) => parseJson(record, key)), sidecar);
+};
 
 const redisScheduling = async (
   client: RedisPersistenceClient,
@@ -270,6 +332,18 @@ const listRecords = <K extends "meeting" | "webinar">(
     return [{ kind, value, stamp: value.updatedAt } as LegacyRecord];
   });
 
+const meetingRecords = (entries: unknown[], sidecar = legacyInvitees()): LegacyRecord[] => entries.flatMap((entry) => {
+  const meeting = normalizeStoredMeeting(entry);
+  if (!meeting) {
+    dropped("meeting", entry);
+    return [];
+  }
+  const carried = sidecar.moved.has(meeting.id) ? emptyInviteeState(meeting.id) : legacyInviteeState(meeting, entry);
+  const stored = sidecar.states.get(meeting.id);
+  const inviteeState = stored ? mergeInviteeState(carried, stored) : carried;
+  return [{ kind: "meeting", value: meeting, stamp: meeting.updatedAt, inviteeState }];
+});
+
 export const hashed = (record: LegacyRecord): HashedLegacyRecord => {
   const id = specOf(record.kind).id(record.value);
   return {
@@ -300,7 +374,6 @@ const candidatesFor = (domain: LegacyDomain, options: LegacyReadOptions): Candid
   const { paths, redis } = options;
   const useSqlite = options.mode !== "json";
   const scheduling = (data: RawScheduling | null, where: string) => (data ? schedulingRecords(data, where) : null);
-  const meetings = (data: unknown[] | null) => (data ? listRecords("meeting", data, normalizeStoredMeeting) : null);
   const webinars = (data: unknown[] | null) => (data ? listRecords("webinar", data, normalizeStoredWebinar) : null);
   const candidates: Record<LegacyDomain, Candidate[]> = {
     scheduling: [
@@ -313,11 +386,14 @@ const candidatesFor = (domain: LegacyDomain, options: LegacyReadOptions): Candid
       { source: "json", read: async () => scheduling(jsonScheduling(paths.schedulingJson), paths.schedulingJson) },
     ],
     meetings: [
-      ...(redis ? [{ source: "redis", read: async () => meetings(await redisMeetings(redis.client, redis.prefix)) }] : []),
+      ...(redis ? [{ source: "redis", read: async () => redisMeetings(redis.client, redis.prefix) }] : []),
       ...(useSqlite
-        ? [{ source: "sqlite", read: async () => meetings(sqliteRows(paths.meetingsSqlite, "scheduled_meetings")) }]
+        ? [{ source: "sqlite", read: async () => sqliteMeetings(paths.meetingsSqlite) }]
         : []),
-      { source: "json", read: async () => meetings(jsonArray(paths.meetingsJson)) },
+      { source: "json", read: async () => {
+        const entries = jsonArray(paths.meetingsJson);
+        return entries && meetingRecords(entries);
+      } },
     ],
     webinars: [
       ...(useSqlite
@@ -459,7 +535,7 @@ const recoveredRecords = (domain: LegacyDomain, text: string, path: string): Leg
     return domain === "scheduling"
       ? schedulingRecords(snapshotScheduling(parseJson(text, path)), path)
       : domain === "meetings"
-        ? listRecords("meeting", listOf(text, path), normalizeStoredMeeting)
+        ? meetingRecords(listOf(text, path))
         : listRecords("webinar", listOf(text, path), normalizeStoredWebinar);
   } catch (error) {
     throw new Error(

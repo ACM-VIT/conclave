@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import { identityOf, specOf } from "./entities.js";
 import { hashLegacyValue } from "./legacyHash.js";
 import {
@@ -104,7 +104,7 @@ export class ReplayEntropy implements Entropy {
   bytes = (length: number): Buffer =>
     Buffer.from(this.next(() => randomBytes(length).toString("hex")), "hex");
 
-  float = (): number => this.next(() => Math.random());
+  int = (max: number): number => this.next(() => randomInt(max));
 }
 
 class TxImpl implements Tx {
@@ -194,6 +194,7 @@ class TxImpl implements Tx {
     const key = slot(kind, id);
     this.pending.set(key, { kind, id, value: null, legacy: null });
     this.removed.set(key, { kind, id });
+    if (kind === "meeting") this.remove("inviteeState", id);
     if (isDataKind(kind)) {
       const removalKey = legacyCopyKey(kind, id);
       const earlier = this.get("removal", removalKey)?.value.deleted ?? [];

@@ -419,7 +419,7 @@ export const bookSlot =
     const meeting = buildScheduledMeeting(input.request, input.options, {
       id: tx.entropy.uuid(),
       now: tx.now,
-      random: tx.entropy.float,
+      random: tx.entropy.int,
       activeOwner: (clientId, roomCode) =>
         tx.owner("meetingCode", uniqueKeys.meetingCode(clientId, roomCode)),
     });

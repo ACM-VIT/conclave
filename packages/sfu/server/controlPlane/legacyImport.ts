@@ -14,6 +14,7 @@ import {
   type LegacyPaths,
 } from "./legacy.js";
 import { specOf } from "./entities.js";
+import { emptyInviteeState, mergeInviteeState } from "./inviteeState.js";
 import { hashLegacyValue } from "./legacyHash.js";
 import {
   LEGACY_IMPORT_ID,
@@ -195,7 +196,17 @@ export const reconcileLegacy =
         : state.applied;
     if (sources !== state.sources || applied !== state.applied) tx.put("legacyImport", { ...state, sources, applied });
     const counts = emptyCounts();
-    for (const item of items) reconcileOne(tx, source, item, counts);
+    for (const item of items) {
+      reconcileOne(tx, source, item, counts);
+      const copy = item.copy;
+      if (copy?.kind !== "meeting" || !copy.inviteeState) continue;
+      const live = tx.get("meeting", copy.id)?.value;
+      if (!live || live.clientId !== copy.value.clientId || live.roomCode !== copy.value.roomCode ||
+          live.createdAt !== copy.value.createdAt) continue;
+      const current = tx.get("inviteeState", copy.id)?.value ?? emptyInviteeState(copy.id);
+      const next = mergeInviteeState(current, copy.inviteeState);
+      if (JSON.stringify(next) !== JSON.stringify(current)) tx.put("inviteeState", next);
+    }
     return done(counts);
   };
 

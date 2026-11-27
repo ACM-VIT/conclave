@@ -6,6 +6,7 @@ import type { JoinMode } from "./lib/types";
 type MeetsClientShellProps = {
   initialRoomId?: string;
   forceJoinOnly?: boolean;
+  allowRoomCreation?: boolean;
   bypassMediaPermissions?: boolean;
   sfuClientId?: string;
   joinMode?: JoinMode;
@@ -40,6 +41,7 @@ const resolveSessionUser = async (): Promise<
 export default async function MeetsClientShell({
   initialRoomId,
   forceJoinOnly,
+  allowRoomCreation,
   bypassMediaPermissions,
   sfuClientId,
   joinMode,
@@ -54,6 +56,7 @@ export default async function MeetsClientShell({
     <MeetsClientPage
       initialRoomId={initialRoomId}
       forceJoinOnly={forceJoinOnly}
+      allowRoomCreation={allowRoomCreation}
       bypassMediaPermissions={bypassMediaPermissions}
       sfuClientId={sfuClientId}
       joinMode={joinMode}

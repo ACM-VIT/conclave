@@ -7,6 +7,8 @@ import type {
   WeeklyAvailability,
 } from "../../types.js";
 
+import type { InviteeState } from "./inviteeState.js";
+
 export type ProfileHours = {
   profileId: string;
   availability: WeeklyAvailability;
@@ -109,11 +111,12 @@ export type EntityMap = DataMap & {
   legacyImport: LegacyImportState;
   removal: Removal;
   calendarTask: CalendarTask;
+  inviteeState: InviteeState;
 };
 
 export type Kind = keyof EntityMap;
 
-export const KINDS: readonly Kind[] = [...DATA_KINDS, "legacyCopy", "legacyImport", "removal", "calendarTask"];
+export const KINDS: readonly Kind[] = [...DATA_KINDS, "legacyCopy", "legacyImport", "removal", "calendarTask", "inviteeState"];
 
 export type UniqueIndex =
   | "profileUser"
@@ -226,5 +229,5 @@ export const isOpenWebinar = (webinar: ScheduledWebinar): boolean =>
 export type Entropy = {
   uuid: () => string;
   bytes: (length: number) => Buffer;
-  float: () => number;
+  int: (max: number) => number;
 };

@@ -37,11 +37,11 @@ class EntryPoliciesBridgeTests {
         val link = "https://conclave.acmvit.in/rose-sora-luffy?meetingInviteCode=abc"
         assertEquals(link, EntryPolicies.sanitizeRoomInput(link))
         assertEquals("rose-sora-luffy", EntryPolicies.sanitizeRoomCode("Rose Sora Luffy!"))
-        assertEquals("aloe-aster-bloom", EntryPolicies.generateRoomCode(pick = { it }))
-        val words = EntryPolicies.generateRoomCode().split("-")
-        assertEquals(3, words.size)
-        for (word in words) {
-            assertTrue(word, EntryPolicies.roomWords.contains(word))
+        assertEquals("abc-defg-hij", EntryPolicies.generateRoomCode(pick = { it }))
+        val groups = EntryPolicies.generateRoomCode().split("-")
+        assertEquals(listOf(3, 4, 3), groups.map { it.length })
+        for (group in groups) {
+            assertTrue(group, group.all { it in 'a'..'z' })
         }
         assertTrue(EntryPolicies.isValidJoinInput("rose-sora-luffy"))
         assertFalse(EntryPolicies.isValidJoinInput("https://example.com/rose"))

@@ -111,7 +111,7 @@ export const createMeeting =
     const meeting = buildScheduledMeeting(request, options, {
       id: tx.entropy.uuid(),
       now: tx.now,
-      random: tx.entropy.float,
+      random: tx.entropy.int,
       activeOwner: activeOwner(tx),
     });
     tx.put("meeting", meeting);

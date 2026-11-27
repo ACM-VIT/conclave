@@ -7,6 +7,7 @@ import {
   normalizeStoredHours,
   normalizeStoredProfile,
 } from "../scheduling.js";
+import { decodeInviteeState } from "./inviteeState.js";
 import { asRecord } from "../../utilities/untrusted.js";
 import {
   DATA_KINDS,
@@ -182,6 +183,13 @@ export const entities: Registry = {
     tags: () => [],
     encode: same,
     decode: decodeRemoval,
+  },
+  inviteeState: {
+    id: (state) => state.meetingId,
+    unique: () => [],
+    tags: () => [],
+    encode: same,
+    decode: decodeInviteeState,
   },
   calendarTask: {
     id: (task) => task.id,

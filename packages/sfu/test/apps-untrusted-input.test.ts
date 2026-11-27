@@ -88,7 +88,7 @@ const startSfu = async (): Promise<Stack> => {
   });
   const router = { closed: false, rtpCapabilities: { codecs: [], headerExtensions: [] }, close: () => {} };
   const room = new Room({ id: ROOM_ID, clientId: CLIENT_ID, workerPid: null, router: router as unknown as Router });
-  room.hostUserKey = HOST;
+  room.makePrimaryHost(HOST);
   state.rooms.set(room.channelId, room);
   const http = createServer();
   const io = createSfuSocketServer(http, { state });

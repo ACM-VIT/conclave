@@ -61,6 +61,8 @@ export interface JoinRoomData {
   /** An admission a host created with `admin:createAdmission`. */
   admissionCode?: string;
   mediaCapabilities?: ClientMediaCapabilities;
+  // The pass from an earlier join to this room, sent on every rejoin.
+  roomRecoveryPass?: string;
 }
 
 export interface JoinRoomResponse extends JoinRoomAnswerFields {
@@ -68,6 +70,9 @@ export interface JoinRoomResponse extends JoinRoomAnswerFields {
   existingProducers: ProducerInfo[];
   displayNameSnapshot?: DisplayNameSnapshotEntry[];
   webcamCodecPolicy?: WebcamCodecPolicy;
+  // Proof of having been let in, to send back on a rejoin. Absent while
+  // waiting, for webinar attendees, and from SFUs that predate it.
+  roomRecoveryPass?: string;
 }
 
 export interface JoinRoomErrorResponse {
@@ -445,6 +450,8 @@ export interface ScheduledMeeting {
   attendeeEmail?: string | null;
   attendeeNote?: string | null;
   attendeeTimeZone?: string | null;
+  // Invited people a host removed from the meeting or took admission back
+  // from. They knock like anyone else until a host lets them in again.
   googleCalendarEventId?: string | null;
   calendarSyncStatus?: "not_required" | "pending" | "synced" | "failed";
   calendarSyncError?: string | null;

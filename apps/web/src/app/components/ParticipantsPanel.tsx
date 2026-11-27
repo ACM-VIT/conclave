@@ -30,6 +30,11 @@ import type {
 } from "../lib/types";
 import { hostDecisionLimitNotice } from "../lib/host-decision-limit";
 import { formatDisplayName, isSystemUserId } from "../lib/utils";
+import {
+  admitAllPendingUsers,
+  admitPendingUser,
+  denyPendingUser,
+} from "../lib/admissions";
 import PanelNoticeSlot from "./PanelNoticeSlot";
 import { QaModerationActions } from "./qa/QaPanel";
 
@@ -67,7 +72,6 @@ interface ParticipantsPanelProps {
 
 const ICON = 18;
 const STROKE = 1.75;
-const ADMIT_ALL_ACK_TIMEOUT_MS = 10000;
 
 const getAdminActionError = (
   response: unknown,
@@ -255,23 +259,12 @@ function ParticipantsPanel({
     if (!socket || !isAdmin || isAdmittingAll) return;
     setHostActionError(null);
     setIsAdmittingAll(true);
-    socket
-      .timeout(ADMIT_ALL_ACK_TIMEOUT_MS)
-      .emit(
-        "admin:admitAllPending",
-        (timeoutError: Error | null, res: unknown) => {
-          setIsAdmittingAll(false);
-          const notice = timeoutError ? null : hostDecisionLimitNotice(res, "admit");
-          if (notice) {
-            setHostActionNotice(notice);
-            return;
-          }
-          const error = timeoutError
-            ? "Couldn’t admit everyone."
-            : getAdminActionError(res, "Couldn’t admit everyone.");
-          if (error) setHostActionError(error);
-        },
-      );
+    admitAllPendingUsers(socket, (outcome) => {
+      setIsAdmittingAll(false);
+      if (!outcome) return;
+      if (outcome.kind === "notice") setHostActionNotice(outcome.text);
+      else setHostActionError(outcome.text);
+    });
   };
 
   const handlePromoteHost = (targetUserId: string) => {
@@ -491,20 +484,14 @@ function ParticipantsPanel({
                     <div className="flex shrink-0 items-center gap-1.5">
                       <button
                         type="button"
-                        onClick={() =>
-                          socket?.emit(
-                            "admitUser",
-                            { userId },
-                            (res: { success?: boolean; error?: string }) => {
-                              const notice = hostDecisionLimitNotice(res, "admit");
-                              if (notice) {
-                                setHostActionNotice(notice);
-                                return;
-                              }
-                              if (res?.error) onPendingUserStale?.(userId);
-                            },
-                          )
-                        }
+                        onClick={() => {
+                          if (socket) {
+                            admitPendingUser(socket, userId, {
+                              onStale: onPendingUserStale,
+                              onNotice: setHostActionNotice,
+                            });
+                          }
+                        }}
                         className={admitActionClass}
                         title="Admit to meeting"
                         aria-label={`Admit ${pendingName}`}
@@ -513,20 +500,19 @@ function ParticipantsPanel({
                       </button>
                       <button
                         type="button"
-                        onClick={() =>
-                          socket?.emit(
-                            "rejectUser",
-                            { userId },
-                            (res: { success?: boolean; error?: string }) => {
-                              if (res?.error) onPendingUserStale?.(userId);
-                            },
-                          )
-                        }
+                        onClick={() => {
+                          if (socket) {
+                            denyPendingUser(socket, userId, {
+                              onStale: onPendingUserStale,
+                              onNotice: setHostActionNotice,
+                            });
+                          }
+                        }}
                         className={neutralActionClass}
                         title="Deny entry"
-                        aria-label={`Reject ${pendingName}`}
+                        aria-label={`Deny ${pendingName}`}
                       >
-                        Reject
+                        Deny
                       </button>
                     </div>
                   </div>

@@ -1,3 +1,4 @@
+import { runDetached } from "../runDetached.js";
 import type { MediaKind, Worker } from "mediasoup/types";
 import type { Server as SocketIOServer } from "socket.io";
 import { Admin } from "../../config/classes/Admin.js";
@@ -8,17 +9,22 @@ import type {
   ProducerType,
 } from "../../config/classes/Client.js";
 import type { AdmissionScope } from "../../config/classes/AdmissionLedger.js";
-import type { Room, SettledWaitingRequest, WaitingRequest } from "../../config/classes/Room.js";
+import type { HostBasis, Room, SettledWaitingRequest, WaitingRequest } from "../../config/classes/Room.js";
 import type { AppsAwarenessData } from "../../types.js";
 import { isGuestUserKey } from "../identity.js";
-import { cleanupRoom, getRoomChannelId, isCurrentRoom } from "../rooms.js";
+import { cleanupRoom, forceCloseRoom, getRoomChannelId, markRoomEnded } from "../rooms.js";
+import { hasWebinarEnded, isWithinEarlyEntryWindow } from "../scheduledWebinars.js";
+import { webinarForRoom } from "../controlPlane/webinarCommands.js";
 import type { SfuState } from "../state.js";
 import {
   emitWebinarAttendeeCountChanged,
   emitWebinarFeedChanged,
+  grantWebinarQaList,
 } from "../webinarNotifications.js";
-import { activateHost } from "../socket/handlers/adminHandlers.js";
-import { emitToHosts } from "./hostOnlyEvents.js";
+import { getSocketContext, type ConnectionContext } from "../socket/context.js";
+import { emitChatHistorySnapshot } from "../socket/handlers/chatHistory.js";
+import { registerAdminHandlers } from "../socket/handlers/adminHandlers.js";
+import { emitToHost, emitToHosts } from "./hostOnlyEvents.js";
 import { DECISION_RECORD_FULL, isSuperAdminClient } from "./moderation.js";
 import { Logger } from "../../utilities/loggers.js";
 
@@ -157,66 +163,170 @@ export type RoomPolicyUpdate = {
 
 type ProducerInfo = ReturnType<Client["getProducerInfos"]>[number];
 
-/**
- * A host's seat went. When no host is left, the room is handed to the next
- * seat, never to one of `excludedUserKeys`: the guests a removal took out.
- * Disconnect and removal both hand a room on here, once, after their last
- * `teardownClient`.
- */
-export const handOffRoom = (
-  io: SocketIOServer,
-  state: SfuState,
-  room: Room,
-  excludedUserKeys: ReadonlySet<string> = new Set(),
-  // Who is told the room's hosts: the room, or everyone in it but a socket
-  // that is moving to another room (see `teardownClient`).
-  peers: { emit: (event: string, payload: unknown) => unknown } = io.to(room.channelId),
-): void => {
-  const roomId = room.id;
+export type HostGrant = {
+  userKey: string;
+  basis: HostBasis;
+  guestProof?: string;
+  primary?: boolean;
+};
 
-  if (!room.hasActiveAdmin()) {
-    const promoted = room.promoteNextAdmin(excludedUserKeys);
-    if (promoted) {
-      Logger.info(`Promoted ${promoted.id} to host in room ${roomId}.`);
-      activateHost(state, room, promoted, promoted.id);
-      if (room.pendingClients.size > 0) {
-        for (const pending of room.pendingClients.values()) {
-          pending.socket.emit("waitingRoomStatus", {
-            message: "A host is available to let you in.",
-            roomId,
-          });
-        }
-      }
-    } else {
-      if (room.pendingClients.size > 0) {
-        for (const pending of room.pendingClients.values()) {
-          pending.socket.emit("waitingRoomStatus", {
-            message: "No one to let you in.",
-            roomId,
-          });
-        }
-      }
-      room.startCleanupTimer(() => {
-        if (!isCurrentRoom(state, room) || room.hasActiveAdmin()) return;
-        if (room.pendingClients.size > 0) {
-          for (const pending of room.pendingClients.values()) {
-            pending.socket.emit("waitingRoomStatus", {
-              message: "No one to let you in.",
-              roomId,
-            });
-          }
-        }
-        cleanupRoom(state, room);
+const activateHostSeat = (room: Room, seat: Admin, joining: ConnectionContext | undefined): void => {
+  const roomId = room.id;
+  const seatContext = joining ?? getSocketContext(seat.socket);
+  if (seatContext) {
+    seatContext.currentClient = seat;
+    seatContext.currentRoom = room;
+    registerAdminHandlers(seatContext, { roomId });
+  }
+  if (joining) return;
+  emitToHost(seat, "pendingUsersSnapshot", { users: toPendingUserSnapshots(room), roomId });
+  emitChatHistorySnapshot(seat.socket, room);
+  seat.socket.emit("roomLockChanged", { locked: room.isLocked, roomId });
+  emitToHost(seat, "admin:roomStateChanged", { roomId, snapshot: toRoomSnapshot(room) });
+  if (seatContext) {
+    const { state } = seatContext;
+    if (state.webinarConfigs.get(room.channelId)?.enabled) {
+      emitToHost(seat, "webinar:handQueueChanged", { roomId, queue: room.getWebinarHandQueue() });
+    }
+    grantWebinarQaList(state, room, seat);
+  }
+};
+
+export const applyHostGrant = (
+  room: Room,
+  grant: HostGrant,
+  options: { joining?: ConnectionContext } = {},
+): Admin[] | null => {
+  if (!room.mayGrantHost(grant.userKey, grant.basis, grant.guestProof)) return null;
+  const hadHost = room.hasActiveAdmin();
+  const promoted = room.grantHost(grant.userKey, grant.basis, grant.guestProof, {
+    primary: grant.primary || !room.hostUserKey || grant.basis === "owner" || room.ownerEmail === grant.userKey,
+  });
+  if (room.hostReasonOf(grant.userKey, grant.guestProof) === "owner") {
+    const demoted = room.welcomeOwner(grant.userKey);
+    room.tellOwnerTookOver(demoted);
+    for (const seat of demoted) {
+      const context = getSocketContext(seat.socket);
+      if (context) grantWebinarQaList(context.state, room, seat);
+    }
+  }
+  if (promoted.length === 0) return promoted;
+  room.stopCleanupTimer();
+  for (const seat of promoted) {
+    Logger.info(`Promoted ${seat.id} to host in room ${room.id} (${grant.basis}).`);
+    activateHostSeat(
+      room,
+      seat,
+      seat.socket === options.joining?.socket ? options.joining : undefined,
+    );
+  }
+  if (!hadHost) {
+    for (const pending of room.pendingClients.values()) {
+      pending.socket.emit("waitingRoomStatus", {
+        message: "A host is available to let you in.",
+        roomId: room.id,
       });
     }
   }
+  return promoted;
+};
 
+const promoteNextAdmin = (room: Room): Admin[] | null => {
+  for (const client of [...room.clients.values()]) {
+    if (client instanceof Admin || client.isObserver || client.isWebinarAttendee) continue;
+    const userKey = room.userKeysById.get(client.id);
+    if (!userKey) continue;
+    const promoted = applyHostGrant(room, { userKey, basis: "fallback" });
+    if (promoted && promoted.length > 0) return promoted;
+  }
+  return null;
+};
+
+export const NO_HOST_LEFT_MESSAGE = "The meeting ended because no one who can host it is left.";
+
+type Peers = { emit: (event: string, payload: unknown) => unknown };
+
+const endForNoHost = (io: SocketIOServer, state: SfuState, room: Room): void => {
+  const pendingSockets = Array.from(room.pendingClients.values(), (pending) => pending.socket);
+  markRoomEnded(state, room, { message: NO_HOST_LEFT_MESSAGE, endedBy: "server" });
+  io.to(room.channelId).emit("roomEnded", {
+    roomId: room.id,
+    message: NO_HOST_LEFT_MESSAGE,
+    endedBy: "server",
+  });
+  for (const socket of pendingSockets) {
+    socket.emit("roomEnded", { roomId: room.id, message: NO_HOST_LEFT_MESSAGE, endedBy: "server" });
+  }
+  io.in(room.channelId).disconnectSockets(true);
+  for (const socket of pendingSockets) socket.disconnect(true);
+  forceCloseRoom(state, room);
+};
+
+const tellWaitingNoHost = (room: Room): void => {
+  for (const pending of room.pendingClients.values()) {
+    pending.socket.emit("waitingRoomStatus", { message: "No one to let you in.", roomId: room.id });
+  }
+};
+
+export const ensureHost = (
+  io: SocketIOServer,
+  state: SfuState,
+  room: Room,
+  peers: Peers = io.to(room.channelId),
+): void => {
+  if (state.rooms.get(room.channelId) !== room) return;
+  if (room.isHandingOff || room.hasEnded || !room.recordsItsCall) return;
+  if (!room.hasActiveAdmin()) {
+    const promoted = promoteNextAdmin(room);
+    if (!promoted) {
+      tellWaitingNoHost(room);
+      const checkForHost = () => {
+        if (state.rooms.get(room.channelId) !== room || room.hasActiveAdmin()) return;
+        if (room.isEmpty()) {
+          cleanupRoom(state, room);
+          return;
+        }
+        const late = promoteNextAdmin(room);
+        if (late) {
+          io.to(room.channelId).emit("hostChanged", {
+            roomId: room.id,
+            hostUserId: room.getHostUserId(),
+          });
+          io.to(room.channelId).emit("adminUsersChanged", {
+            roomId: room.id,
+            hostUserIds: room.getAdminUserIds(),
+          });
+          return;
+        }
+        if (room.getWebinarAttendeeCount() === 0) {
+          endForNoHost(io, state, room);
+          return;
+        }
+        runDetached("Checking the webinar audience", async () => {
+          const webinar = await state.controlPlane.read(webinarForRoom(room.clientId, room.id)).catch(() => null);
+          if (state.rooms.get(room.channelId) !== room || room.hasActiveAdmin()) return;
+          const now = Date.now();
+          if (
+            room.getWebinarAttendeeCount() > 0 &&
+            webinar &&
+            !hasWebinarEnded(webinar, now) &&
+            (webinar.status === "live" || isWithinEarlyEntryWindow(webinar, now))
+          ) {
+            room.startCleanupTimer(checkForHost);
+            return;
+          }
+          endForNoHost(io, state, room);
+        });
+      };
+      room.startCleanupTimer(checkForHost);
+    }
+  }
   peers.emit("hostChanged", {
-    roomId,
+    roomId: room.id,
     hostUserId: room.getHostUserId(),
   });
   peers.emit("adminUsersChanged", {
-    roomId,
+    roomId: room.id,
     hostUserIds: room.getAdminUserIds(),
   });
 };
@@ -648,7 +758,7 @@ export const closeClientProducers = (options: {
         muted: true,
         roomId: room.id,
       });
-      void state.transcriptRelays.syncRoom(room);
+      runDetached("Syncing the room's transcript relay", () => state.transcriptRelays.syncRoom(room));
     }
     if (webcamVideoClosed) {
       target.isCameraOff = true;
@@ -685,12 +795,7 @@ export const applyRoomPolicyUpdate = (
       // The people already in may come back past the lock. A lock never
       // waits on the decision record: when it is full of refusals they knock
       // again instead.
-      const present = room.admitUserKeys(
-        [...new Set(room.userKeysById.values())].map((userKey) => ({
-          userKey,
-          scopes: ["lock"],
-        })),
-      );
+      const present = room.keepAdmitted([...new Set(room.userKeysById.values())]);
       if (present.status === "full") {
         Logger.warn(
           `Room ${room.id} locked, but its decision record could not keep admissions for the people in it.`,
@@ -1001,9 +1106,14 @@ export const admitAllPendingUsers = (
 
 export const rejectAllPendingUsers = (
   room: Room,
+  options: { sparing?: string } = {},
 ): Array<{ userId: string; userKey: string }> => {
   const rejected: Array<{ userId: string; userKey: string }> = [];
-  const pendingUsers = Array.from(room.pendingClients.values());
+  const pendingUsers = Array.from(room.pendingClients.values()).filter(
+    (pending) =>
+      options.sparing === undefined ||
+      !room.isSamePerson(options.sparing, pending.userKey, "removal"),
+  );
 
   for (const pending of pendingUsers) {
     room.denyWaitingRequest(pending.userKey);
@@ -1063,11 +1173,9 @@ export const forceRemoveClientNow = (options: {
   handOff?: boolean;
 }): boolean => {
   const { io, state, room, userId, handOff = true } = options;
-  const { removed, wasAdmin } = teardownClient({ io, state, room, userId });
-  if (removed && wasAdmin && handOff) {
-    handOffRoom(io, state, room);
-  }
+  const { removed } = teardownClient({ io, state, room, userId });
   cleanupRoom(state, room);
+  if (removed && handOff) ensureHost(io, state, room);
   return removed;
 };
 
@@ -1078,7 +1186,7 @@ export const forceRemoveClientNow = (options: {
  * (who left, the webinar's counts and feed, the video quality). Disconnect,
  * removal and leaving for another room all end a seat here. Handing the
  * room on is not part of it: the caller does that once, after its last
- * teardown (see `handOffRoom`).
+ * teardown (see `ensureHost`).
  */
 export const teardownClient = (options: {
   io: SocketIOServer;
@@ -1115,7 +1223,7 @@ export const teardownClient = (options: {
         `Transcript SFU relay stop for ${userId} in room ${roomChannelId} failed: ${error}`,
       );
     });
-  void state.transcriptRelays.syncRoom(room);
+  runDetached("Syncing the room's transcript relay", () => state.transcriptRelays.syncRoom(room));
 
   if (!target.isWebinarAttendee) {
     peers.emit("userLeft", { userId, roomId: room.id });
@@ -1144,7 +1252,7 @@ export const blockUserKey = (
     state: SfuState;
   },
 ): { rejectedPendingUserKeys: string[]; kickedUserIds: string[] } => {
-  const userKeys = room.identitiesOfSameGuest(userKey);
+  const userKeys = room.identitiesOfSameGuest(userKey, "removal");
   const rejectedPendingUserKeys: string[] = [];
   for (const key of userKeys) {
     const pending = room.pendingClients.get(key);
@@ -1152,20 +1260,16 @@ export const blockUserKey = (
     pending.socket.emit("joinRejected", { roomId: room.id });
     rejectedPendingUserKeys.push(key);
   }
-  const demoted = room.blockUser(userKey);
+  room.blockUser(userKey);
   for (const key of rejectedPendingUserKeys) {
     room.denyWaitingRequest(key);
   }
   publishLobby(room);
 
   const kickedUserIds = options.kickPresent
-    ? removeSeats(room, seatsUnder(room, userKeys), options.reason, options, {
-        hostLost: demoted.length > 0,
-      })
+    ? removeSeats(room, seatsUnder(room, userKeys), options.reason, options)
     : [];
-  if (!options.kickPresent && demoted.length > 0) {
-    handOffRoom(options.io, options.state, room, new Set(userKeys));
-  }
+  if (!options.kickPresent) ensureHost(options.io, options.state, room);
   return { rejectedPendingUserKeys, kickedUserIds };
 };
 
@@ -1178,7 +1282,7 @@ export const blockUserKey = (
  */
 export const removeBlockedGuest = (
   room: Room,
-  refused: { userKeys: string[]; demoted: string[] },
+  refused: { userKeys: string[] },
   options: { io: SocketIOServer; state: SfuState },
 ): void => {
   const { userKeys } = refused;
@@ -1189,9 +1293,54 @@ export const removeBlockedGuest = (
     request.socket.emit("joinRejected", { roomId: room.id });
   }
   publishLobby(room);
-  removeSeats(room, seatsUnder(room, userKeys), "Blocked by host", options, {
-    hostLost: refused.demoted.length > 0,
-  });
+  removeSeats(room, seatsUnder(room, userKeys), "Blocked by host", options);
+};
+
+/**
+ * A recreated room that nobody from its lost call came back for is no one's.
+ * If people are in it, one of them becomes host, as when a last host leaves.
+ * If people are only waiting, they are asked to try again: the first who may
+ * open a room then hosts it, and the rest are waiting on that host.
+ */
+export const offerLapsedRoom = (
+  io: SocketIOServer,
+  state: SfuState,
+  room: Room,
+): void => {
+  if (state.rooms.get(room.channelId) !== room || room.hasActiveAdmin()) return;
+  if (room.getMeetingParticipantCount() > 0) {
+    room.markRestored();
+    ensureHost(io, state, room);
+    return;
+  }
+  for (const pending of room.pendingClients.values()) {
+    pending.socket.emit("joinApproved", { roomId: room.id });
+  }
+  cleanupRoom(state, room);
+};
+
+export const settleUnclaimedRoom = (
+  io: SocketIOServer,
+  state: SfuState,
+  room: Room,
+): void => {
+  const unclaimed = room.awaitingOpener;
+  if (state.rooms.get(room.channelId) !== room || !unclaimed) return;
+  if (room.isEmpty()) {
+    cleanupRoom(state, room);
+    return;
+  }
+  room.awaitingOpener = null;
+  if (unclaimed.lost && Date.now() <= unclaimed.lost.claimableUntil) {
+    room.awaitRestorer({
+      until: unclaimed.lost.claimableUntil,
+      rosterKnown: true,
+      onLapse: () => offerLapsedRoom(io, state, room),
+    });
+    return;
+  }
+  if (unclaimed.lost) room.endLostCall();
+  ensureHost(io, state, room);
 };
 
 export const kickClient = (
@@ -1199,20 +1348,18 @@ export const kickClient = (
   userId: string,
   reason = "Removed by host",
   options?: { io?: SocketIOServer; state?: SfuState },
-): boolean => {
+): string[] => {
   const target = room.getClient(userId);
   if (!target || isSuperAdminClient(target)) {
-    return false;
+    return [];
   }
   // A removed user has to be let in again, or they could rejoin at once,
   // still admitted and still a host.
   const userKey = room.userKeysById.get(userId);
-  const demoted = userKey ? room.dropRejoinGrants(userKey) : [];
-  return (
-    removeSeats(room, [userId], reason, options, {
-      hostLost: demoted.length > 0,
-    }).length > 0
-  );
+  if (!userKey) return removeSeats(room, [userId], reason, options);
+  const seats = room.seatsOfSameGuest(userKey, "removal");
+  room.removeUser(userKey);
+  return removeSeats(room, seats, reason, options);
 };
 
 const seatsUnder = (room: Room, userKeys: readonly string[]): string[] =>
@@ -1234,23 +1381,14 @@ const removeSeats = (
   userIds: readonly string[],
   reason: string,
   options?: { io?: SocketIOServer; state?: SfuState },
-  removal: { hostLost?: boolean } = {},
 ): string[] => {
   const targets = userIds.filter((userId) => {
     const target = room.getClient(userId);
     return target !== undefined && !isSuperAdminClient(target);
   });
-  const removedGuests = new Set<string>();
-  for (const userId of targets) {
-    const userKey = room.userKeysById.get(userId);
-    if (!userKey) continue;
-    for (const key of room.identitiesOfSameGuest(userKey)) removedGuests.add(key);
-  }
-  let removedAdmin = false;
   for (const userId of targets) {
     const target = room.getClient(userId);
     if (!target) continue;
-    removedAdmin ||= target instanceof Admin && !target.isObserver;
     target.socket.emit("kicked", { reason, roomId: room.id });
     // The seat leaves the room before its socket is closed. Socket.IO runs
     // the disconnect handler inside `disconnect`, and that handler hands the
@@ -1268,14 +1406,7 @@ const removeSeats = (
     }
     target.socket.disconnect(true);
   }
-  if (
-    (removedAdmin || removal.hostLost) &&
-    options?.io &&
-    options.state &&
-    options.state.rooms.get(room.channelId) === room
-  ) {
-    handOffRoom(options.io, options.state, room, removedGuests);
-  }
+  if (options?.io && options.state) ensureHost(options.io, options.state, room);
   return targets;
 };
 

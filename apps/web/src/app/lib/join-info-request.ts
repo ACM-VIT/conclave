@@ -4,6 +4,8 @@ import { readResponseError } from "./utils";
 export type JoinInfoAnswer = {
   token: string;
   sfuUrl: string;
+  guestId?: string;
+  guestGrant?: string;
   iceServers?: RTCIceServer[];
   iceServersTtlSeconds?: number;
   /**

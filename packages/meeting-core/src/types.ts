@@ -388,6 +388,9 @@ export interface JoinRoomResponse extends JoinRoomAnswerFields {
   existingProducers: ProducerInfo[];
   displayNameSnapshot?: DisplayNameSnapshotEntry[];
   webcamCodecPolicy?: WebcamCodecPolicy;
+  // Proof of having been let in, to send back on a rejoin. Absent while
+  // waiting, for webinar attendees, and from SFUs that predate it.
+  roomRecoveryPass?: string;
 }
 
 export interface JoinRoomErrorResponse {
@@ -619,6 +622,7 @@ export interface MeetError {
     | "CONNECTION_FAILED"
     | "MEDIA_ERROR"
     | "TRANSPORT_ERROR"
+    | "ROOM_NOT_FOUND"
     /** Signaling works but this network lets no audio or video through. */
     | "NETWORK_BLOCKED"
     | "JOIN_REJECTED"
