@@ -526,17 +526,17 @@ export const internalBusyIntervals = (
     .filter((meeting) =>
       meeting.status !== "cancelled" &&
       meeting.status !== "ended" &&
-      servedClientId(meeting.clientId) === hostNamespace &&
-      meetingHasHost(meeting, profile),
+      servedClientId(meeting.clientId) === hostNamespace,
     )
-    .map((meeting) => {
+    .flatMap((meeting) => {
       const candidate = meeting.eventTypeId ? eventTypeOf(meeting.eventTypeId) : null;
       const eventType = candidate && servedClientId(candidate.clientId) === hostNamespace ? candidate : null;
-      return {
+      if (!meetingHasHost(meeting, profile) && !meetingMatchesProfile(meeting, profile, eventType)) return [];
+      return [{
         startAt:
           meeting.scheduledStartAt - (eventType?.bufferBeforeMinutes ?? 0) * MINUTE_MS,
         endAt: meeting.scheduledEndAt + (eventType?.bufferAfterMinutes ?? 0) * MINUTE_MS,
-      };
+      }];
     })
     .filter(({ startAt, endAt }) => startAt < to && from < endAt);
 };

@@ -6,9 +6,12 @@ import {
   ensureHostProfile,
 } from "../server/controlPlane/schedulingCommands.js";
 import { controlPlaneStore } from "../server/controlPlane/store.js";
+import { buildScheduledMeeting } from "../server/scheduledMeetings.js";
 import {
   generateAvailableSlots,
+  internalBusyIntervals,
   isValidSchedulingSlug,
+  newSchedulingProfile,
   zonedTimeToUtc,
 } from "../server/scheduling.js";
 
@@ -72,6 +75,21 @@ describe("scheduling", () => {
     );
 
     expect(created).toMatchObject({ ok: true, value: { isActive: true, requiresCalendar: false } });
+  });
+
+  it("keeps a directly linked booking busy after its host email changes", () => {
+    const profile = newSchedulingProfile(
+      { clientId: "conclave", userId: "user-1", email: "current@example.test" },
+      { id: "profile-1", username: "host", now: 1 },
+    );
+    const linkedType = eventType({ clientId: "conclave" });
+    const meeting = buildScheduledMeeting(
+      { title: "Linked booking", roomCode: "old-booking", scheduledStartAt: 10_000, scheduledEndAt: 20_000, source: "booking_link", eventTypeId: linkedType.id },
+      { clientId: "conclave", createdBy: "old@example.test", defaultHostEmail: "old@example.test", defaultHostUserId: null },
+      { id: "booking-1", now: 1, random: () => 0, activeOwner: () => null },
+    );
+    const busy = internalBusyIntervals([meeting], (id) => id === linkedType.id ? linkedType : null, profile, 1, 30_000);
+    expect(busy).toEqual([{ startAt: 10_000, endAt: 20_000 }]);
   });
 
   it("generates slots from weekly availability", () => {
