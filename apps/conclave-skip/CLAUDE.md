@@ -754,11 +754,37 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   and hands each published one to the new session, whose stop, server close,
   projection stop and `cleanup()` still release it. Releasing a share
   releases its own consent and service too
-  (`ScreenCaptureManager.stopCapture(ownedConsent)`). The case that broke:
+  (`ScreenCaptureManager.releaseConsent(grant)`). The case that broke:
   a share started while the Device load waited on an old lane, then a
   recovery `configure()` (the view model skips `cleanup()` while
   `isConfigured` is false) left `screenCapture` set, and every later share
   failed with "already starting or active".
+- A share request owns what it acquires from the moment its consent dialog
+  opens. `ScreenCaptureManager` numbers every consent it installs and gives
+  the grant id only to the request that asked (`requestConsent`). The client
+  starts a share from a named grant (`startScreenSharing(consentGrant:)`) and
+  its capture session keeps that grant. The view model's Android share flow
+  (`runConsentScreenShareToggle`, behind `ScreenShareConsentPort` so macOS
+  tests drive the same code with a fake) records the grant in a
+  `ScreenShareConsentHold` as soon as it arrives and clears it only when the
+  share goes live. Every other exit, stale or not, ends in
+  `releaseScreenShareHold`: it closes the client share that holds the grant
+  (`closeLocalScreenProducer(consentGrant:)`) and releases that grant's
+  consent, service and notification (`releaseConsent`). Stale means drop the
+  result and release your own grant, never another one. A release by grant
+  never resumes another request's waiters, and a newer request's start,
+  refusal, cancellation or late dialog result never clears an older grant's
+  consent or resets its host and service state (those reset when a consent is
+  installed, not when a request starts). The share phase ends consistent
+  with what is live on every exit: the Android toggle settles it when it
+  still owns the guard or when no newer toggle owns it
+  (`finishScreenShareToggle`). The case
+  that broke: during a muted quick rejoin with the Device load deferred,
+  recovery replaced the toggle while the consent dialog was open, both
+  recovery cleanups skipped the unconfigured client, and approving the dialog
+  started the share service and its notification while the call said
+  sharing was off. `ScreenShareConsentRequestTests` covers every exit before
+  the share goes live.
 - Every capture callback applies its effect through one function on the main
   thread (`applyCaptureCallback`), which checks the callback's session at the
   moment of the mutation (`isCurrentCapture`: still held in `cameraCapture`
@@ -822,10 +848,11 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   it: the unmute confirmation (it bypasses the guard via
   `allowCurrentMuteToggle`), the chat camera-on commit, the
   `enableOrStartLocalVideo` recreate fallback, the camera-switch PiP refresh
-  and the screen-share close. An orphaned screen-share toggle stops the
+  and the screen-share close. An orphaned iOS screen-share toggle stops the
   shared capture (and clears its end callback) only while no newer toggle
   owns the guard and no share is live
-  (`canOrphanedScreenShareToggleStopCapture()`). A toggle that still owns
+  (`canOrphanedScreenShareToggleStopCapture()`); an Android one releases its
+  own grant (above). A toggle that still owns
   its token keeps suppressing the `handleLocalProducerClosed` restart.
 - The newest local media intent wins (WP2-S1c, fixed 2026-10-24, covered by
   `LocalToggleGuardRecoveryTests`). A mute is never dropped or deferred: a
