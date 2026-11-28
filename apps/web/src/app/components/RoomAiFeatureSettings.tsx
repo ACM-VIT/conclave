@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ChevronDown, Loader2 } from "lucide-react";
+import { color } from "@conclave/ui-tokens";
 import {
   AI_PROVIDERS,
   AI_RESPONSE_MODELS,
@@ -22,7 +23,7 @@ import { useAiModels } from "../hooks/useAiModels";
 import AiModelSelect from "./AiModelSelect";
 
 const fieldClass =
-  "mt-1.5 w-full min-w-0 rounded-lg border border-white/10 bg-black/20 px-2.5 py-2 text-[12px] text-[#fafafa] outline-none focus:border-[#4F9CF9]/60 disabled:opacity-40";
+  "mt-1.5 w-full min-w-0 rounded-lg border border-white/10 bg-black/20 px-2.5 py-2 text-[13px] text-[#fafafa] outline-none focus:border-[#F95F4A]/60 disabled:opacity-40";
 
 export default function RoomAiFeatureSettings({
   controller,
@@ -77,18 +78,22 @@ export default function RoomAiFeatureSettings({
               aria-label={`${AI_FEATURES[feature].label} settings`}
               title={status}
               onClick={() => setExpanded(expanded === feature ? null : feature)}
-              className="flex w-full items-center gap-3 py-3 text-left"
+              className="flex min-h-12 w-full items-center gap-3 py-2.5 text-left"
             >
               <span className="min-w-0 flex-1">
-                <span className="block text-[12.5px] font-medium text-[#fafafa]">
+                <span className="block truncate text-[14px] font-medium text-[#fafafa]">
                   {AI_FEATURES[feature].label}
                 </span>
-                <span className="mt-0.5 block truncate text-[11px] text-[#a1a1aa]">
+                <span className="mt-0.5 block truncate text-[12px] text-[#a1a1aa]">
                   {AI_PROVIDERS[provider].label} · {modelLabel}
                 </span>
               </span>
-              {!settings.enabled ? (
-                <span className="text-[10.5px] text-[#71717a]">Off</span>
+              {status === "Disabled" ? (
+                <span className="shrink-0 text-[12px] text-[#71717a]">Off</span>
+              ) : status === "Key needed" ? (
+                <span className="shrink-0 text-[12px]" style={{ color: color.warning }}>
+                  Key needed
+                </span>
               ) : null}
               <ChevronDown
                 size={14}
@@ -166,7 +171,7 @@ function FeatureEditor({
     max: number,
     scale = 1,
   ) => (
-    <label className="min-w-0 text-[11px] text-[#a1a1aa]">
+    <label className="min-w-0 text-[12px] text-[#a1a1aa]">
       {label}
       <input
         aria-label={label}
@@ -231,7 +236,7 @@ function FeatureEditor({
             onChange={(value) => update("model", value)}
           />
         ) : (
-          <label className="block text-[11px] text-[#a1a1aa]">
+          <label className="block text-[12px] text-[#a1a1aa]">
             Model
             <select
               aria-label="Model"
@@ -252,19 +257,19 @@ function FeatureEditor({
           </label>
         )}
         <fieldset disabled={!canEdit} className="space-y-3">
-          <label className="flex items-center justify-between text-[12px] text-[#d4d4d8]">
+          <label className="flex min-h-8 items-center justify-between text-[13px] text-[#d4d4d8]">
             Enabled
             <input
               type="checkbox"
               aria-label="Enabled"
               checked={draft.enabled}
               onChange={(event) => update("enabled", event.target.checked)}
-              className="accent-[#4F9CF9]"
+              className="h-4 w-4 accent-[#F95F4A]"
             />
           </label>
           {text ? (
             <details className="rounded-lg border border-white/10 px-3">
-              <summary className="cursor-pointer py-2 text-[11px] text-[#a1a1aa]">
+              <summary className="cursor-pointer py-2 text-[12px] text-[#a1a1aa]">
                 Generation options
               </summary>
               <div className="space-y-3 pb-3">
@@ -283,7 +288,7 @@ function FeatureEditor({
                   )}
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <label className="text-[11px] text-[#a1a1aa]">
+                  <label className="text-[12px] text-[#a1a1aa]">
                     Reasoning
                     <select
                       aria-label="Reasoning"
@@ -306,7 +311,7 @@ function FeatureEditor({
                       )}
                     </select>
                   </label>
-                  <label className="text-[11px] text-[#a1a1aa]">
+                  <label className="text-[12px] text-[#a1a1aa]">
                     Answer length
                     <select
                       aria-label="Answer length"
@@ -327,7 +332,7 @@ function FeatureEditor({
                     </select>
                   </label>
                 </div>
-                <label className="flex items-center justify-between text-[12px] text-[#d4d4d8]">
+                <label className="flex min-h-8 items-center justify-between text-[13px] text-[#d4d4d8]">
                   Web search
                   <input
                     type="checkbox"
@@ -336,7 +341,7 @@ function FeatureEditor({
                     onChange={(event) =>
                       update("searchEnabled", event.target.checked)
                     }
-                    className="accent-[#4F9CF9]"
+                    className="h-4 w-4 accent-[#F95F4A]"
                   />
                 </label>
                 {draft.searchEnabled
@@ -353,8 +358,8 @@ function FeatureEditor({
             1000,
           )}
           {text || feature === "voice" ? (
-            <details className="text-[11px] text-[#a1a1aa]">
-              <summary className="cursor-pointer py-1">
+            <details className="text-[12px] text-[#a1a1aa]">
+              <summary className="cursor-pointer py-1.5">
                 Custom instructions
               </summary>
               <textarea
@@ -370,12 +375,12 @@ function FeatureEditor({
         </fieldset>
       </fieldset>
       {feature === "transcription" || feature === "voice" ? (
-        <p className="text-[10.5px] text-[#a1a1aa]">
+        <p className="text-[12px] text-[#a1a1aa]">
           Applies when audio restarts.
         </p>
       ) : null}
       {error ? (
-        <p role="alert" className="text-[11px] text-red-300">
+        <p role="alert" className="text-[12px] text-red-300">
           {error}
         </p>
       ) : null}
@@ -383,7 +388,7 @@ function FeatureEditor({
         <button
           type="submit"
           disabled={disabled || !canEdit || !controller.configureFeature}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-[#F95F4A] px-3 py-1.5 text-[12px] font-semibold text-white disabled:opacity-40"
+          className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#F95F4A] px-3 text-[13px] font-semibold text-white hover:bg-[#ff735f] disabled:opacity-40"
         >
           {pending ? <Loader2 size={12} className="animate-spin" /> : null}
           {saved ? "Saved" : "Save"}
@@ -397,7 +402,7 @@ function FeatureEditor({
               model: draft.model,
             })
           }
-          className="text-[11px] text-[#a1a1aa] hover:text-white"
+          className="h-8 rounded-md px-1 text-[12px] text-[#a1a1aa] hover:text-white"
         >
           Reset options
         </button>
