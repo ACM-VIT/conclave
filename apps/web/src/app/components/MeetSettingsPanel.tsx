@@ -224,7 +224,7 @@ function SwitchRow({
         size={ICON_SIZE}
         strokeWidth={ICON_STROKE}
         className="shrink-0"
-        style={{ color: isOn ? TONE_ACCENT[tone] : ICON_OFF }}
+        style={{ color: ICON_OFF }}
       />
       <span className="min-w-0 flex-1 truncate text-[14px] font-normal text-[#fafafa]">
         {label}
@@ -256,29 +256,6 @@ function LinkRow({
   );
 }
 
-function LockedRow({
-  icon: Icon,
-  label,
-}: {
-  icon: LucideIcon;
-  label: string;
-}) {
-  return (
-    <div className="flex min-h-[44px] w-full items-center gap-3 px-4 py-2 text-left">
-      <Icon
-        size={ICON_SIZE}
-        strokeWidth={ICON_STROKE}
-        className="shrink-0"
-        style={{ color: ICON_OFF }}
-      />
-      <span className="min-w-0 flex-1 truncate text-[14px] font-normal text-[#fafafa]">
-        {label}
-      </span>
-      <Lock size={14} strokeWidth={ICON_STROKE} style={{ color: "rgba(250,250,250,0.28)" }} />
-    </div>
-  );
-}
-
 function StatusPill({
   label,
   tone,
@@ -286,28 +263,17 @@ function StatusPill({
   label: string;
   tone: "success" | "warning" | "off";
 }) {
-  const styles =
-    tone === "success"
-      ? {
-          color: color.success,
-          borderColor: "rgba(34,197,94,0.35)",
-          backgroundColor: "rgba(34,197,94,0.10)",
-        }
-      : tone === "warning"
-        ? {
-            color: color.warning,
-            borderColor: "rgba(251,191,36,0.35)",
-            backgroundColor: "rgba(251,191,36,0.10)",
-          }
-        : {
-            color: "rgba(250,250,250,0.5)",
-            borderColor: "rgba(250,250,250,0.12)",
-            backgroundColor: "transparent",
-          };
   return (
     <span
-      className="rounded-full border px-2 py-0.5 text-[11.5px] font-medium"
-      style={styles}
+      className="text-[12px]"
+      style={{
+        color:
+          tone === "success"
+            ? color.success
+            : tone === "warning"
+              ? color.warning
+              : "rgba(250,250,250,0.5)",
+      }}
     >
       {label}
     </span>
@@ -395,7 +361,7 @@ function InviteCodeForm({
   roleBadge,
   loading = false,
 }: {
-  label: string;
+  label?: string;
   value: string;
   onChange: (next: string) => void;
   onSave: () => void;
@@ -405,8 +371,8 @@ function InviteCodeForm({
   saveDisabled: boolean;
   removeDisabled: boolean;
   placeholder: string;
-  pillTone: "warning" | "off";
-  pillLabel: string;
+  pillTone?: "warning" | "off";
+  pillLabel?: string;
   roleBadge?: ReactNode;
   loading?: boolean;
 }) {
@@ -414,13 +380,15 @@ function InviteCodeForm({
 
   return (
     <div className="px-4 pb-3 pt-1">
-      <div className="mb-2 flex items-center justify-between">
-        <span className="text-[14px] text-[#fafafa]">{label}</span>
-        <div className="flex items-center gap-2">
-          {roleBadge}
-          <StatusPill label={pillLabel} tone={pillTone} />
+      {label ? (
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <span className="min-w-0 truncate text-[14px] text-[#fafafa]">{label}</span>
+          <div className="flex shrink-0 items-center gap-2">
+            {roleBadge}
+            {pillLabel && pillTone ? <StatusPill label={pillLabel} tone={pillTone} /> : null}
+          </div>
         </div>
-      </div>
+      ) : null}
 
       {loading ? (
         <div className="space-y-2 py-1">
@@ -690,7 +658,7 @@ export default function MeetSettingsPanel({
 
         <div className="hostpanel-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-2">
           <SectionHeader
-            label="Room access"
+            label="Access"
             first
             accessory={<StatusPill label={accessSummary} tone={accessTone} />}
           />
@@ -713,10 +681,10 @@ export default function MeetSettingsPanel({
 
           <Separator />
 
-          <SectionHeader label="Participant media" />
+          <SectionHeader label="Participants" />
           <SwitchRow
             icon={Mic}
-            label="Allow participants to unmute"
+            label="Allow unmute"
             isOn={isParticipantUnmuteAllowed}
             tone="success"
             onClick={onToggleParticipantUnmuteAllowed}
@@ -724,7 +692,7 @@ export default function MeetSettingsPanel({
           />
           <SwitchRow
             icon={Video}
-            label="Allow participants to turn on video"
+            label="Allow video"
             isOn={isParticipantVideoAllowed}
             tone="success"
             onClick={onToggleParticipantVideoAllowed}
@@ -733,10 +701,10 @@ export default function MeetSettingsPanel({
 
           <Separator />
 
-          <SectionHeader label="Chat & messaging" />
+          <SectionHeader label="Messaging" />
           <SwitchRow
             icon={MessageSquareLock}
-            label="Allow chat"
+            label="Chat"
             isOn={!isChatLocked}
             tone="success"
             onClick={onToggleChatLock}
@@ -752,7 +720,7 @@ export default function MeetSettingsPanel({
           />
           <SwitchRow
             icon={ImageIcon}
-            label="Image attachments"
+            label="Images"
             isOn={areImageAttachmentsEnabled}
             tone="success"
             onClick={onToggleImageAttachments}
@@ -760,7 +728,7 @@ export default function MeetSettingsPanel({
           />
           <SwitchRow
             icon={Volume2}
-            label="Read messages aloud"
+            label="Read aloud"
             isOn={!isTtsDisabled}
             tone="success"
             onClick={onToggleTtsDisabled}
@@ -785,19 +753,26 @@ export default function MeetSettingsPanel({
 
           <Separator />
 
-          <SectionHeader label="Meeting invite code" />
-          <InviteCodeForm
+          <SectionHeader
             label="Invite code"
+            accessory={
+              isMeetingLoading ? null : (
+                <StatusPill
+                  label={meetingRequiresInviteCode ? "Protected" : "Open"}
+                  tone={meetingRequiresInviteCode ? "warning" : "off"}
+                />
+              )
+            }
+          />
+          <InviteCodeForm
             value={meetingInviteCodeInput}
             onChange={setMeetingInviteCodeInput}
-            placeholder="Set a meeting invite code"
+            placeholder="Set a code"
             hasCode={meetingRequiresInviteCode}
             working={isMeetingWorking}
             loading={isMeetingLoading}
             saveDisabled={isMeetingWorking || !meetingInviteCodeInput.trim()}
             removeDisabled={isMeetingWorking || !meetingRequiresInviteCode}
-            pillTone={meetingRequiresInviteCode ? "warning" : "off"}
-            pillLabel={meetingRequiresInviteCode ? "Protected" : "Open"}
             onSave={() =>
               void withMeetingTask(
                 async () => {
@@ -818,15 +793,7 @@ export default function MeetSettingsPanel({
           {hasWebinar ? (
             <>
               <Separator />
-              <SectionHeader
-                label="Webinar"
-                accessory={
-                  <StatusPill
-                    label={isWebinarEnabled ? "Active" : "Off"}
-                    tone={isWebinarEnabled ? "success" : "off"}
-                  />
-                }
-              />
+              <SectionHeader label="Webinar" />
               <SwitchRow
                 icon={Users}
                 label="Webinar mode"
@@ -946,7 +913,7 @@ export default function MeetSettingsPanel({
                     label="Attendee code"
                     value={inviteCodeInput}
                     onChange={setInviteCodeInput}
-                    placeholder="Set an attendee invite code"
+                    placeholder="Set a code"
                     hasCode={Boolean(webinarConfig?.requiresInviteCode)}
                     working={isWebinarWorking}
                     saveDisabled={isWebinarWorking || !inviteCodeInput.trim()}
@@ -1121,7 +1088,7 @@ export default function MeetSettingsPanel({
                           className="shrink-0 text-[rgba(250,250,250,0.56)]"
                         />
                         <span className="flex-1 text-[13px] text-[rgba(250,250,250,0.56)]">
-                          No link generated yet
+                          No link yet
                         </span>
                         <ActionBtn
                           variant="primary"
@@ -1144,15 +1111,7 @@ export default function MeetSettingsPanel({
                     )}
                   </div>
                 </div>
-              ) : (
-                <div className="pointer-events-none opacity-40">
-                  <LockedRow icon={Globe} label="Public access" />
-                  <LockedRow icon={Lock} label="Lock attendees" />
-                  <LockedRow icon={Users} label="Max attendees" />
-                  <LockedRow icon={MessageSquareLock} label="Attendee code" />
-                  <LockedRow icon={Link2} label="Webinar link" />
-                </div>
-              )}
+              ) : null}
             </>
           ) : null}
         </div>
