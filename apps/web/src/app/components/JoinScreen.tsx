@@ -203,6 +203,8 @@ const CTA_PRIMARY =
   "inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl short-screen:h-11 bg-[#F95F4A] text-[15px] font-medium text-white transition-[filter] duration-150 hover:brightness-[1.05] disabled:bg-[#232327] disabled:text-[#fafafa]/40 disabled:cursor-not-allowed";
 const CTA_GHOST =
   "inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl short-screen:h-11 border border-white/10 bg-white/[0.04] text-[15px] font-medium text-[#fafafa] transition-colors duration-150 hover:bg-white/[0.08] disabled:opacity-50";
+const CTA_JOIN_INLINE =
+  "inline-flex h-12 shrink-0 items-center justify-center rounded-xl px-5 short-screen:h-11 border border-white/10 bg-white/[0.06] text-[15px] font-medium text-[#fafafa] transition-colors duration-150 hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:bg-white/[0.03] disabled:text-[#fafafa]/40";
 const DEBUG_VIDEO_EFFECTS_STORAGE_KEY = "conclave:debug-video-effects";
 const BLOCKED_DEVICE_ORDER: readonly BlockedDevice[] = ["camera", "microphone"];
 const BLOCKED_DEVICE_OF: Record<PrejoinMediaKind, BlockedDevice> = {
@@ -414,6 +416,11 @@ function JoinScreen({
     normalizeGuestName(user?.name || "") ||
     (userEmail ? userEmail.split("@")[0] : "") ||
     "You";
+  const accountEmail = user?.email?.trim() ?? "";
+  const accountDetail =
+    accountEmail && accountEmail.toLowerCase() !== previewName.toLowerCase()
+      ? accountEmail
+      : null;
   const activeVideoEffectsCount = countActiveVideoEffects(videoEffects);
   const shouldDeferPreviewVideoEffectsPreload =
     useBandwidthHeavyPreloadDeferred();
@@ -1311,26 +1318,26 @@ function JoinScreen({
                 className="text-[22px] leading-tight text-[#fafafa]"
                 style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
               >
-                {isRoutedRoom ? "Ready to join?" : "Start a meeting"}
+                {isRoutedRoom ? "Ready to join?" : "Start or join a meeting"}
               </h1>
-              <p className="text-[13.5px] text-[#fafafa]/55">
-                {isRoutedRoom
-                  ? "Check your camera and mic before you join."
-                  : "Create a room, or join one with a code."}
-              </p>
+              {isRoutedRoom ? (
+                <p className="text-[13.5px] text-[#fafafa]/55">
+                  Check your camera and mic before you join.
+                </p>
+              ) : null}
             </div>
               {isSignedInUser ? (
-                <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3">
+                <div className="flex min-h-11 items-center justify-between gap-3 rounded-xl bg-white/[0.03] py-1.5 pl-3.5 pr-1.5">
                   <div className="min-w-0">
-                    <p className="truncate text-[14px] font-medium">{previewName}</p>
-                    {userEmail && (
-                      <p className="truncate text-[12px] text-[#fafafa]/60">{userEmail}</p>
-                    )}
+                    <p className="truncate text-[13.5px] font-medium leading-5">{previewName}</p>
+                    {accountDetail ? (
+                      <p className="truncate text-[12px] leading-4 text-[#fafafa]/50">{accountDetail}</p>
+                    ) : null}
                   </div>
                   <button
                     onClick={handleSignOut}
                     disabled={isSigningOut}
-                    className="shrink-0 text-[13px] text-[#fafafa]/55 transition-colors hover:text-[#fafafa] disabled:opacity-50"
+                    className="h-8 shrink-0 rounded-lg px-2.5 text-[13px] text-[#fafafa]/55 transition-colors hover:bg-white/[0.06] hover:text-[#fafafa] disabled:opacity-50"
                   >
                     {isSigningOut ? "…" : "Sign out"}
                   </button>
@@ -1393,7 +1400,7 @@ function JoinScreen({
               )}
 
 
-              <div className="space-y-1.5">
+              <div className={`space-y-1.5 ${isRoutedRoom ? "" : "pt-1 sm:pt-2"}`}>
                 <div className="flex min-h-[16px] items-center gap-2">
                   <label
                     htmlFor={codeInputId}
@@ -1413,91 +1420,93 @@ function JoinScreen({
                     />
                   ) : null}
                 </div>
-                <div className="relative">
-                  <input
-                    id={codeInputId}
-                    type="text"
-                    value={codeField.text}
-                    ref={shapeTypedCodeEdits}
-                    onChange={(e) => codeField.change(e.target.value)}
-                    onBlur={codeField.settle}
-                    onPaste={(e) => {
-                      if (isRoutedRoom) return;
-                      pasteIntoCode(e, e.currentTarget, e.clipboardData.getData("text"));
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key !== "Enter" || e.nativeEvent.isComposing || !canSubmit) return;
-                      const input = e.currentTarget;
-                      if (codeField.onThisPage && input.value !== joinCode) {
-                        applyFieldEdit(input, { start: 0, end: input.value.length, text: joinCode });
+                <div className={isRoutedRoom ? "space-y-1.5" : "flex gap-2"}>
+                  <div className="relative min-w-0 flex-1">
+                    <input
+                      id={codeInputId}
+                      type="text"
+                      value={codeField.text}
+                      ref={shapeTypedCodeEdits}
+                      onChange={(e) => codeField.change(e.target.value)}
+                      onBlur={codeField.settle}
+                      onPaste={(e) => {
+                        if (isRoutedRoom) return;
+                        pasteIntoCode(e, e.currentTarget, e.clipboardData.getData("text"));
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key !== "Enter" || e.nativeEvent.isComposing || !canSubmit) return;
+                        const input = e.currentTarget;
+                        if (codeField.onThisPage && input.value !== joinCode) {
+                          applyFieldEdit(input, { start: 0, end: input.value.length, text: joinCode });
+                        }
+                        joinMeeting();
+                      }}
+                      placeholder="Enter a code or link"
+                      readOnly={isRoutedRoom}
+                      autoFocus={isRoutedRoom}
+                      aria-invalid={codeResolution.tooLong || undefined}
+                      aria-describedby={
+                        codeResolution.tooLong ? codeProblemId : inviteLink === null ? noLinkReasonId : undefined
                       }
-                      joinMeeting();
-                    }}
-                    placeholder="Enter a code or link"
-                    readOnly={isRoutedRoom}
-                    autoFocus={isRoutedRoom}
-                    aria-invalid={codeResolution.tooLong || undefined}
-                    aria-describedby={
-                      codeResolution.tooLong ? codeProblemId : inviteLink === null ? noLinkReasonId : undefined
-                    }
-                    className={`${FIELD} ${codeResolution.tooLong ? "pr-32" : "pr-12"}`}
-                  />
-                  {codeResolution.tooLong ? (
-                    <span
-                      id={codeProblemId}
-                      className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded-md bg-[#141416] px-1.5 text-[12px] text-[#fafafa]/55"
-                    >
-                      Code too long
+                      className={`${FIELD} ${codeResolution.tooLong ? "pr-32" : "pr-12"}`}
+                    />
+                    {codeResolution.tooLong ? (
+                      <span
+                        id={codeProblemId}
+                        className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded-md bg-[#141416] px-1.5 text-[12px] text-[#fafafa]/55"
+                      >
+                        Code too long
+                      </span>
+                    ) : null}
+                    {inviteLink && linkCopy.status === "failed" ? (
+                      <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute right-12 top-1/2 -translate-y-1/2 rounded-md bg-[#141416] px-1.5 text-[12px] text-[#fafafa]/55"
+                      >
+                        Couldn&apos;t copy
+                      </span>
+                    ) : null}
+                    {inviteLink ? (
+                      <button
+                        type="button"
+                        onClick={() => void linkCopy.copy()}
+                        aria-label="Copy joining link"
+                        title="Copy joining link"
+                        className="absolute right-1.5 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-lg text-[#fafafa]/45 transition-colors duration-150 hover:bg-white/[0.06] hover:text-[#fafafa]/80"
+                      >
+                        {linkCopy.status === "copied" ? (
+                          <Check size={16} aria-hidden="true" className="text-[#fafafa]/80" />
+                        ) : (
+                          <Link2 size={16} aria-hidden="true" />
+                        )}
+                      </button>
+                    ) : inviteLink === null ? (
+                      <button
+                        type="button"
+                        disabled
+                        aria-label="Copy joining link"
+                        aria-describedby={noLinkReasonId}
+                        className="absolute right-1.5 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 cursor-not-allowed items-center justify-center rounded-lg text-[#fafafa]/25"
+                      >
+                        <Link2Off size={16} aria-hidden="true" />
+                      </button>
+                    ) : null}
+                    <span aria-live="polite" className="sr-only">
+                      {linkCopy.status === "copied"
+                        ? "Link copied"
+                        : linkCopy.status === "failed"
+                          ? "Couldn't copy link"
+                          : ""}
                     </span>
-                  ) : null}
-                  {inviteLink && linkCopy.status === "failed" ? (
-                    <span
-                      aria-hidden="true"
-                      className="pointer-events-none absolute right-12 top-1/2 -translate-y-1/2 rounded-md bg-[#141416] px-1.5 text-[12px] text-[#fafafa]/55"
-                    >
-                      Couldn&apos;t copy
-                    </span>
-                  ) : null}
-                  {inviteLink ? (
-                    <button
-                      type="button"
-                      onClick={() => void linkCopy.copy()}
-                      aria-label="Copy joining link"
-                      title="Copy joining link"
-                      className="absolute right-1.5 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-lg text-[#fafafa]/45 transition-colors duration-150 hover:bg-white/[0.06] hover:text-[#fafafa]/80"
-                    >
-                      {linkCopy.status === "copied" ? (
-                        <Check size={16} aria-hidden="true" className="text-[#fafafa]/80" />
-                      ) : (
-                        <Link2 size={16} aria-hidden="true" />
-                      )}
-                    </button>
-                  ) : inviteLink === null ? (
-                    <button
-                      type="button"
-                      disabled
-                      aria-label="Copy joining link"
-                      aria-describedby={noLinkReasonId}
-                      className="absolute right-1.5 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 cursor-not-allowed items-center justify-center rounded-lg text-[#fafafa]/25"
-                    >
-                      <Link2Off size={16} aria-hidden="true" />
-                    </button>
-                  ) : null}
-                  <span aria-live="polite" className="sr-only">
-                    {linkCopy.status === "copied"
-                      ? "Link copied"
-                      : linkCopy.status === "failed"
-                        ? "Couldn't copy link"
-                        : ""}
-                  </span>
+                  </div>
+                  <button
+                    onClick={joinMeeting}
+                    disabled={!canSubmit}
+                    className={isRoutedRoom ? CTA_PRIMARY : CTA_JOIN_INLINE}
+                  >
+                    Join
+                  </button>
                 </div>
-                <button
-                  onClick={joinMeeting}
-                  disabled={!canSubmit}
-                  className={CTA_GHOST}
-                >
-                  Join
-                </button>
               </div>
 
               {!isSignedInUser && (
