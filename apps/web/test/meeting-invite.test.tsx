@@ -83,7 +83,6 @@ describe("MeetingInvite", () => {
         <MeetingInvite
           phase={phase}
           form={inviteFormFor(phase)}
-          arrangement={phase === "empty" ? "beside" : "above"}
           roomId={roomId}
           clientId={clientId}
           isMobile={isMobile}
@@ -225,11 +224,10 @@ function Stage({
         phase
           ? {
               form: inviteFormFor(phase),
-              render: ({ form, arrangement }) => (
+              render: ({ form }) => (
                 <MeetingInvite
                   phase={phase}
                   form={form}
-                  arrangement={arrangement}
                   roomId={roomId}
                   isMobile={isMobile}
                   onDismiss={invite.dismiss}
@@ -348,29 +346,62 @@ describe("Solo invite lifecycle", () => {
 });
 
 describe("Solo invite placement", () => {
-  it("sits beside the self tile on a desktop stage without covering it", async () => {
+  const centerX = (rect: ReturnType<typeof rectOf>) => rect.x + rect.width / 2;
+  const showsAddressField = () => slotText().includes(`${location.host}/abc-defg-hij`);
+
+  it("centres the self tile on a desktop stage with a one-row invite right under it", async () => {
     await renderStage([]);
 
     const invite = rectOf(slot()!);
     const tile = localTileRect();
-    expect(slot()?.getAttribute("data-meet-solo-invite")).toBe("beside");
+    expect(slot()?.getAttribute("data-meet-solo-invite")).toBe("below");
     expect(overlaps(invite, tile)).toBe(false);
-    expect(invite.x).toBeGreaterThanOrEqual(tile.x + tile.width);
-    expect(invite.x + invite.width).toBeLessThanOrEqual(gridSize.width);
+    expect(centerX(tile)).toBeCloseTo(gridSize.width / 2, 0);
+    expect(centerX(invite)).toBeCloseTo(centerX(tile), 0);
+    expect(invite.y).toBe(tile.y + tile.height + 12);
+    expect(invite.height).toBe(44);
+    expect(invite.y + invite.height).toBeLessThanOrEqual(gridSize.height);
+    expect(slotText()).toContain("No one else is here yet");
+    expect(showsAddressField()).toBe(false);
+
+    await click("Copy link");
+    expect(writeText).toHaveBeenCalledWith(
+      `${location.origin}/abc-defg-hij?clientId=conclave`,
+    );
+    expect(button("Copied")).toBeDefined();
   });
 
-  it("stacks under the self tile on a phone", async () => {
+  it("keeps the full invite panel stacked under the self tile on a phone", async () => {
     gridSize = { width: 390, height: 700 };
     await renderStage([], { isMobile: true });
 
     const invite = rectOf(slot()!);
     const tile = localTileRect();
     expect(slot()?.getAttribute("data-meet-solo-invite")).toBe("below");
+    expect(invite.height).toBe(184);
+    expect(showsAddressField()).toBe(true);
+    expect(button("Copy link")).toBeDefined();
     expect(overlaps(invite, tile)).toBe(false);
+    expect(invite.y).toBeGreaterThanOrEqual(tile.y + tile.height);
     expect(invite.y + invite.height).toBeLessThanOrEqual(gridSize.height);
   });
 
-  it("shrinks to the one-row notice on a short stage", async () => {
+  it.each([
+    { width: 767, fullPanel: true, height: 184 },
+    { width: 768, fullPanel: false, height: 44 },
+  ])(
+    "uses the full panel below the 768px breakpoint and one row from it ($width px)",
+    async ({ width, fullPanel, height }) => {
+      gridSize = { width, height: 700 };
+      await renderStage([]);
+
+      expect(showsAddressField()).toBe(fullPanel);
+      expect(rectOf(slot()!).height).toBe(height);
+      expect(overlaps(rectOf(slot()!), localTileRect())).toBe(false);
+    },
+  );
+
+  it("shrinks to the one-row notice above the tile on a short stage", async () => {
     gridSize = { width: 1280, height: 230 };
     await renderStage([]);
 
@@ -382,15 +413,16 @@ describe("Solo invite placement", () => {
     expect(overlaps(invite, tile)).toBe(false);
   });
 
-  it("gives the tile most of the stage back when only the notice remains", async () => {
+  it("keeps the everyone-left notice above the tile without covering it", async () => {
     await renderStage([]);
-    const besidePanel = localTileRect();
     await renderStage([peer]);
     await renderStage([]);
 
     const notice = rectOf(slot()!);
-    expect(overlaps(notice, localTileRect())).toBe(false);
-    expect(localTileRect().width).toBeGreaterThan(besidePanel.width);
+    const tile = localTileRect();
+    expect(slot()?.getAttribute("data-meet-solo-invite")).toBe("above");
+    expect(overlaps(notice, tile)).toBe(false);
+    expect(notice.y + notice.height).toBeLessThanOrEqual(tile.y);
   });
 
   it("leaves a stage too short for the notice to the tile alone", async () => {
@@ -401,23 +433,29 @@ describe("Solo invite placement", () => {
     expect(localTileRect().height).toBeGreaterThan(0);
   });
 
-  it("keeps the pinned self view clear of the invite", async () => {
+  it("centres the one-row invite under the pinned self view without covering it", async () => {
     await renderStage([]);
     await click("Pin to spotlight");
 
     const stage = container.querySelector<HTMLElement>("[data-meet-stage-split]");
     expect(stage).not.toBeNull();
-    expect(slot()?.getAttribute("data-meet-solo-invite")).toBe("beside");
-    expect(overlaps(rectOf(slot()!), rectOf(stage!))).toBe(false);
+    const pinned = rectOf(stage!);
+    const invite = rectOf(slot()!);
+    expect(slot()?.getAttribute("data-meet-solo-invite")).toBe("below");
+    expect(overlaps(invite, pinned)).toBe(false);
+    expect(centerX(invite)).toBeCloseTo(centerX(pinned), 0);
+    expect(invite.y).toBe(pinned.y + pinned.height + 12);
+    expect(invite.height).toBe(44);
   });
 
   it("gives the whole stage back to the tile after you dismiss it", async () => {
     await renderStage([]);
-    const besidePanel = localTileRect();
+    const withInvite = localTileRect();
 
     await click("Dismiss invite");
 
-    expect(localTileRect().width).toBeGreaterThan(besidePanel.width);
+    expect(slot()).toBeNull();
+    expect(localTileRect().height).toBeGreaterThan(withInvite.height);
   });
 });
 
