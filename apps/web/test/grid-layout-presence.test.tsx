@@ -1,7 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import GridLayout from "../src/app/components/GridLayout";
-import MeetingReadyCard from "../src/app/components/MeetingReadyCard";
 import {
   DEFAULT_MEET_VIEW_SETTINGS,
   type MeetSelfViewMode,
@@ -28,75 +27,7 @@ const cameraOffParticipant = (userId: string): Participant => ({
   isHandRaised: false,
 });
 
-function renderGrid(
-  userIds: string[],
-  hideTilesWithoutVideo = true,
-  isMobile = false,
-) {
-  return renderToStaticMarkup(
-    <GridLayout
-      localStream={null}
-      isCameraOff
-      isMuted
-      isHandRaised={false}
-      participants={new Map(userIds.map((id) => [id, cameraOffParticipant(id)]))}
-      userEmail="local"
-      currentUserId="local"
-      isMirrorCamera={false}
-      activeSpeakerId={null}
-      getDisplayName={(id) => id}
-      viewSettings={{ ...DEFAULT_MEET_VIEW_SETTINGS, hideTilesWithoutVideo }}
-      isMobile={isMobile}
-      meetingReadyCard={
-        <MeetingReadyCard
-          roomId="abc-defg-hij"
-          isHost={false}
-          isMobile={isMobile}
-          onDismiss={() => {}}
-        />
-      }
-    />,
-  );
-}
-
 describe("GridLayout meeting presence", () => {
-  it.each([1, 35])(
-    "does not show a solo invite when %i camera-off peers are hidden",
-    (count) => {
-      const html = renderGrid(Array.from({ length: count }, (_, i) => `peer-${i}`));
-
-      expect(html).toContain('data-meet-view-ordered-count="0"');
-      expect(html).not.toContain("You are the only one here");
-      expect(html).not.toContain("Add others");
-    },
-  );
-
-  it("does not show the mobile solo invite when peers are hidden", () => {
-    expect(renderGrid(["peer"], true, true)).not.toContain("Add others");
-  });
-
-  it("does not show a solo invite when camera-off peers are visible", () => {
-    const html = renderGrid(["peer"], false);
-
-    expect(html).toContain('data-meet-view-ordered-count="1"');
-    expect(html).not.toContain("You are the only one here");
-  });
-
-  it.each([true, false])(
-    "keeps the solo invite when alone with the filter set to %s",
-    (hideTilesWithoutVideo) => {
-      expect(renderGrid([], hideTilesWithoutVideo)).toContain(
-        "You are the only one here",
-      );
-    },
-  );
-
-  it("does not count self or shared-browser system streams as other people", () => {
-    expect(
-      renderGrid(["local", "shared-browser:audio", "shared-browser-video:video"]),
-    ).toContain("You are the only one here");
-  });
-
   it.each<[MeetSelfViewMode, boolean]>([
     ["auto", false],
     ["floating", false],

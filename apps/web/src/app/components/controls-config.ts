@@ -45,6 +45,7 @@ export interface ControlsBarProps {
   slim?: boolean;
   coachAvatars?: { id: string; name: string }[];
   roomId?: string;
+  inviteOnStage?: boolean;
   clientId?: string;
   isMuted: boolean;
   isMicrophoneUnmuteDisabled?: boolean;
