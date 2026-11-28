@@ -56,13 +56,14 @@ function Row({
       type="button"
       disabled={disabled || !onClick}
       onClick={onClick}
+      aria-pressed={selected}
       style={{
         position: "relative",
         display: "flex",
         alignItems: "center",
         gap: 10,
         width: "100%",
-        padding: "12px 14px",
+        padding: "10px 12px",
         borderRadius: radius.md,
         border: `1px solid ${selected ? color.accent : color.border}`,
         background: color.surfaceRaised,
@@ -86,8 +87,8 @@ function Row({
         />
       ) : null}
       <span style={{ flex: 1, minWidth: 0, zIndex: 1 }}>
-        <span style={{ display: "block", fontFamily: HEAD_FONT, fontSize: 15, color: color.text }}>{name}</span>
-        <span style={{ display: "block", fontSize: 12.5, color: color.textMuted, marginTop: 1 }}>{sub}</span>
+        <span className="block truncate" style={{ fontFamily: HEAD_FONT, fontSize: 14, color: color.text }}>{name}</span>
+        <span style={{ display: "block", fontSize: 12, color: color.textMuted, marginTop: 1 }}>{sub}</span>
       </span>
       {trailing ? <span style={{ zIndex: 1, flexShrink: 0 }}>{trailing}</span> : null}
     </button>
@@ -209,6 +210,9 @@ export function GamesPanel({
   );
 }
 
+const formatPlayerRange = (min: number, max: number) =>
+  min === max ? `${min} players` : `${min}-${max} players`;
+
 function LauncherView({
   catalog,
   isAdmin,
@@ -226,13 +230,11 @@ function LauncherView({
 }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <p style={{ fontSize: 13, color: color.textMuted, margin: "0 0 4px", lineHeight: 1.5 }}>
-        {readOnly
-          ? "Observer mode can watch games but cannot start one."
-          : isAdmin
-            ? "Pick a game, or let the room vote."
-            : "The host is picking a game."}
-      </p>
+      {readOnly || !isAdmin ? (
+        <p style={{ fontSize: 13, color: color.textMuted, margin: "0 0 4px", lineHeight: 1.5 }}>
+          {readOnly ? "Observers can watch but not start games." : "The host is picking a game."}
+        </p>
+      ) : null}
       {catalog.map((entry) => (
         <Row
           key={entry.id}
@@ -242,8 +244,8 @@ function LauncherView({
           onClick={!readOnly && isAdmin ? () => onPick(entry) : undefined}
           trailing={
             <span style={{ display: "flex", alignItems: "center", gap: 8, color: color.textFaint }}>
-              <span style={{ fontSize: 11, whiteSpace: "nowrap" }}>
-                {entry.minPlayers} to {entry.maxPlayers}
+              <span style={{ fontSize: 12, whiteSpace: "nowrap" }}>
+                {formatPlayerRange(entry.minPlayers, entry.maxPlayers)}
               </span>
               {isAdmin && !readOnly ? (
                 <svg width={16} height={16} viewBox="0 0 24 24" fill="none" aria-hidden>
@@ -265,22 +267,10 @@ function LauncherView({
         href={ADD_GAME_DOCS_URL}
         target="_blank"
         rel="noreferrer"
-        className="group mt-2 flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2.5 text-left transition-colors hover:border-white/15 hover:bg-white/[0.045]"
+        className="mt-2 inline-flex min-h-8 items-center gap-1.5 self-start rounded-md px-2.5 text-[12px] text-[#71717a] transition-colors hover:text-[#fafafa]"
       >
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="text-[13px] font-medium text-[#fafafa]">
-            Add your own game
-          </span>
-          <span className="text-[12px] leading-snug text-[#a1a1aa]">
-            Build on the Apps SDK
-          </span>
-        </span>
-        <ExternalLink
-          size={15}
-          strokeWidth={1.75}
-          className="shrink-0 text-[#71717a] transition-colors group-hover:text-[#fafafa]"
-          aria-hidden="true"
-        />
+        Add your own game
+        <ExternalLink size={13} strokeWidth={1.75} aria-hidden="true" />
       </a>
     </div>
   );
@@ -528,7 +518,7 @@ function VoteView({
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <p style={{ fontSize: 13, color: color.textMuted, margin: "0 0 4px" }}>
         {readOnly
-          ? "Observer mode can watch this vote."
+          ? "Observers can watch this vote."
           : isAdmin
             ? "Vote too, then start the winner."
             : "Tap the game you want."}{" "}
@@ -550,7 +540,7 @@ function VoteView({
             fillRatio={count / maxVotes}
             trailing={
               <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                {mine ? <span style={{ fontSize: 11, color: color.accent }}>your pick</span> : null}
+                {mine ? <span style={{ fontSize: 12, color: color.accent }}>Your pick</span> : null}
                 <span style={{ fontFamily: HEAD_FONT, fontSize: 15, color: color.text, minWidth: 14, textAlign: "right" }}>{count}</span>
               </span>
             }

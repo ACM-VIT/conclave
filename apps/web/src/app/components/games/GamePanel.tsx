@@ -185,7 +185,7 @@ export function GamePanel({
                     onClick={handleJoin}
                     disabled={joinBusy}
                     style={{ backgroundColor: color.accent }}
-                    className="inline-flex h-7 shrink-0 items-center justify-center rounded-lg px-2.5 text-[12px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-60"
+                    className="inline-flex h-8 shrink-0 items-center justify-center rounded-lg px-3 text-[12px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-60"
                   >
                     {joinBusy ? "Joining" : "Join next round"}
                   </button>
