@@ -156,7 +156,7 @@
   },
   "src/app/components/apps/AppsPanel.tsx": {
     "conclave/no-comments": {
-      "count": 6
+      "count": 5
     }
   },
   "src/app/components/controls-config.ts": {
@@ -472,11 +472,6 @@
   "src/lib/voice-upload.ts": {
     "conclave/no-comments": {
       "count": 6
-    }
-  },
-  "test/apps-panel-server-update.test.tsx": {
-    "conclave/no-comments": {
-      "count": 1
     }
   },
   "test/apps-presented-doc.test.tsx": {

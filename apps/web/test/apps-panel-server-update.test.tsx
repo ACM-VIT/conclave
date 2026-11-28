@@ -35,7 +35,6 @@ afterEach(async () => {
 const entry = (overrides: Partial<PanelAppEntry>): PanelAppEntry => ({
   id: "polls",
   name: "Polls",
-  description: "Ask the room and see results live",
   icon: null,
   isOpen: false,
   onToggle: () => {},
@@ -66,18 +65,8 @@ it("lists an app the server cannot run as off, and says why in plain words", asy
   expect(row("polls")?.title).toBe("Needs a server update");
   expect(row("polls")?.getAttribute("aria-label")).toBe("Polls: needs a server update");
   expect(row("qa")?.disabled).toBe(true);
+  expect(row("qa")?.textContent).toContain("Needs a server update");
   expect(onToggle).not.toHaveBeenCalled();
-  // With nothing to open, the line above the rows is the reason, not an invitation.
-  expect(container.textContent).toContain("Polls and Q&A need a server update.");
-  expect(container.textContent).not.toContain("Open beside the call");
-});
-
-it("says it of one app alone in a webinar, where Q&A has its own place", async () => {
-  await act(async () =>
-    root.render(<AppsPanel onClose={() => {}} panelApps={[entry({ needsServerUpdate: true })]} />),
-  );
-
-  expect(container.textContent).toContain("Polls needs a server update.");
 });
 
 it("leaves an app the server offers as it was", async () => {
@@ -89,7 +78,21 @@ it("leaves an app the server offers as it was", async () => {
 
   expect(row("polls")?.disabled).toBe(false);
   expect(row("polls")?.getAttribute("aria-label")).toBe("Open Polls");
-  expect(row("polls")?.textContent).toContain("Ask the room and see results live");
+  expect(row("polls")?.textContent).toBe("Polls");
   expect(onToggle).toHaveBeenCalledTimes(1);
-  expect(container.textContent).toContain("Open beside the call");
+});
+
+it("says when an app is waiting for this viewer, until it is open", async () => {
+  await act(async () =>
+    root.render(<AppsPanel onClose={() => {}} panelApps={[entry({ needsAttention: true })]} />),
+  );
+  expect(row("polls")?.textContent).toContain("New");
+
+  await act(async () =>
+    root.render(
+      <AppsPanel onClose={() => {}} panelApps={[entry({ needsAttention: true, isOpen: true })]} />,
+    ),
+  );
+  expect(row("polls")?.textContent).not.toContain("New");
+  expect(row("polls")?.getAttribute("aria-pressed")).toBe("true");
 });
