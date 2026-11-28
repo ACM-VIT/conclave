@@ -692,7 +692,7 @@ export default function TtsVoiceSettings({
               <p className="text-[12px]" style={{ color: color.textMuted }}>
                 Your voice
               </p>
-              <span className="inline-flex items-center gap-1 text-[11px] text-[#32d583]">
+              <span className="inline-flex items-center gap-1 text-[12px] text-[#32d583]">
                 <Check size={12} strokeWidth={1.75} /> Ready
               </span>
             </div>
@@ -742,7 +742,7 @@ export default function TtsVoiceSettings({
               </button>
             </div>
             <p
-              className="mt-1.5 text-[11px] leading-snug"
+              className="mt-1.5 text-[12px] leading-snug"
               style={{ color: color.textFaint }}
             >
               Plays for everyone when you send /tts in chat.
@@ -790,7 +790,7 @@ export default function TtsVoiceSettings({
                 />
               </div>
               <span
-                className="shrink-0 text-[11.5px] tabular-nums"
+                className="shrink-0 text-[12px] tabular-nums"
                 style={{ color: color.textMuted }}
               >
                 {review ? formatClock(review.durationSeconds) : ""}
@@ -798,7 +798,7 @@ export default function TtsVoiceSettings({
             </div>
 
             <label
-              className="mt-3 flex cursor-pointer items-start gap-2.5 text-[11.5px] leading-relaxed"
+              className="mt-3 flex cursor-pointer items-start gap-2.5 text-[12px] leading-relaxed"
               style={{ color: color.textMuted }}
             >
               <input
@@ -854,7 +854,7 @@ export default function TtsVoiceSettings({
 
             {phase === "recording" ? (
               <div className="mt-3">
-                <div className="mb-1 flex items-center justify-between text-[11.5px]">
+                <div className="mb-1 flex items-center justify-between text-[12px]">
                   <span className="font-medium" style={{ color: color.accent }}>
                     Recording
                   </span>
@@ -893,7 +893,7 @@ export default function TtsVoiceSettings({
             </button>
             {phase !== "recording" ? (
               <p
-                className="mt-1.5 text-[11px] leading-snug"
+                className="mt-1.5 text-[12px] leading-snug"
                 style={{ color: color.textFaint }}
               >
                 Takes 1 to 2 minutes in a quiet room, speaking steadily at your
@@ -902,7 +902,7 @@ export default function TtsVoiceSettings({
               </p>
             ) : (
               <p
-                className="mt-1.5 text-[11px] leading-snug"
+                className="mt-1.5 text-[12px] leading-snug"
                 style={{ color: color.textFaint }}
               >
                 If you finish the script early, read it again in the same tone.
@@ -967,7 +967,7 @@ export default function TtsVoiceSettings({
           </button>
         </div>
         <p
-          className="mt-1 px-1 text-[11px] leading-snug"
+          className="mt-1 px-1 text-[12px] leading-snug"
           style={{ color: color.textFaint }}
         >
           You hear this for speakers without a personal voice.
