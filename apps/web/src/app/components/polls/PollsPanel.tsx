@@ -24,7 +24,7 @@ const inputClass =
 const primaryButtonClass =
   "inline-flex h-9 items-center justify-center rounded-lg bg-[#F95F4A] px-4 text-[13px] font-medium text-white transition-[filter] duration-150 enabled:hover:brightness-105 disabled:opacity-40";
 const quietButtonClass =
-  "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-white/[0.12] px-3 text-[12.5px] text-[#fafafa]/80 transition-colors duration-150 enabled:hover:bg-white/[0.06] disabled:opacity-40";
+  "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-white/[0.12] px-3 text-[13px] text-[#fafafa]/80 transition-colors duration-150 enabled:hover:bg-white/[0.06] disabled:opacity-40";
 
 export type PollsPanelProps = {
   polls: PollItem[];
@@ -118,9 +118,7 @@ export function PollsPanel({
           <div className="flex flex-col items-center gap-2 px-6 pt-10 text-center">
             <ChartBar size={22} strokeWidth={STROKE} className="text-[#fafafa]/30" />
             <p className="text-balance text-[13px] leading-relaxed text-[#fafafa]/55">
-              {isHost
-                ? "Ask a question and see the answers come in live."
-                : "No polls yet. When a host starts one, it shows up here."}
+              {isHost ? "No polls yet." : "No polls yet. A host can start one."}
             </p>
           </div>
         ) : (
@@ -254,7 +252,7 @@ function PollComposer({
           type="button"
           data-testid="poll-add-option"
           onClick={() => setOptions((previous) => [...previous, ""])}
-          className="mt-2 inline-flex items-center gap-1.5 text-[12.5px] font-medium text-[#F95F4A] hover:brightness-110"
+          className="mt-1 -ml-2 inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-[13px] font-medium text-[#F95F4A] hover:bg-white/[0.04]"
         >
           <Plus size={14} strokeWidth={STROKE} />
           Add option
@@ -351,10 +349,9 @@ function PollCard({
       className={`rounded-xl border p-3 ${isOpen ? "border-white/[0.14]" : "border-white/[0.08]"}`}
       style={{ backgroundColor: color.bgAlt }}
     >
-      <div className="flex items-center gap-2 text-[11.5px] text-[#fafafa]/55">
+      <div className="flex items-center gap-2 text-[12px] text-[#fafafa]/55">
         {isOpen ? (
-          <span className="inline-flex items-center gap-1.5 font-medium text-[#fafafa]/80">
-            <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[#F95F4A]" />
+          <span className="font-medium" style={{ color: color.accent }}>
             Live
           </span>
         ) : (
@@ -503,7 +500,7 @@ function PollFootnote({
   const votes = `${voterCount} ${voterCount === 1 ? "vote" : "votes"}`;
   let text: string | null = null;
   if (isHost) {
-    text = poll.resultsShared ? `${votes} · Everyone can see results` : `${votes} · Only hosts see results`;
+    text = votes;
   } else if (needsIdentity) {
     text = "Sign in to vote.";
   } else if (showResults) {

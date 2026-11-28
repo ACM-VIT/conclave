@@ -171,7 +171,8 @@ it("gives the host live tallies and the end, share and export controls", async (
   });
 
   expect(container.textContent).toContain("2 · 100%");
-  expect(byTestId("poll-footnote")?.textContent).toBe("2 votes · Only hosts see results");
+  expect(byTestId("poll-footnote")?.textContent).toBe("2 votes");
+  expect(button("Show results to everyone")?.getAttribute("aria-checked")).toBe("false");
 
   await click(button("Show results to everyone"));
   expect(onShare).toHaveBeenCalledWith("p1", true);
