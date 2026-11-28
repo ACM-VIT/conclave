@@ -5,6 +5,7 @@ import {
   AudioLines,
   Camera,
   ChevronDown,
+  ChevronRight,
   FlipHorizontal2,
   Gauge,
   LoaderCircle,
@@ -235,16 +236,27 @@ function PresetButton({
         boxShadow: selected ? "inset 0 0 0 1px rgba(249,95,74,0.16)" : "none",
       }}
     >
-      <span className="block truncate text-[12.5px] font-semibold text-[#fafafa]">
+      <span className="block truncate text-[13px] font-semibold text-[#fafafa]">
         {label}
       </span>
       <span
-        className="mt-0.5 block truncate text-[10.5px]"
+        className="mt-0.5 block truncate text-[12px]"
         style={{ color: selected ? "rgba(250,250,250,0.68)" : color.textFaint }}
       >
         {detail}
       </span>
     </button>
+  );
+}
+
+function CustomLabel() {
+  return (
+    <span
+      className="shrink-0 text-[12px] font-medium"
+      style={{ color: color.textMuted }}
+    >
+      Custom
+    </span>
   );
 }
 
@@ -303,7 +315,7 @@ function SettingsSelect<T extends string | number>({
             );
             if (option) onChange(option.value);
           }}
-          className="h-8 w-full appearance-none rounded-lg border border-white/10 bg-white/[0.035] pl-2.5 pr-7 text-[11.5px] text-[#fafafa] outline-none transition-colors hover:bg-white/[0.06] focus:border-[#F95F4A]/60"
+          className="h-8 w-full appearance-none rounded-lg border border-white/10 bg-white/[0.035] pl-2.5 pr-7 text-[12px] text-[#fafafa] outline-none transition-colors hover:bg-white/[0.06] focus:border-[#F95F4A]/60"
         >
           {options.map((option) => (
             <option
@@ -345,7 +357,7 @@ function BitrateControl({
         <span className="text-[12px]" style={{ color: color.textMuted }}>
           {label}
         </span>
-        <span className="text-[11.5px] font-medium tabular-nums text-[#fafafa]">
+        <span className="text-[12px] font-medium tabular-nums text-[#fafafa]">
           {value >= 1000
             ? `${Number((value / 1000).toFixed(2))} Mbps`
             : `${value} kbps`}
@@ -627,7 +639,7 @@ function DirectionCard({
         <StatRow label={availableLabel} value={formatBitrate(availableBitrate)} />
       ) : null}
       {limitation ? (
-        <p className="mt-1.5 text-[11.5px]" style={{ color: color.warning }}>
+        <p className="mt-1.5 text-[12px]" style={{ color: color.warning }}>
           {limitation}
         </p>
       ) : null}
@@ -737,12 +749,12 @@ export default function DeviceSettingsPanel({
   const overallQuality = connectionStats?.quality ?? "unknown";
   const connectionSummary =
     overallQuality === "good"
-      ? "Your connection looks good."
+      ? "Connection looks good."
       : overallQuality === "fair"
-        ? "Your connection is a little unstable."
+        ? "Connection is a little unstable."
         : overallQuality === "poor"
-          ? "Your connection is struggling. Quality is reduced automatically."
-          : "Measuring your connection";
+          ? "Connection is weak. Quality drops to keep up."
+          : "Measuring connection";
   const configuredCameraSettings = resolveCameraPublishSettings(
     mediaQualitySettings.camera,
   );
@@ -920,7 +932,7 @@ export default function DeviceSettingsPanel({
                 {hasLiveVideo ? (
                   <span
                     data-testid="device-settings-preview-badge"
-                    className="absolute left-3 top-3 rounded-full bg-black/60 px-2.5 py-1 text-[11px] font-medium text-[#fafafa] backdrop-blur-sm"
+                    className="absolute left-3 top-3 rounded-full bg-black/60 px-2.5 py-1 text-[12px] font-medium text-[#fafafa] backdrop-blur-sm"
                   >
                     {isPreviewOnly ? "Only visible to you" : "Visible to everyone"}
                   </span>
@@ -988,22 +1000,20 @@ export default function DeviceSettingsPanel({
                     strokeWidth={ICON_STROKE}
                     className="shrink-0 text-[#F95F4A]"
                   />
-                  <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium text-[#fafafa]">
+                  <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[#fafafa]">
                     {formatQualitySummary(resolvedCameraSettings)}
                   </span>
                   {mediaQualitySettings.camera.preset === "custom" ? (
-                    <span className="rounded-full bg-white/[0.08] px-2 py-0.5 text-[9.5px] font-medium text-white/60">
-                      Custom
-                    </span>
+                    <CustomLabel />
                   ) : null}
                 </div>
                 <p
-                  className="mt-1 text-[10.5px] leading-snug"
+                  className="mt-1 text-[12px] leading-snug"
                   style={{ color: color.textFaint }}
                 >
                   {cameraQualityLimitedByEffects
-                    ? "Effects currently publish at up to 720p and 30 fps. Your configured ceiling returns automatically when effects are off."
-                    : "Conclave can step below this ceiling when the connection or device is under pressure."}
+                    ? "Effects cap video at 720p, 30 fps while they're on."
+                    : "Can drop lower on a weak connection or busy device."}
                 </p>
               </div>
               <AdvancedToggle
@@ -1110,7 +1120,7 @@ export default function DeviceSettingsPanel({
                     strokeWidth={ICON_STROKE}
                     className="shrink-0 text-[#F95F4A]"
                   />
-                  <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium text-[#fafafa]">
+                  <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[#fafafa]">
                     {formatQualitySummary({
                       width: resolvedScreenShareSettings.maxWidth,
                       height: resolvedScreenShareSettings.maxHeight,
@@ -1119,16 +1129,14 @@ export default function DeviceSettingsPanel({
                     })}
                   </span>
                   {mediaQualitySettings.screenShare.preset === "custom" ? (
-                    <span className="rounded-full bg-white/[0.08] px-2 py-0.5 text-[9.5px] font-medium text-white/60">
-                      Custom
-                    </span>
+                    <CustomLabel />
                   ) : null}
                 </div>
               </div>
               <div className="mt-1.5">
                 <SwitchRow
                   icon={Volume2}
-                  label="Include system audio when available"
+                  label="Include system audio"
                   checked={mediaQualitySettings.screenShare.includeAudio}
                   onChange={() =>
                     updateScreenSharePickerSettings({
@@ -1236,21 +1244,20 @@ export default function DeviceSettingsPanel({
                 </div>
               ) : null}
               <p
-                className="mt-2 px-1 text-[10.5px] leading-snug"
+                className="mt-2 px-1 text-[12px] leading-snug"
                 style={{ color: color.textFaint }}
               >
-                Quality changes apply to an active share. System audio and
-                cursor visibility apply the next time the browser share picker
-                opens.
+                Quality applies right away. Audio and cursor apply on your next
+                share.
               </p>
               <button
                 type="button"
                 onClick={resetQualitySettings}
-                className="mt-2 inline-flex items-center gap-1.5 rounded-lg px-1 py-1.5 text-[11.5px] transition-colors hover:text-[#fafafa]"
-                style={{ color: color.textFaint }}
+                className="mt-1.5 inline-flex h-8 items-center gap-1.5 rounded-lg px-1 text-[12px] transition-colors hover:text-[#fafafa]"
+                style={{ color: color.textMuted }}
               >
-                <RotateCcw size={12} strokeWidth={ICON_STROKE} />
-                Restore recommended defaults
+                <RotateCcw size={13} strokeWidth={ICON_STROKE} />
+                Reset to defaults
               </button>
             </Section>
 
@@ -1271,6 +1278,12 @@ export default function DeviceSettingsPanel({
                   <span className="min-w-0 flex-1 text-[13px] font-medium">
                     Backgrounds and effects
                   </span>
+                  <ChevronRight
+                    size={15}
+                    strokeWidth={ICON_STROKE}
+                    aria-hidden
+                    className="shrink-0 text-[#fafafa]/45"
+                  />
                 </button>
               </Section>
             ) : null}
@@ -1319,7 +1332,7 @@ export default function DeviceSettingsPanel({
                     Test gain
                   </label>
                   <span
-                    className="text-[11.5px] tabular-nums"
+                    className="text-[12px] tabular-nums"
                     style={{ color: color.textFaint }}
                   >
                     {Math.round(micTest.gain * 100)}%
@@ -1340,7 +1353,7 @@ export default function DeviceSettingsPanel({
                   disabled={!micTest.isRunning}
                 />
                 <p
-                  className="mt-1 text-[11px] leading-snug"
+                  className="mt-1 text-[12px] leading-snug"
                   style={{ color: color.textFaint }}
                 >
                   Affects this test only.
@@ -1376,10 +1389,10 @@ export default function DeviceSettingsPanel({
                     className="rounded-lg"
                   />
                   <p
-                    className="px-1 text-[11px] leading-snug"
+                    className="px-1 text-[12px] leading-snug"
                     style={{ color: color.textFaint }}
                   >
-                    Applies to your mic in the meeting. The test follows it.
+                    Applies in the meeting and in this test.
                   </p>
                 </div>
               ) : null}
@@ -1396,7 +1409,7 @@ export default function DeviceSettingsPanel({
                 emptyLabel={SYSTEM_AUDIO_OUTPUT.label}
               />
               {!devices.canSelectAudioOutput && (
-                <p className="mt-2 text-[11.5px] leading-snug" style={{ color: color.textFaint }}>
+                <p className="mt-2 text-[12px] leading-snug" style={{ color: color.textFaint }}>
                   {SYSTEM_AUDIO_OUTPUT_HINT}
                 </p>
               )}
@@ -1493,7 +1506,7 @@ export default function DeviceSettingsPanel({
             ) : (
               <Section label="Details">
                 <p className="text-[12.5px]" style={{ color: color.textMuted }}>
-                  Available once you are in the meeting.
+                  Shows once you join.
                 </p>
               </Section>
             )}
