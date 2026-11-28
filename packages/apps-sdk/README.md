@@ -1,210 +1,94 @@
 # @conclave/apps-sdk
 
-In-meeting web app runtime SDK for Conclave.
+Runtime SDK for Conclave's in-meeting web apps and server-authoritative games: app registry, room app state (`activeAppId`, `locked`), Yjs document and awareness sync over SFU sockets, authority contracts, and React hooks.
 
-This package gives you a shared runtime for collaborative meeting apps and server-authoritative games:
+## Choose Your Runtime
 
-- app registry and discovery
-- room-level app state (`activeAppId`, `locked`)
-- Yjs doc sync and awareness sync over SFU socket events
-- React provider + hooks for app and host UI
-- game provider + hooks for server-owned rules, scoring, and private views
+| | Collaborative (Yjs doc) | Authority | Games |
+| --- | --- | --- | --- |
+| State lives | Every client + SFU relay | SFU only | SFU only |
+| Writes | Any unlocked editor | Actions validated by SFU rules | Moves validated by SFU rules |
+| Reads | Everyone sees full doc | Per-connection projection | Per-player private view |
+| Best for | Strokes, notes, shared playback, wheel | Polls, Q&A, draws, one-per-person rules | Turn-based or hidden-info games |
+| Start with | `new:app <id>` | `new:app <id> --runtime authority` | `pnpm -C packages/sfu run new:game` |
 
-## Documentation
+Where state belongs:
 
-- Docs home: [docs/README.md](./docs/README.md)
-- Core concepts: [docs/reference/core-concepts.md](./docs/reference/core-concepts.md)
-- Runtime APIs: [docs/reference/runtime-apis.md](./docs/reference/runtime-apis.md)
-- Permissions and locking: [docs/reference/permissions-and-locking.md](./docs/reference/permissions-and-locking.md)
-- Socket events and sync protocol: [docs/reference/socket-events-and-sync.md](./docs/reference/socket-events-and-sync.md)
-- Add an app: [docs/guides/add-a-new-app-integration.md](./docs/guides/add-a-new-app-integration.md)
-- Add a game: [docs/guides/add-a-game.md](./docs/guides/add-a-game.md)
-- App cookbook: [docs/guides/app-cookbook.md](./docs/guides/app-cookbook.md)
-- Troubleshooting: [docs/guides/troubleshooting.md](./docs/guides/troubleshooting.md)
-- Contributing guide: [docs/guides/contributing-to-apps-sdk.md](./docs/guides/contributing-to-apps-sdk.md)
-- Dev playground walkthrough: [docs/guides/dev-playground-walkthrough.md](./docs/guides/dev-playground-walkthrough.md)
+- Rules participants must not bypass or hidden state: authority app or game.
+- Collaborative content that must survive reconnect: Yjs doc (`useAppDoc`).
+- Ephemeral cursors or selections: awareness (`useAppPresence`).
+- Local UI toggles: React component state.
 
-## Who Should Use This Package
-
-- App authors: building a collaborative meeting surface (polls, notes, timers, etc.)
-- Game authors: building a game where the SFU owns rules, scoring, timers, or hidden information
-- Host integrators: wiring app menus and layouts into the web meeting shell
-- Reviewers/maintainers: validating permissions and sync behavior
-
-## Quick Task Map
-
-| If you need to... | Read this first |
-| --- | --- |
-| Understand how the runtime fits together | [Core concepts](./docs/reference/core-concepts.md) |
-| Know what each hook/API does | [Runtime APIs](./docs/reference/runtime-apis.md) |
-| Add a brand-new app integration | [Add a new app integration](./docs/guides/add-a-new-app-integration.md) |
-| Add a server-authoritative game | [Add a game to Conclave](./docs/guides/add-a-game.md) |
-| Start from a proven app shape | [App cookbook](./docs/guides/app-cookbook.md) |
-| Debug sync or permission behavior | [Socket events and sync](./docs/reference/socket-events-and-sync.md) + [Troubleshooting](./docs/guides/troubleshooting.md) |
-| Contribute safely and pass review quickly | [Contributing guide](./docs/guides/contributing-to-apps-sdk.md) |
-
-## Runtime Architecture (Mental Model)
-
-1. Host passes its app definitions to `AppsProvider`.
-2. `AppsProvider` bridges host UI and SFU socket events.
-3. Each app gets one Yjs doc (`useAppDoc(appId)`) and one awareness instance.
-4. SFU handlers enforce permissions and relay updates to room participants.
-5. App UIs consume SDK hooks and render read/write or read-only states based on lock/admin state.
-
-## What "App" Means Here
-
-A Conclave app is a collaborative meeting surface with:
-
-- stable `id` (used in registration, controls, and sync routing)
-- human-readable `name`
-- a web renderer
-- optional empty-on-join Yjs doc factory (`createDoc`)
-
-Room app state is shared by everyone:
-
-- `activeAppId`: currently open app id or `null`
-- `locked`: when `true`, non-admin content updates are dropped by server
-
-## Minimal Integration Example
+## Minimal Collaborative App
 
 ```tsx
 import { AppsProvider, defineApp } from "@conclave/apps-sdk";
 
-const pollApp = defineApp({
-  id: "polls",
-  name: "Polls",
-  web: PollsWebApp,
+const timerApp = defineApp({
+  id: "timer",
+  name: "Timer",
+  web: TimerWebApp,
 });
 
-<AppsProvider apps={[pollApp]} socket={socket} user={user} isAdmin={isAdmin}>
+<AppsProvider apps={[timerApp]} socket={socket} user={user} isAdmin={isAdmin}>
   <MeetingUI />
 </AppsProvider>;
 ```
 
-## App Lifecycle (High-Level)
+When an admin calls `useApps().presentApp(appId)`, the SFU broadcasts `apps:state` with the new `activeAppId`, `AppsProvider` syncs the Yjs doc and awareness, and the app UI reads and writes via `useAppDoc(appId)` and `useAppPresence(appId)`.
 
-1. Define app with `defineApp(...)`.
-2. Add the definition to the host's `AppsProvider` list.
-3. Admin presents app via `useApps().presentApp(appId)`.
-4. All clients receive `apps:state` with new `activeAppId`.
-5. Provider syncs Yjs doc + awareness for active app.
-6. App UI reads/writes doc with `useAppDoc(appId)`.
-7. App UI shares ephemeral presence with `useAppPresence(appId)`.
-8. Lock state controls write behavior (`locked && !isAdmin` => read-only).
+### Permissions and Locking
 
-Details: [docs/reference/socket-events-and-sync.md](./docs/reference/socket-events-and-sync.md)
-
-## Two Kinds of App
-
-| | Collaborative (Yjs doc) | Authority |
-| --- | --- | --- |
-| State lives | in every client and the SFU relay | on the SFU only |
-| Who can write | any eligible editor, anything | only what an action's rules allow |
-| Who can read | everyone, everything | each connection, only its own view |
-| Use it for | strokes, notes, shared playback | votes, hidden answers, draws, one-per-person rules |
-| Start with | `new:app <id>` | `new:app <id> --runtime authority` |
-
-An authority app has a contract in `core`, rules in `server` that only the SFU loads, and a panel in `web` that reads the app through `useAuthority(contract)`. See [Build an Authority App](./docs/guides/build-an-authority-app.md) and the [Authority Runtime](./docs/reference/authority-runtime.md) reference.
-
-## Data Placement Rules
-
-- Put anything a participant must not forge or read in an authority app.
-- Put durable collaborative content in Yjs doc.
-- Put ephemeral cursor/selection/presence in awareness.
-- Put purely local UI state (open panels, hover state) in component state.
-
-If data must survive reconnect/history, it should not live in awareness alone.
-
-## Permission Model (Important)
-
-- Admins can open/close/lock apps.
-- Non-admins still receive state updates and sync updates.
-- Under lock, non-admin Yjs content updates are ignored server-side.
-
-App UIs should always guard writes:
+Admins open, close, and lock apps. Under lock (`locked && !isAdmin`), the SFU drops non-admin Yjs updates. Guard writes in the UI too:
 
 ```ts
 const canEdit = !locked || Boolean(isAdmin);
 if (!canEdit) return;
 ```
 
-Details: [docs/reference/permissions-and-locking.md](./docs/reference/permissions-and-locking.md)
+## Authority Apps and Games
 
-## Contributor Workflow
+- **Authority apps** define a contract in `core`, rules in `server` (loaded only by the SFU), and a panel in `web` that reads state with `useAuthority(contract)`. See [Build an Authority App](./docs/guides/build-an-authority-app.md) and [Authority Runtime](./docs/reference/authority-runtime.md).
+- **Games** use the Apps SDK game hooks with SFU-owned rules, timers, scoring, and private views. Prompt-based games can generate schema-checked setup content through `@conclave/ai` (default model `gpt-6-luna`). See [Add a Game](./docs/guides/add-a-game.md).
 
-Scaffold:
-
-```bash
-pnpm -C packages/apps-sdk run new:app polls
-```
-
-Dry run:
+## Commands
 
 ```bash
-pnpm -C packages/apps-sdk run new:app polls --dry-run
+pnpm -C packages/apps-sdk run new:app timer                     # scaffold a collaborative app
+pnpm -C packages/apps-sdk run new:app sign-up --runtime authority # scaffold an authority app
+pnpm -C packages/apps-sdk run new:app timer --dry-run           # preview without writing
+pnpm -C packages/apps-sdk run check:apps                        # validate structure and exports
+pnpm -C packages/apps-sdk run check:apps:fix                    # auto-fix wiring drift
+pnpm -C packages/apps-sdk run typecheck                         # tsc --noEmit
 ```
 
-Validate app structure and package exports:
+## Built-In Exports
 
-```bash
-pnpm -C packages/apps-sdk run check:apps
-```
+- Core SDK: `@conclave/apps-sdk`, `@conclave/apps-sdk/authority`, `@conclave/apps-sdk/authority/server`, `@conclave/apps-sdk/limits`, `@conclave/apps-sdk/native-embed`
+- Collaborative apps: `whiteboard` (`/core`, `/document`, `/web`), `watch` (`/core`, `/web`), `wheel` (`/core`, `/web`), `dev-playground` (`/core`, `/web`)
+- Authority apps: `polls` (`/core`, `/server`, `/web`), `qa` (`/core`, `/server`, `/web`)
 
-Auto-fix wiring drift:
+`dev-playground` (`packages/apps-sdk/src/apps/dev-playground`) is a dev-only sample app showing `defineApp`, `createAppDoc`, Yjs primitives, `useAppPresence`, and lock handling.
 
-```bash
-pnpm -C packages/apps-sdk run check:apps:fix
-```
+## Documentation Map
 
-Full workflow: [docs/guides/contributing-to-apps-sdk.md](./docs/guides/contributing-to-apps-sdk.md)
+Full index: [`docs/README.md`](./docs/README.md).
 
-## Built-In App Exports
-
-- Whiteboard (web): `@conclave/apps-sdk/whiteboard/web`
-- Whiteboard (core): `@conclave/apps-sdk/whiteboard/core`
-- Watch together (web): `@conclave/apps-sdk/watch/web`
-- Watch together (core): `@conclave/apps-sdk/watch/core`
-- Dev playground (web): `@conclave/apps-sdk/dev-playground/web`
-- Dev playground (core): `@conclave/apps-sdk/dev-playground/core`
-
-## Games
-
-Conclave games use the Apps SDK game hooks, but the rules run on the SFU so private information, timers, scoring, and validation stay server-authoritative.
-
-Prompt-based games can also use SFU-side generated content. Hosts enter a topic
-in the game setup panel, the SFU asks `gpt-5.6-luna` through the OpenAI Responses
-API for a schema-constrained object, then the game validates that object before
-setup.
-
-Start here: [docs/guides/add-a-game.md](./docs/guides/add-a-game.md)
-
-## Development Playground
-
-This repo includes a dev-only sample app for learning SDK patterns.
-
-- App id: `dev-playground`
-- Source: `packages/apps-sdk/src/apps/dev-playground`
-- Walkthrough: [docs/guides/dev-playground-walkthrough.md](./docs/guides/dev-playground-walkthrough.md)
-
-It demonstrates:
-
-- `defineApp` + `createAppDoc`
-- shared Yjs primitives (`Map`, `Text`, `Array`)
-- presence via `useAppPresence`
-- lock-aware editing behavior
+| Goal | Doc |
+| --- | --- |
+| Understand architecture and lifecycle | [Core concepts](./docs/reference/core-concepts.md) |
+| Look up hooks and helpers | [Runtime APIs](./docs/reference/runtime-apis.md) |
+| Add a collaborative app | [Add a new app integration](./docs/guides/add-a-new-app-integration.md) |
+| Add an authority app | [Build an authority app](./docs/guides/build-an-authority-app.md) + [Authority runtime](./docs/reference/authority-runtime.md) |
+| Add a server-authoritative game | [Add a game](./docs/guides/add-a-game.md) |
+| Copy a proven schema/UI shape | [App cookbook](./docs/guides/app-cookbook.md) |
+| Walk through `dev-playground` | [Dev playground walkthrough](./docs/guides/dev-playground-walkthrough.md) |
+| Debug permissions, locks, or sync | [Permissions and locking](./docs/reference/permissions-and-locking.md), [Socket events and sync](./docs/reference/socket-events-and-sync.md), [Troubleshooting](./docs/guides/troubleshooting.md) |
+| Contributing rules and checklist | [Contributing guide](./docs/guides/contributing-to-apps-sdk.md) |
 
 ## Common Pitfalls
 
-- App id mismatch between definition, open call, and `useAppDoc`.
-- `AppsProvider` missing around components using SDK hooks.
-- Missing package subpath exports for a new app.
-- Durable state stored in awareness instead of Yjs doc.
-
-## Next Reading
-
-- [docs/reference/core-concepts.md](./docs/reference/core-concepts.md)
-- [docs/reference/runtime-apis.md](./docs/reference/runtime-apis.md)
-- [docs/reference/socket-events-and-sync.md](./docs/reference/socket-events-and-sync.md)
-- [docs/guides/add-a-game.md](./docs/guides/add-a-game.md)
-- [docs/guides/app-cookbook.md](./docs/guides/app-cookbook.md)
-- [docs/guides/troubleshooting.md](./docs/guides/troubleshooting.md)
+- Mismatched `appId` across `defineApp`, `presentApp`, and `useAppDoc`.
+- Calling SDK hooks outside `AppsProvider`.
+- Forgetting subpath exports in `packages/apps-sdk/package.json` (caught by `check:apps`).
+- Storing durable state in awareness instead of the Yjs doc or an authority store.

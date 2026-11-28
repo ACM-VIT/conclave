@@ -4,7 +4,7 @@
 
 <h2>Conclave</h2>
 
-<p>Real-time meetings platform with web and native clients, an SFU, and an apps SDK</p>
+<p>Real-time meetings platform with web and native clients, a mediasoup SFU, and an in-meeting apps SDK.</p>
 
 <p>
   <a href="https://acmvit.in/" target="_blank">
@@ -14,175 +14,140 @@
 
 </div>
 
----
+## Contents
 
-## Table of Contents
-
-- [About](#about)
-- [Monorepo Layout](#monorepo-layout)
+- [Workspace](#workspace)
+- [Prerequisites](#prerequisites)
 - [Quick Start](#quick-start)
-- [Mobile Development](#mobile-development)
-- [Apps SDK Docs](#apps-sdk-docs)
-- [Optional Services](#optional-services)
+- [Checks](#checks)
+- [Native App](#native-app)
+- [In-Meeting Apps and Games](#in-meeting-apps-and-games)
+- [Optional Services and Deploys](#optional-services-and-deploys)
+- [Documentation](#documentation)
 - [Contributing](#contributing)
-- [Community & Conduct](#community--conduct)
 
----
+## Workspace
 
-## About
+| Path | Role | Docs |
+| --- | --- | --- |
+| `apps/web` | Next.js web client, API routes, transcript and scheduling email Workers | [`apps/web/README.md`](./apps/web/README.md) |
+| `apps/conclave-skip` | Native iOS and Android client (SwiftUI transpiled via Skip) | [`apps/conclave-skip/README.md`](./apps/conclave-skip/README.md) |
+| `packages/sfu` | mediasoup SFU, socket.io signaling, admin API, game runtime | [`packages/sfu/README.md`](./packages/sfu/README.md) |
+| `packages/apps-sdk` | In-meeting collaborative apps (Yjs) and server-authoritative apps/games SDK | [`packages/apps-sdk/README.md`](./packages/apps-sdk/README.md) |
+| `packages/ai` | Shared AI model registry, provider adapters, and decision models | [`packages/ai/README.md`](./packages/ai/README.md) |
+| `packages/meeting-core` | Pure meeting state, types, join claims, and grid layout shared across surfaces | [`packages/meeting-core/README.md`](./packages/meeting-core/README.md) |
+| `packages/shared-browser` | Optional per-room shared browser (Cloudflare Kitesurf or Chromium/noVNC) | [`packages/shared-browser/README.md`](./packages/shared-browser/README.md) |
+| `packages/ui-tokens` | Design tokens, web primitives, and native icon/token generators | [`packages/ui-tokens/README.md`](./packages/ui-tokens/README.md) |
 
-Conclave is a real-time meetings platform with:
+## Prerequisites
 
-- `apps/web`: Next.js web client and API routes
-- `apps/conclave-skip`: active SwiftUI/Skip project for iOS and Android
-- `packages/sfu`: mediasoup SFU and real-time socket handlers
-- `packages/apps-sdk`: web in-meeting apps runtime (provider, Yjs sync, and awareness)
-- `packages/shared-browser`: optional VNC-based shared browser service
-
----
-
-## Monorepo Layout
-
-```text
-apps/
-  web/
-  conclave-skip/
-packages/
-  sfu/
-  apps-sdk/
-  shared-browser/
-scripts/
-```
-
-Prerequisites:
-
-- Node.js 20+
-- `pnpm` 11.7.0
-- Swift and Xcode for native development
-- Docker (optional, for deploy scripts and shared browser runtime image)
-
----
+- Node.js `>=22.22.0`
+- `pnpm` `12.16.1` (if an older Corepack shim fails on pnpm 12, run `npx get-pnpm 12.16.1` or `npm exec --yes --package=pnpm@12.16.1 -- pnpm`)
+- Swift and Xcode (macOS) for `apps/conclave-skip`; JDK 21 and Android SDK Platform 37 for Android builds
+- Docker (optional, required for `pnpm check:docker-images` and local container deploys)
 
 ## Quick Start
 
-1. Install dependencies:
+Install workspace dependencies:
 
 ```bash
 pnpm install
 ```
 
-2. Start SFU:
+Start the SFU (listens on `http://localhost:3031` by default):
 
 ```bash
 pnpm -C packages/sfu run dev
 ```
 
-3. Start web in another terminal:
+Start the web client in a second terminal:
 
 ```bash
 pnpm -C apps/web run dev
 ```
 
-4. Open `http://localhost:3000`.
+Open `http://localhost:3000`.
 
-Notes:
+Local defaults:
 
-- Web defaults to `https://sfu.acmvit.in` if `SFU_URL`/`NEXT_PUBLIC_SFU_URL` is unset.
-- SFU has development defaults; production must set secrets and announced IPs.
-- Telemetry (PostHog) is off without a project key. Its variables, including
-  where the web server forwards events (`POSTHOG_INGEST_HOST`), are listed in
-  [`apps/web/src/app/lib/telemetry.md`](./apps/web/src/app/lib/telemetry.md).
+- Under `next dev`, the web app connects to `http://localhost:3031` unless `SFU_URL` or `NEXT_PUBLIC_SFU_URL` is set. Production builds fall back to `https://sfu.acmvit.in`.
+- The SFU runs with development defaults locally. Production requires real secrets, CORS origins, and announced IPs (see [`packages/sfu/README.md`](./packages/sfu/README.md)).
+- PostHog telemetry stays off until a project key is configured. Variables and ingestion rules live in [`apps/web/src/app/lib/telemetry.md`](./apps/web/src/app/lib/telemetry.md).
 
----
+## Checks
 
-## Mobile Development
-
-The active native application is `apps/conclave-skip`. It shares SwiftUI source
-between iOS and Android through Skip.
+Run the full repository gate before opening a PR:
 
 ```bash
-cd apps/conclave-skip
-swift build
-swift test -q
+pnpm check
 ```
 
-See [`apps/conclave-skip/README.md`](./apps/conclave-skip/README.md) for Android
-and iOS build commands.
-
----
-
-## Apps SDK Docs
-
-- package README: [`packages/apps-sdk/README.md`](./packages/apps-sdk/README.md)
-- docs home: [`packages/apps-sdk/docs/README.md`](./packages/apps-sdk/docs/README.md)
-- add app integration: [`packages/apps-sdk/docs/guides/add-a-new-app-integration.md`](./packages/apps-sdk/docs/guides/add-a-new-app-integration.md)
-- app cookbook: [`packages/apps-sdk/docs/guides/app-cookbook.md`](./packages/apps-sdk/docs/guides/app-cookbook.md)
-- troubleshooting: [`packages/apps-sdk/docs/guides/troubleshooting.md`](./packages/apps-sdk/docs/guides/troubleshooting.md)
-
-Contributor commands:
+Individual gates:
 
 ```bash
-pnpm -C packages/apps-sdk run new:app polls
+pnpm lint       # workspace ESLint, web ESLint, konsistent, comment ratchet
+pnpm typecheck  # TypeScript checks across web and packages
+pnpm test       # unit tests, quality/deploy tests, and native asset tests
+pnpm build      # production builds for web and shared-browser
+```
+
+## Native App
+
+`apps/conclave-skip` holds the active native client. Shared SwiftUI code compiles directly for iOS and transpiles to Kotlin/Compose for Android via Skip.
+
+```bash
+swift build --package-path apps/conclave-skip
+swift test --package-path apps/conclave-skip
+```
+
+See [`apps/conclave-skip/README.md`](./apps/conclave-skip/README.md) for Android Gradle and Xcode build commands.
+
+## In-Meeting Apps and Games
+
+Collaborative apps (Yjs) and server-authoritative apps/games live in `packages/apps-sdk`.
+
+```bash
+pnpm -C packages/apps-sdk run new:app timer
+pnpm -C packages/apps-sdk run new:app sign-up --runtime authority
 pnpm -C packages/apps-sdk run check:apps
 pnpm -C packages/apps-sdk run check:apps:fix
 ```
 
----
+Start with [`packages/apps-sdk/README.md`](./packages/apps-sdk/README.md) or the full docs tree in [`packages/apps-sdk/docs/README.md`](./packages/apps-sdk/docs/README.md).
 
-## Optional Services
+## Optional Services and Deploys
 
-Run shared browser service locally:
+Run the shared browser service locally:
 
 ```bash
 pnpm -C packages/shared-browser run dev
 ```
 
-Before every SFU or shared browser deploy, build and boot both root-context images locally. This is a required pre-deploy step:
+Before deploying the SFU or shared browser service, build and boot both Docker images against a local Docker daemon (OrbStack, Docker Desktop, Colima, or native Linux):
 
 ```bash
 pnpm check:docker-images
 ```
 
-It needs a local Docker daemon.
+This runs `pnpm check:docker-context`, builds `packages/sfu/Dockerfile` and `packages/shared-browser/Dockerfile` from the repo root, boots each container, verifies `/health` returns `200`, confirms the SFU can import `@conclave/apps-sdk`, and cleans up its containers and tags. Pass `--no-cache` for a cold build, and stop with Ctrl-C or SIGTERM so cleanup runs. Do not deploy if it fails.
 
-- It runs `pnpm check:docker-context` first, then builds `packages/sfu/Dockerfile` and `packages/shared-browser/Dockerfile` from the repository root and boots each one.
-- Each container must return a complete 200 response on `/health` over HTTP from inside the container, and the SFU must also import `@conclave/apps-sdk` there, all within one 120 s deadline. Each probe stops itself inside the container before that deadline.
-- The shared browser gets a random `BROWSER_SERVICE_TOKEN`, binds `127.0.0.1`, and gets the session browser image built from `packages/shared-browser/docker` (as `scripts/deploy-browser-service.sh` builds it) as `BROWSER_IMAGE_NAME`.
-- It resolves Docker's effective endpoint the way the CLI does: `DOCKER_HOST` first, otherwise `DOCKER_CONTEXT` or the current context. It refuses that endpoint unless it is a local `unix://` socket.
-- It runs every later Docker call pinned to that endpoint, with every `DOCKER_*` and `BUILDX_*` variable removed except `DOCKER_CONFIG` and `BUILDX_CONFIG`, which only locate configuration (credentials, proxies, buildx state). It builds only with the `default` buildx builder, and refuses unless that is the docker driver on the checked endpoint.
-- It never pushes. It gives each run a random container name and tag. It makes each container with `docker create` and a random owner label chosen before the command runs, then runs it with `docker start`. It removes only the containers that carry those labels, by the ids `docker ps` lists for them, and the tags it created. Each cleanup command has a time limit and each cleanup pass a total budget. If it cannot confirm that something it created is gone after the final pass, it prints what is left and fails. A name conflict therefore never removes another container, and a container created just as the run is interrupted is still removed.
-- Each Docker command runs in its own process group. Ctrl-C or SIGTERM is passed on to that whole group, a build in progress and any plugin it started included, and the group is killed if its command is still running 15 s later. A group is only signalled while its command is running, and a command that exits while something it started holds its output open is settled after 2 s and counted as failed. Stopping the script itself with SIGKILL leaves those Docker commands running, so use Ctrl-C or SIGTERM when cleanup must run. No later step runs, the run's containers and tags are removed within the cleanup budget, and it exits 130 or 143.
-- Supported setups: OrbStack, Docker Desktop and Colima, which run the daemon in a VM and get `/var/run/docker.sock` (the socket inside that VM) mounted into the shared browser container. Also a native Linux engine, rootless included, which gets the resolved socket path mounted. `BROWSER_DOCKER_SOCKET` overrides the mounted path, as with `docker-compose.browser.yml`.
-- Pass `--no-cache` for a cold build.
-- `pnpm check:docker-context` reads Dockerfiles with a deliberately small grammar: plain ASCII, no parser directives, no heredocs, a fixed list of instructions, and COPY words made only of plain path characters. Anything else fails with `unsupported Dockerfile syntax on line N`; extend `scripts/docker-context` or rewrite the Dockerfile. The real build in `pnpm check:docker-images` is the authority on build behaviour.
-
-Do not deploy if it fails.
-
-Deploy SFU pair (Docker Compose):
+Deploy scripts:
 
 ```bash
-./scripts/deploy-sfu.sh
+./scripts/deploy-sfu.sh              # zero-downtime SFU pair deploy with canary
+./scripts/deploy-browser-service.sh  # standalone Chromium/noVNC shared browser
 ```
 
-Deploy shared browser service (Docker Compose):
+## Documentation
 
-```bash
-./scripts/deploy-browser-service.sh
-```
-
----
+- Architecture decision records: [`docs/adr/README.md`](./docs/adr/README.md)
+- Operations runbooks: [`docs/ops/sfu-deploys.md`](./docs/ops/sfu-deploys.md), [`docs/ops/backups.md`](./docs/ops/backups.md), [`docs/ops/staging.md`](./docs/ops/staging.md)
+- SFU HTTP and socket reference: [`packages/sfu/API.md`](./packages/sfu/API.md)
+- Telemetry: [`apps/web/src/app/lib/telemetry.md`](./apps/web/src/app/lib/telemetry.md)
 
 ## Contributing
 
-Read [`CONTRIBUTING.md`](./CONTRIBUTING.md) before opening a PR.
-
----
-
-## Community & Conduct
-
-By participating in this project, you agree to follow [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md).
-
----
+Read [`CONTRIBUTING.md`](./CONTRIBUTING.md) before opening a PR. Participation is covered by [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md).
 
 <div align="center">
 
