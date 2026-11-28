@@ -62,7 +62,7 @@ import { PollsPanel } from "./polls/PollsPanel";
 import ToastQueue, { type ToastItem } from "./ToastQueue";
 import KnockPrompt from "./KnockPrompt";
 import MeetingAnnouncer from "./MeetingAnnouncer";
-import MeetingReadyCard, { useMeetingReadyCard } from "./MeetingReadyCard";
+import MeetingInvite, { inviteFormFor, useMeetingInvite } from "./MeetingInvite";
 import RoomAiPanel from "./RoomAiPanel";
 import AndroidUpsellSheet from "./AndroidUpsellSheet";
 import type { BrowserCommand, BrowserState } from "../hooks/useSharedBrowser";
@@ -782,10 +782,25 @@ export default function MeetsMainContent({
       ),
     [currentUserId, participantsArray],
   );
-  const meetingReadyCard = useMeetingReadyCard(
+  const meetingInvite = useMeetingInvite(
     roomId,
     isJoined && nonSystemParticipants.length > 0,
   );
+  const meetingAppOwnsStage =
+    Boolean(ActiveMeetingApp) &&
+    !isWatchHiddenLocally &&
+    (!isDevPlaygroundActive || isDevPlaygroundEnabled);
+  const sharedBrowserOwnsStage = Boolean(
+    browserState?.active && browserState.noVncUrl,
+  );
+  const invitePhase =
+    isJoined &&
+    !isWebinarAttendee &&
+    !webinarConfig?.enabled &&
+    !meetingAppOwnsStage &&
+    !sharedBrowserOwnsStage
+      ? meetingInvite.phase
+      : null;
 
   const coachAvatars = useMemo(() => {
     const cast: { id: string; name: string }[] = [
@@ -2099,6 +2114,7 @@ export default function MeetsMainContent({
     coachAvatars,
     roomId,
     clientId,
+    inviteOnStage: invitePhase !== null,
     isMuted,
     isMicrophoneUnmuteDisabled: isParticipantMicrophoneActivationBlocked,
     isCameraOff,
@@ -2832,16 +2848,21 @@ export default function MeetsMainContent({
           getDisplayName={resolveDisplayName}
           sidePanelReserve={dockedPanelReserve}
           isMobile={isMobile}
-          meetingReadyCard={
-            meetingReadyCard.isOpen ? (
-              <MeetingReadyCard
-                roomId={roomId}
-                clientId={clientId}
-                isHost={isAdmin}
-                isMobile={isMobile}
-                onDismiss={meetingReadyCard.dismiss}
-              />
-            ) : null
+          soloInvite={
+            invitePhase ? {
+              form: inviteFormFor(invitePhase),
+              render: ({ form, arrangement }) => (
+                <MeetingInvite
+                  phase={invitePhase}
+                  form={form}
+                  arrangement={arrangement}
+                  roomId={roomId}
+                  clientId={clientId}
+                  isMobile={isMobile}
+                  onDismiss={meetingInvite.dismiss}
+                />
+              ),
+            } : null
           }
         />
       )}

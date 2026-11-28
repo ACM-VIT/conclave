@@ -21,16 +21,18 @@ function useClock() {
 export default function MeetingInfoTag({
   roomId,
   clientId,
+  quietHint = false,
 }: {
   roomId?: string;
   clientId?: string;
+  quietHint?: boolean;
 }) {
   const time = useClock();
   const [copied, setCopied] = useState(false);
   const copiedTimer = useRef<number | null>(null);
   const meetingLink = roomId ? meetingLinkFor(roomId, clientId) : null;
   const hint = useOneTimeHint("copy-room-code", {
-    enabled: Boolean(meetingLink),
+    enabled: Boolean(meetingLink) && !quietHint,
     delay: 1800,
   });
 

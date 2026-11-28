@@ -591,6 +591,7 @@ function ControlsBar(props: ControlsBarProps) {
     compact = false,
     roomId,
     clientId,
+    inviteOnStage = false,
     reactionOptions,
     onSendReaction,
     onLeave,
@@ -818,7 +819,7 @@ function ControlsBar(props: ControlsBarProps) {
   return (
     <div className="relative flex w-full items-center gap-2 px-4 py-3 sm:grid sm:grid-cols-[1fr_auto_1fr]">
       <div className="flex min-w-0 shrink-0 items-center justify-self-start">
-        {!compact && <MeetingInfoTag roomId={roomId} clientId={clientId} />}
+        {!compact && <MeetingInfoTag roomId={roomId} clientId={clientId} quietHint={inviteOnStage} />}
       </div>
 
       <div className="flex flex-1 items-center justify-center justify-self-center gap-2.5">

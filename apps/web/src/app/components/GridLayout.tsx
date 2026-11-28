@@ -41,6 +41,12 @@ import { getVisibleRemoteParticipantLimit } from "../lib/participant-order-polic
 import type { Participant } from "../lib/types";
 import { isSystemUserId, truncateDisplayName } from "../lib/utils";
 import { observeRemoteVideoPresentation } from "../lib/remote-video-presentation";
+import {
+  placeSoloInvite,
+  reserveSoloInvite,
+  type SoloInviteForm,
+  type SoloInvitePlacement,
+} from "../lib/solo-invite-placement";
 import ParticipantAudio from "./ParticipantAudio";
 import ParticipantConnectionOverlay from "./ParticipantConnectionOverlay";
 import LocalVideoTile from "./LocalVideoTile";
@@ -127,7 +133,12 @@ interface GridLayoutProps {
   getDisplayName: (userId: string) => string;
   sidePanelReserve?: number;
   isMobile?: boolean;
-  meetingReadyCard?: ReactNode;
+  soloInvite?: SoloInviteRequest | null;
+}
+
+export interface SoloInviteRequest {
+  form: SoloInviteForm;
+  render: (placed: Pick<SoloInvitePlacement, "form" | "arrangement">) => ReactNode;
 }
 
 const WARM_BUFFER_TILES = 4;
@@ -820,7 +831,7 @@ function GridLayout({
   getDisplayName,
   sidePanelReserve = 0,
   isMobile = false,
-  meetingReadyCard = null,
+  soloInvite = null,
 }: GridLayoutProps) {
   const stageBoxRef = useRef<HTMLDivElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -1265,6 +1276,20 @@ function GridLayout({
       ? featuredRemoteParticipant
       : orderedRemoteParticipants.find(participantHasLiveVideo) ?? null;
   }, [featuredRemoteParticipant, hasPresentation, orderedRemoteParticipants, renderedViewMode]);
+  const soloInviteForm = isSolo ? soloInvite?.form ?? null : null;
+  const soloInviteReservation = useMemo(
+    () =>
+      soloInviteForm
+        ? reserveSoloInvite(
+            {
+              width: Math.max(0, gridSize.width - GRID_PADDING * 2),
+              height: Math.max(0, gridSize.height - GRID_PADDING * 2),
+            },
+            soloInviteForm,
+          )
+        : null,
+    [gridSize, soloInviteForm],
+  );
   const stageLayout = useMemo(() => {
     if (!wantsStageLayout) return null;
     const local = { kind: "local" } as const;
@@ -1273,7 +1298,7 @@ function GridLayout({
       participant ? { kind: "remote" as const, participant } : null;
 
     return resolveMeetingStageLayout({
-      size: {
+      size: soloInviteReservation?.tileBox ?? {
         width: Math.max(0, gridSize.width - GRID_PADDING * 2),
         height: Math.max(0, gridSize.height - GRID_PADDING * 2),
       },
@@ -1303,6 +1328,7 @@ function GridLayout({
     preferredRemoteParticipant,
     renderedViewMode,
     requestedSelfViewCorner,
+    soloInviteReservation,
     stageShare,
     wantsStageLayout,
   ]);
@@ -1463,21 +1489,27 @@ function GridLayout({
         : undefined,
     [fullVideoTileIds, tiledGridTileIds, usesVideoShapedTiles, videoAspectById],
   );
+  const layoutBox = soloInviteReservation?.tileBox ?? {
+    width: gridUsableWidth,
+    height: gridUsableHeight,
+  };
+  const layoutWidth = layoutBox.width;
+  const layoutHeight = layoutBox.height;
   const layout = useMemo(() => {
     if (isMobilePortraitGrid) {
       return computeMobilePortraitGridLayout(
         totalParticipants,
-        gridUsableWidth,
-        gridUsableHeight,
+        layoutWidth,
+        layoutHeight,
         GRID_GAP,
         maxGridTiles,
       );
     }
     const { maxCols, targetAspect } = getGridPackingParams(
       isMobile,
-      gridUsableWidth,
+      layoutWidth,
     );
-    return computeGridLayout(totalParticipants, gridUsableWidth, gridUsableHeight, {
+    return computeGridLayout(totalParticipants, layoutWidth, layoutHeight, {
       gap: GRID_GAP,
       maxCols,
       maxTilesPerPage: maxGridTiles,
@@ -1486,12 +1518,28 @@ function GridLayout({
     });
   }, [
     totalParticipants,
-    gridUsableWidth,
-    gridUsableHeight,
+    layoutWidth,
+    layoutHeight,
     isMobilePortraitGrid,
     maxGridTiles,
     isMobile,
     tileAspects,
+  ]);
+  const soloInvitePlacement = useMemo(() => {
+    if (!soloInviteReservation) return null;
+    const size = { width: gridUsableWidth, height: gridUsableHeight };
+    if (stageLayout) {
+      return placeSoloInvite(size, soloInviteReservation, stageLayout.rects.main);
+    }
+    const tile = tiledGridTileIds.length === 1 ? layout.positions[0] : undefined;
+    return tile ? placeSoloInvite(size, soloInviteReservation, tile) : null;
+  }, [
+    gridUsableHeight,
+    gridUsableWidth,
+    layout.positions,
+    soloInviteReservation,
+    stageLayout,
+    tiledGridTileIds.length,
   ]);
   const tileStyle =
     layout.tileWidth > 0
@@ -1503,8 +1551,12 @@ function GridLayout({
       const position = layout.positions[index];
       if (position) positions.set(id, position);
     });
+    const solo = positions.get(LOCAL_TILE_ID);
+    if (soloInvitePlacement && !stageLayout && solo) {
+      positions.set(LOCAL_TILE_ID, { ...solo, ...soloInvitePlacement.tile });
+    }
     return positions;
-  }, [layout.positions, tiledGridTileIds]);
+  }, [layout.positions, soloInvitePlacement, stageLayout, tiledGridTileIds]);
   const tiledGridPlacement = useMemo(
     () =>
       resolveTiledGridPlacement({
@@ -2277,7 +2329,6 @@ function GridLayout({
       className="relative flex flex-1 min-h-0 flex-col"
       style={{ fontFamily: FONT_SANS }}
     >
-      {isSolo ? meetingReadyCard : null}
       <div
         className="pointer-events-none h-0 w-0 overflow-hidden"
         aria-hidden={true}
@@ -2413,10 +2464,29 @@ function GridLayout({
         }`}
         style={{ gap: GRID_GAP }}
       >
+        {soloInvite && soloInvitePlacement ? (
+          <div
+            className="absolute z-20"
+            style={{
+              left: GRID_PADDING + soloInvitePlacement.invite.x,
+              top: GRID_PADDING + soloInvitePlacement.invite.y,
+              ...stageRectSize(soloInvitePlacement.invite),
+            }}
+            data-meet-solo-invite={soloInvitePlacement.arrangement}
+          >
+            {soloInvite.render(soloInvitePlacement)}
+          </div>
+        ) : null}
         {stage ? (
           <div
             key="meeting-stage"
             className={stageSplitClass(stage)}
+            style={soloInvitePlacement ? {
+              position: "absolute",
+              left: GRID_PADDING + soloInvitePlacement.tile.x,
+              top: GRID_PADDING + soloInvitePlacement.tile.y,
+              ...stageRectSize(soloInvitePlacement.tile),
+            } : undefined}
             data-meet-stage-split={stage.split.mode}
             data-meet-side-by-side={usesSideBySideLayout || undefined}
             data-meet-side-by-side-companion-kind={sideBySideCompanionKind ?? undefined}
