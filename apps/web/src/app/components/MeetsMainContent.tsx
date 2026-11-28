@@ -1628,7 +1628,6 @@ export default function MeetsMainContent({
           {
             id: pollsApp.id,
             name: pollsApp.name,
-            description: pollsApp.description,
             icon: <ChartBar size={19} strokeWidth={1.75} />,
             isOpen: isPollsOpen,
             needsAttention: hasPollAwaitingVote,
@@ -1655,7 +1654,6 @@ export default function MeetsMainContent({
           {
             id: qaApp.id,
             name: qaApp.name,
-            description: qaApp.description,
             icon: <MessageCircleQuestion size={19} strokeWidth={1.75} />,
             isOpen: isMeetingQaOpen,
             needsAttention: hasUnseenQuestion,
