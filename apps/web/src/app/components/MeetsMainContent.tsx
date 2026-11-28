@@ -2851,11 +2851,10 @@ export default function MeetsMainContent({
           soloInvite={
             invitePhase ? {
               form: inviteFormFor(invitePhase),
-              render: ({ form, arrangement }) => (
+              render: ({ form }) => (
                 <MeetingInvite
                   phase={invitePhase}
                   form={form}
-                  arrangement={arrangement}
                   roomId={roomId}
                   clientId={clientId}
                   isMobile={isMobile}

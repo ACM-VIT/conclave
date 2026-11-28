@@ -4,10 +4,7 @@ import { useId, useState } from "react";
 import { Check, Copy, Share, X } from "lucide-react";
 import { useClipboardCopy } from "../hooks/useClipboardCopy";
 import { meetingLinkFor } from "../lib/meeting-link";
-import type {
-  SoloInviteArrangement,
-  SoloInviteForm,
-} from "../lib/solo-invite-placement";
+import type { SoloInviteForm } from "../lib/solo-invite-placement";
 
 type InviteLifecycle = "awaiting-company" | "had-company" | "dismissed";
 
@@ -66,7 +63,6 @@ const canUseShareSheet = (isMobile: boolean) =>
 interface MeetingInviteProps {
   phase: MeetingInvitePhase;
   form: SoloInviteForm;
-  arrangement: SoloInviteArrangement;
   roomId: string;
   clientId?: string;
   isMobile: boolean;
@@ -79,7 +75,6 @@ const focusRing =
 export default function MeetingInvite({
   phase,
   form,
-  arrangement,
   roomId,
   clientId,
   isMobile,
@@ -168,22 +163,17 @@ export default function MeetingInvite({
   }
 
   const shown = link ? describeLink(link) : null;
-  const stacked = arrangement === "below";
 
   return (
     <section
       aria-labelledby={titleId}
-      className={`flex h-full w-full flex-col text-[#fafafa] ${
-        stacked ? "justify-start px-1 pt-1" : "justify-center pl-5"
-      }`}
+      className="flex h-full w-full flex-col justify-start px-1 pt-1 text-[#fafafa]"
       data-meeting-invite={phase}
     >
       <div className="flex items-start justify-between gap-3">
         <h2
           id={titleId}
-          className={`font-semibold leading-tight tracking-[-0.01em] ${
-            stacked ? "pt-1 text-[17px]" : "text-[20px]"
-          }`}
+          className="pt-1 text-[17px] font-semibold leading-tight tracking-[-0.01em]"
         >
           {title}
         </h2>
@@ -191,15 +181,8 @@ export default function MeetingInvite({
       </div>
       {shown ? (
         <>
-          {stacked ? null : (
-            <p className="mt-1.5 text-[14px] leading-snug text-[#fafafa]/70">
-              Share this link to invite people.
-            </p>
-          )}
           <p
-            className={`flex h-11 min-w-0 items-center rounded-lg border border-[#fafafa]/12 bg-[#18181b] px-3.5 text-[14px] ${
-              stacked ? "mt-3" : "mt-4"
-            }`}
+            className="mt-3 flex h-11 min-w-0 items-center rounded-lg border border-[#fafafa]/12 bg-[#18181b] px-3.5 text-[14px]"
             title={link ?? undefined}
           >
             <span className="min-w-0 truncate">
