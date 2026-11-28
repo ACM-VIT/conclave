@@ -172,7 +172,6 @@ export interface VideoEffectOption<T extends string> {
   tone: string;
   assetPath?: string;
   thumbnailPath?: string;
-  motion?: boolean;
   category?: string;
 }
 
