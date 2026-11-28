@@ -25,9 +25,18 @@ const PICK_LABEL: Record<"start" | "add" | "request", string> = {
 };
 
 const PREVIEW_HINT: Record<"start" | "add" | "request", string> = {
-  start: "Starts in sync for everyone in the room",
-  add: "Adds to the room queue",
-  request: "Sends a request for the host to approve",
+  start: "Plays in sync for everyone",
+  add: "Adds to Up next",
+  request: "Sends a request to the host",
+};
+
+const HEADING: Record<"start" | "add" | "request", { title: string; hint: string }> = {
+  start: {
+    title: "Watch together",
+    hint: "Search YouTube or paste a link. It plays in sync for everyone.",
+  },
+  add: { title: "Add to Up next", hint: "Pick a video or paste a link." },
+  request: { title: "Request a video", hint: "The host approves requests." },
 };
 
 export function WatchEmptyState({
@@ -151,9 +160,11 @@ export function WatchEmptyState({
               <PlayGlyph />
             </span>
           </div>
-          <p className="mt-5 text-center text-[13px] leading-relaxed text-[#a1a1aa]">
-            Waiting for the host to start something. Playback stays in sync for
-            everyone.
+          <p className="mt-5 text-center text-[15px] font-medium text-[#fafafa]">
+            Waiting for the host to pick a video
+          </p>
+          <p className="mt-1.5 text-center text-[12.5px] text-[#a1a1aa]">
+            It plays in sync for everyone.
           </p>
         </div>
       </div>
@@ -173,7 +184,13 @@ export function WatchEmptyState({
 
   return (
     <div ref={scrollRef} className="h-full w-full overflow-y-auto">
-      <div className="mx-auto w-full max-w-6xl px-6 pb-8 pt-7">
+      <div className="mx-auto w-full max-w-6xl px-4 pb-8 pt-6 sm:px-6">
+        <div className="mx-auto mb-4 max-w-xl text-center">
+          <h2 className="text-[16px] font-medium text-[#fafafa]">
+            {HEADING[mode].title}
+          </h2>
+          <p className="mt-1 text-[12.5px] text-[#a1a1aa]">{HEADING[mode].hint}</p>
+        </div>
         <form
           onSubmit={handleSubmit}
           className="relative mx-auto w-full max-w-xl"
@@ -184,12 +201,19 @@ export function WatchEmptyState({
             autoFocus
             onChange={(event) => setValue(event.target.value)}
             placeholder="Search YouTube or paste a link"
+            aria-label="Search YouTube or paste a link"
             className="h-11 w-full rounded-full border border-white/10 bg-white/[0.04] pl-4 pr-24 text-sm text-[#fafafa] outline-none transition-colors placeholder:text-[#71717a] focus:border-[#F95F4A]/50"
           />
           <button
             type="submit"
             disabled={!value.trim()}
-            aria-label={previewId ? "Play for everyone" : "Search"}
+            aria-label={
+              previewId
+                ? mode === "start"
+                  ? "Play for everyone"
+                  : PICK_LABEL[mode]
+                : "Search"
+            }
             className="absolute right-1.5 top-1/2 flex h-8 -translate-y-1/2 cursor-pointer items-center justify-center gap-1.5 rounded-full px-3 text-[12.5px] font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
             style={{ backgroundColor: "#F95F4A" }}
           >
@@ -236,9 +260,7 @@ export function WatchEmptyState({
             </div>
             <p className="mt-2.5 text-center text-[13px] font-medium text-[#fafafa]">
               {previewTitle ??
-                (mode === "start"
-                  ? "Tap to play this link for the room"
-                  : "Tap to pick this link")}
+                (mode === "start" ? "Play this link" : "Pick this link")}
             </p>
             <p className="mt-1 text-center text-[11.5px] text-[#71717a]">
               {PREVIEW_HINT[mode]}
@@ -249,12 +271,12 @@ export function WatchEmptyState({
             {fallbackMode ? (
               <div className="mx-auto mt-12 max-w-sm text-center">
                 <h3 className="text-[15px] font-medium text-[#fafafa]">
-                  Paste a link, press play
+                  Paste a link to start
                 </h3>
                 <p className="mt-2 text-[12.5px] leading-relaxed text-[#a1a1aa]">
                   {browseUnavailable
-                    ? "Search and trending are switched off on this server, but any YouTube link dropped above plays in sync for the whole room."
-                    : "Trending is quiet right now. Paste any YouTube link above and it plays in sync for the whole room."}
+                    ? "Search is off here. Any YouTube link still plays in sync."
+                    : "Nothing trending right now. Any YouTube link plays in sync."}
                 </p>
               </div>
             ) : null}
@@ -280,7 +302,7 @@ export function WatchEmptyState({
                         setSearchUnavailable(false);
                         setValue("");
                       }}
-                      className="ml-1 cursor-pointer text-[11.5px] text-[#71717a] transition-colors hover:text-[#fafafa]"
+                      className="ml-0.5 inline-flex h-7 cursor-pointer items-center rounded-full px-2 text-[12px] text-[#a1a1aa] transition-colors hover:bg-white/[0.06] hover:text-[#fafafa]"
                     >
                       Clear
                     </button>
@@ -301,17 +323,17 @@ export function WatchEmptyState({
                     <path d="M12 3l1.9 5.8a2 2 0 001.3 1.3L21 12l-5.8 1.9a2 2 0 00-1.3 1.3L12 21l-1.9-5.8a2 2 0 00-1.3-1.3L3 12l5.8-1.9a2 2 0 001.3-1.3L12 3z" />
                   </svg>
                   <h3 className="text-[13px] font-medium text-[#fafafa]">
-                    Or start with a classic
+                    Classics
                   </h3>
                 </>
               ) : null}
             </div>
 
             {showResults && !searching && gridItems.length === 0 ? (
-              <p className="mt-3 text-[12.5px] text-[#71717a]">
+              <p className="mt-3 text-[12.5px] text-[#a1a1aa]" role="status">
                 {searchUnavailable
-                  ? "Search is switched off on this server. Paste a YouTube link instead."
-                  : "Nothing found. Try a different search or paste a link."}
+                  ? "Search is off here. Paste a YouTube link."
+                  : "No results. Try other words or paste a link."}
               </p>
             ) : null}
 
@@ -343,7 +365,7 @@ export function WatchEmptyState({
                         key={item.videoId}
                         type="button"
                         onClick={() => onStart(item.videoId, item.title)}
-                        className="group cursor-pointer text-left"
+                        className="group flex cursor-pointer flex-col rounded-xl text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#F95F4A]/60"
                       >
                         <div
                           className="relative aspect-video w-full overflow-hidden rounded-xl border border-white/[0.08] transition-colors group-hover:border-white/25"
@@ -365,7 +387,7 @@ export function WatchEmptyState({
                             </span>
                           ) : null}
                           <span
-                            className="absolute left-1/2 top-1/2 flex h-9 w-9 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full opacity-0 transition-opacity group-hover:opacity-100"
+                            className="absolute left-1/2 top-1/2 flex h-9 w-9 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
                             style={{ backgroundColor: "#F95F4A" }}
                           >
                             {mode === "start" ? (

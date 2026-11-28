@@ -68,7 +68,8 @@ export function WatchControls({
         type="button"
         onClick={isPlaying ? onPause : onPlay}
         disabled={readOnly}
-        aria-label={isPlaying ? "Pause" : "Play"}
+        aria-label={isPlaying ? "Pause for everyone" : "Play for everyone"}
+        title={isPlaying ? "Pause for everyone" : "Play for everyone"}
         className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white transition-opacity hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
         style={{ backgroundColor: readOnly ? "#26262d" : "#F95F4A" }}
       >
@@ -100,7 +101,7 @@ export function WatchControls({
         disabled={readOnly || max <= 0}
         dragging={scrubValue != null}
         tone="accent"
-        ariaLabel="Seek"
+        ariaLabel="Seek for everyone"
         onInput={(next) => setScrubValue(next)}
         onCommit={(next) => {
           setScrubValue(null);
@@ -132,7 +133,8 @@ export function WatchControls({
         <button
           type="button"
           onClick={onToggleMute}
-          aria-label={muted ? "Unmute" : "Mute"}
+          aria-label={muted ? "Unmute video for me" : "Mute video for me"}
+          title={muted ? "Unmute for me" : "Mute for me"}
           className="flex h-8 w-8 items-center justify-center rounded-full text-[#c4c4cc] transition-colors hover:text-white cursor-pointer"
         >
           {muted || volume === 0 ? (
@@ -158,7 +160,7 @@ export function WatchControls({
             disabled={false}
             dragging={false}
             tone="neutral"
-            ariaLabel="Volume"
+            ariaLabel="Volume for me"
             onInput={(next) => onVolumeChange(next)}
             onCommit={(next) => onVolumeChange(next)}
           />
