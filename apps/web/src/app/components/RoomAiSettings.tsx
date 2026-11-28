@@ -137,13 +137,10 @@ export default function RoomAiSettings({
         </button>
       </div>
       <div className={`${embedded ? "" : "mt-3 "}flex items-center gap-1 rounded-lg bg-black/20 p-1`} role="tablist" aria-label="AI settings sections">
-        {(["features", "keys"] as const).map(value => <button key={value} type="button" role="tab" aria-selected={tab === value} onClick={() => setTab(value)} className={`flex-1 rounded-md py-1.5 text-[12px] font-medium transition-colors ${tab === value ? "bg-white/10 text-white" : "text-[#a1a1aa] hover:text-white"}`}>{value === "features" ? "Features" : "Keys"}</button>)}
-      </div>
-      <div className="mt-3 flex flex-wrap gap-2" aria-label="Connected providers">
-        {ROOM_AI_PROVIDERS.map(provider => <button key={provider} type="button" onClick={() => {setTab("keys");setExpanded(provider);setApiKey("");}} title={`${AI_PROVIDERS[provider].label}: ${!controller.ready ? "Loading" : controller.state[provider].source === "room" ? "Room key" : controller.state[provider].source === "deployment" ? "Conclave key" : "Not set"}`} className="inline-flex items-center gap-1.5 rounded-md bg-white/[0.04] px-2 py-1 text-[10.5px] text-[#a1a1aa]">{AI_PROVIDERS[provider].label}</button>)}
+        {(["features", "keys"] as const).map(value => <button key={value} type="button" role="tab" aria-selected={tab === value} onClick={() => setTab(value)} className={`h-8 flex-1 rounded-md text-[13px] font-medium transition-colors ${tab === value ? "bg-white/10 text-white" : "text-[#a1a1aa] hover:text-white"}`}>{value === "features" ? "Features" : "Keys"}</button>)}
       </div>
       {tab === "features" ? <div className="mt-2"><RoomAiFeatureSettings controller={controller} /></div> : (
-      <div className="mt-4 divide-y divide-white/10">
+      <div className="mt-2 divide-y divide-white/10">
         {ROOM_AI_PROVIDERS.map((provider) => {
           const status = controller.state[provider];
           const canEdit =
@@ -157,7 +154,7 @@ export default function RoomAiSettings({
               key={provider}
               role="group"
               aria-label={`${AI_PROVIDERS[provider].label} settings`}
-              className="py-3 first:pt-0 last:pb-0"
+              className="py-3"
             >
               <div className="flex items-center gap-3">
                 <button
@@ -183,11 +180,11 @@ export default function RoomAiSettings({
                   className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-[#F95F4A]/60 disabled:cursor-default"
                 >
                   <span className="min-w-0 flex-1">
-                    <span className="block text-[12px] font-medium text-[#fafafa]">
+                    <span className="block truncate text-[14px] font-medium text-[#fafafa]">
                       {AI_PROVIDERS[provider].label}
                     </span>
                     <span
-                      className={`mt-1 block text-[10.5px] ${status.source ? "text-[#91cbb0]" : "text-[#a1a1aa]"}`}
+                      className={`mt-0.5 block text-[12px] ${status.source ? "text-[#91cbb0]" : "text-[#a1a1aa]"}`}
                     >
                       {!controller.connected
                         ? "Reconnecting…"
@@ -201,7 +198,7 @@ export default function RoomAiSettings({
                     </span>
                   </span>
                   {canEdit ? (
-                    <span className="flex shrink-0 items-center gap-1 text-[11px] text-[#d4d4d8]">
+                    <span className="flex shrink-0 items-center gap-1 text-[12px] text-[#d4d4d8]">
                       {status.source === "room" ? "Manage" : "Add key"}
                       <ChevronDown
                         size={13}
@@ -236,12 +233,12 @@ export default function RoomAiSettings({
                 </span>
               </div>
               {notice?.provider === provider ? (
-                <p role="status" className="mt-2 text-[11px] text-[#91cbb0]">
+                <p role="status" className="mt-2 text-[12px] text-[#91cbb0]">
                   {notice.message}
                 </p>
               ) : null}
               {error?.provider === provider ? (
-                <p role="alert" className="mt-2 text-[11px] text-red-300">
+                <p role="alert" className="mt-2 text-[12px] text-red-300">
                   {error.message}
                 </p>
               ) : null}
@@ -254,7 +251,7 @@ export default function RoomAiSettings({
                   }}
                 >
                   {provider === "cloudflare" ? (
-                    <label className="block text-[11px] text-[#d4d4d8]">
+                    <label className="block text-[12px] text-[#d4d4d8]">
                       Account ID
                       <input
                         autoFocus
@@ -265,11 +262,11 @@ export default function RoomAiSettings({
                         spellCheck={false}
                         disabled={pending}
                         placeholder="32-character account ID"
-                        className="mt-1.5 h-10 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-[12px] text-white outline-none focus:border-[#F95F4A]/60"
+                        className="mt-1.5 h-10 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-[13px] text-white outline-none focus:border-[#F95F4A]/60"
                       />
                     </label>
                   ) : null}
-                  <label className="block text-[11px] text-[#d4d4d8]">
+                  <label className="block text-[12px] text-[#d4d4d8]">
                     {provider === "cloudflare" ? "Workers AI API token" : `${AI_PROVIDERS[provider].label} API key`}
                     <input
                       autoFocus={provider !== "cloudflare"}
@@ -287,10 +284,10 @@ export default function RoomAiSettings({
                             ? "sk-…"
                             : "Enter API key"
                       }
-                      className="mt-1.5 h-10 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-[12px] text-white outline-none focus:border-[#F95F4A]/60"
+                      className="mt-1.5 h-10 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-[13px] text-white outline-none focus:border-[#F95F4A]/60"
                     />
                   </label>
-                  <p className="text-[11px] leading-relaxed text-[#a1a1aa]">
+                  <p className="text-[12px] leading-relaxed text-[#a1a1aa]">
                     Your account is billed. Cleared when the room ends.
                   </p>
                   <div className="flex items-center gap-2">
@@ -299,7 +296,7 @@ export default function RoomAiSettings({
                       disabled={
                         pending || !keyReady(provider) || !controller.connected
                       }
-                      className="inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-lg bg-[#F95F4A] px-3 text-[12px] font-semibold text-white hover:bg-[#ff735f] disabled:opacity-40"
+                      className="inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-lg bg-[#F95F4A] px-3 text-[13px] font-semibold text-white hover:bg-[#ff735f] disabled:opacity-40"
                     >
                       {pending ? (
                         <Loader2 size={13} className="animate-spin" />
@@ -314,7 +311,7 @@ export default function RoomAiSettings({
                         disabled={pending || !controller.connected}
                         onClick={() => void save(provider, true)}
                         title="Remove for new requests. Stop active notes to revoke their current key."
-                        className="h-9 rounded-lg border border-white/10 px-3 text-[11px] text-[#d4d4d8] disabled:opacity-40"
+                        className="h-9 rounded-lg border border-white/10 px-3 text-[13px] text-[#d4d4d8] hover:bg-white/[0.04] disabled:opacity-40"
                       >
                         Remove
                       </button>
@@ -324,10 +321,10 @@ export default function RoomAiSettings({
                     href={AI_PROVIDERS[provider].keysUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-[11px] text-[#a1a1aa] hover:text-white"
+                    className="inline-flex min-h-8 items-center gap-1 text-[12px] text-[#a1a1aa] hover:text-white"
                   >
                     Get key
-                    <ExternalLink size={11} />
+                    <ExternalLink size={12} aria-hidden="true" />
                   </a>
                 </form>
               ) : null}
