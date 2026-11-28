@@ -262,7 +262,6 @@ function EffectOptionButton<T extends string>({
   onSelect: () => void;
 }) {
   const Icon = option.icon;
-  const isMotionOption = option.motion === true;
   const previewPath = getVideoEffectPreviewPath(option);
   return (
     <button
@@ -293,14 +292,9 @@ function EffectOptionButton<T extends string>({
             : { backgroundColor: option.tone }
         }
       >
-        {previewPath ? (
-          <span className="h-full w-full bg-gradient-to-t from-black/35 via-black/5 to-transparent" />
-        ) : (
+        {previewPath ? null : (
           <Icon size={18} strokeWidth={ICON_STROKE} className="text-white" />
         )}
-        {isMotionOption ? (
-          <span className="pointer-events-none absolute bottom-1 right-1 h-1.5 w-1.5 rounded-full bg-[#F95F4A]" />
-        ) : null}
         {busy ? (
           <span className="absolute inset-0 flex items-center justify-center bg-black/45">
             <LoaderCircle
@@ -313,11 +307,11 @@ function EffectOptionButton<T extends string>({
       </span>
       <span className="mt-2 flex min-w-0 items-start justify-between gap-2">
         <span className="min-w-0">
-          <span className="block text-[12px] font-medium leading-tight text-[#fafafa]">
+          <span className="block text-[13px] font-medium leading-tight text-[#fafafa]">
             {option.label}
           </span>
           {option.description ? (
-            <span className="mt-1 block text-[11px] leading-tight text-[#a1a1aa]">
+            <span className="mt-0.5 block text-[12px] leading-snug text-[#a1a1aa]">
               {option.description}
             </span>
           ) : null}
@@ -492,7 +486,7 @@ function VideoEffectsPreview({
                 )}
                 Preview my camera
               </button>
-              <span className="text-[11.5px] leading-snug text-[#a1a1aa]">
+              <span className="text-[12px] leading-snug text-[#a1a1aa]">
                 Your camera stays off for the meeting.
               </span>
             </>
@@ -512,7 +506,7 @@ function VideoEffectsPreview({
       {shouldShowVideo && isPreviewOnly ? (
         <span
           data-testid="video-effects-preview-only-badge"
-          className="absolute left-3 top-3 rounded-full bg-black/60 px-2.5 py-1 text-[11px] font-medium text-[#fafafa] backdrop-blur-sm"
+          className="absolute left-3 top-3 rounded-full bg-black/60 px-2.5 py-1 text-[12px] font-medium text-[#fafafa] backdrop-blur-sm"
         >
           Only visible to you
         </span>
@@ -1345,7 +1339,7 @@ export default function VideoEffectsPanel({
                         className="text-white"
                       />
                     </span>
-                    <span className="mt-2 block text-[12px] font-medium leading-tight text-[#fafafa]">
+                    <span className="mt-2 block text-[13px] font-medium leading-tight text-[#fafafa]">
                       Upload image
                     </span>
                   </button>
@@ -1371,10 +1365,8 @@ export default function VideoEffectsPanel({
                             backgroundColor: EFFECTS_ACCENT,
                             backgroundImage: `url("${background.thumbnailDataUrl}")`,
                           }}
-                        >
-                          <span className="h-full w-full bg-gradient-to-t from-black/35 via-black/5 to-transparent" />
-                        </span>
-                        <span className="mt-2 block truncate text-[12px] font-medium leading-tight text-[#fafafa]">
+                        />
+                        <span className="mt-2 block truncate text-[13px] font-medium leading-tight text-[#fafafa]">
                           {background.name}
                         </span>
                         {selected ? (
@@ -1412,10 +1404,8 @@ export default function VideoEffectsPanel({
                           backgroundColor: EFFECTS_ACCENT,
                           backgroundImage: `url("${effects.customBackgroundDataUrl}")`,
                         }}
-                      >
-                        <span className="h-full w-full bg-gradient-to-t from-black/35 via-black/5 to-transparent" />
-                      </span>
-                      <span className="mt-2 block truncate text-[12px] font-medium leading-tight text-[#fafafa]">
+                      />
+                      <span className="mt-2 block truncate text-[13px] font-medium leading-tight text-[#fafafa]">
                         {effects.customBackgroundName || "Uploaded image"}
                       </span>
                       {effects.background === "custom" ? (
@@ -1518,37 +1508,27 @@ export default function VideoEffectsPanel({
             role="tabpanel"
             aria-labelledby="video-effects-tab-appearance"
           >
-            <Section label="Studio lighting">
+            <Section label="Lighting and framing">
               <div className="grid gap-1">
                 <ToggleRow
                   label="Studio lighting"
-                  description="Makes it easier to see you against a bright background"
+                  description="Helps when the light is behind you."
                   checked={effects.studioLighting}
                   testId="video-effects-appearance-studio-lighting"
                   onChange={setToggle("studioLighting")}
                 />
-              </div>
-            </Section>
-
-            {studioLookControlVisible ? (
-              <Section label="Studio look">
-                <div className="grid gap-1">
+                {studioLookControlVisible ? (
                   <ToggleRow
                     label="Studio look"
-                    description="When needed, sharpens your features so people can see you better"
+                    description="Sharpens your features when needed."
                     checked={effects.studioLook}
                     testId="video-effects-appearance-studio-look"
                     onChange={setToggle("studioLook")}
                   />
-                </div>
-              </Section>
-            ) : null}
-
-            <Section label="Framing">
-              <div className="grid gap-1">
+                ) : null}
                 <ToggleRow
                   label="Framing"
-                  description="Puts you in the center of the screen"
+                  description="Keeps you centered."
                   checked={effects.framing}
                   testId="video-effects-appearance-framing"
                   onChange={setToggle("framing")}
@@ -1562,7 +1542,7 @@ export default function VideoEffectsPanel({
                     !onRecenterFraming
                   }
                   onClick={onRecenterFraming}
-                  className="ml-12 min-h-9 rounded-full border border-[#F95F4A]/30 bg-[#F95F4A]/[0.14] px-4 text-left text-[13px] font-medium text-[#fafafa] transition-colors duration-[120ms] hover:bg-[#F95F4A]/[0.20] disabled:cursor-not-allowed disabled:border-white/[0.14] disabled:bg-[#131316] disabled:text-[#71717a]"
+                  className="ml-3 min-h-9 justify-self-start rounded-full border border-[#F95F4A]/30 bg-[#F95F4A]/[0.14] px-4 text-left text-[13px] font-medium text-[#fafafa] transition-colors duration-[120ms] hover:bg-[#F95F4A]/[0.20] disabled:cursor-not-allowed disabled:border-white/[0.14] disabled:bg-[#131316] disabled:text-[#71717a]"
                 >
                   Recenter
                 </button>
