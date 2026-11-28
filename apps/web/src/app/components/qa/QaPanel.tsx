@@ -38,7 +38,7 @@ const MODERATION_ACTIONS: Record<
 };
 
 const actionButtonBase =
-  "inline-flex items-center justify-center rounded-md px-2.5 py-1.5 text-[12.5px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40";
+  "inline-flex h-8 items-center justify-center rounded-lg px-3 text-[13px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40";
 const neutralActionClass =
   actionButtonBase +
   " border border-white/10 bg-white/[0.04] text-[#a1a1aa] hover:bg-white/[0.07] hover:text-[#fafafa]";
@@ -79,27 +79,15 @@ const statusChip = (
 ): { label: string; toneClass: string } | null => {
   switch (entry.status) {
     case "answering":
-      return {
-        label: "Being answered",
-        toneClass: "border-[#F95F4A]/50 bg-[#F95F4A]/12 text-[#F95F4A]",
-      };
+      return { label: "Being answered", toneClass: "font-medium text-[#F95F4A]" };
     case "answered":
-      return {
-        label: "Answered",
-        toneClass: "border-white/[0.14] bg-white/[0.06] text-[#fafafa]/75",
-      };
+      return { label: "Answered", toneClass: "text-[#fafafa]/75" };
     case "pending":
       return audience === "webinar"
-        ? {
-            label: "Waiting",
-            toneClass: "border-white/[0.12] bg-transparent text-[#fafafa]/50",
-          }
+        ? { label: "Waiting", toneClass: "text-[#fafafa]/50" }
         : null;
     case "dismissed":
-      return {
-        label: "Hidden",
-        toneClass: "border-white/[0.12] bg-transparent text-[#fafafa]/50",
-      };
+      return { label: "Hidden", toneClass: "text-[#fafafa]/50" };
   }
 };
 
@@ -238,7 +226,7 @@ export function QaPanel({
       >
         <div className="min-w-0">
           <h2 className="truncate text-[15px] font-semibold">Q&A</h2>
-          <p className="mt-0.5 text-[11.5px]" style={{ color: color.textFaint }}>
+          <p className="mt-0.5 text-[12px]" style={{ color: color.textFaint }}>
             {copy.subtitle}
           </p>
         </div>
@@ -282,12 +270,12 @@ export function QaPanel({
                   style={{ backgroundColor: color.bgAlt }}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-[11.5px] font-medium text-[#fafafa]/60">
+                    <span className="truncate text-[12px] font-medium text-[#fafafa]/60">
                       {isOwn ? "You" : entry.displayName}
                     </span>
                     {chip ? (
                       <span
-                        className={`shrink-0 rounded-full border px-2 py-0.5 text-[9.5px] font-medium uppercase tracking-[0.08em] ${chip.toneClass}`}
+                        className={`shrink-0 text-[12px] ${chip.toneClass}`}
                       >
                         {chip.label}
                       </span>
@@ -297,7 +285,7 @@ export function QaPanel({
                     {entry.question}
                   </p>
                   {entry.answerText ? (
-                    <p className="mt-2 rounded-lg border border-white/[0.08] bg-black/30 px-2.5 py-2 text-[12.5px] leading-snug text-[#fafafa]/80">
+                    <p className="mt-2 rounded-lg border border-white/[0.08] bg-black/30 px-2.5 py-2 text-[13px] leading-snug text-[#fafafa]/80">
                       <span className="font-medium text-[#fafafa]">
                         {entry.answeredByName || "Host"}:
                       </span>{" "}
@@ -312,13 +300,13 @@ export function QaPanel({
                       disabled={!onUpvote || isHidden || waiting}
                       aria-pressed={Boolean(entry.hasUpvoted)}
                       aria-label={`Upvote, ${entry.upvotes} so far`}
-                      className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11.5px] transition-colors duration-150 ${
+                      className={`inline-flex h-8 items-center gap-1 rounded-full border px-2.5 text-[12px] transition-colors duration-150 ${
                         entry.hasUpvoted
                           ? "border-[#F95F4A]/55 bg-[#F95F4A]/12 text-[#F95F4A]"
                           : "border-white/[0.12] text-[#fafafa]/65 hover:bg-white/[0.06]"
                       } ${onUpvote && !isHidden && !waiting ? "" : "opacity-50"}`}
                     >
-                      <ChevronUp size={13} strokeWidth={ICON_STROKE} />
+                      <ChevronUp size={14} strokeWidth={ICON_STROKE} />
                       <span className="tabular-nums">{entry.upvotes}</span>
                     </button>
                     {onModerate ? (
@@ -337,7 +325,7 @@ export function QaPanel({
         {listError ? (
           <p
             data-testid="qa-list-error"
-            className="mt-2 text-[11.5px] text-[#F95F4A]"
+            className="mt-2 text-[12px] text-[#F95F4A]"
           >
             {listError}
           </p>
@@ -347,7 +335,7 @@ export function QaPanel({
       {askNeedsIdentity ? (
         <p
           data-testid="qa-sign-in"
-          className="border-t px-4 py-3.5 text-[12.5px] text-[#fafafa]/60"
+          className="border-t px-4 py-3.5 text-[13px] text-[#fafafa]/60"
           style={{ borderColor: color.border }}
         >
           Sign in to ask a question.
@@ -355,7 +343,7 @@ export function QaPanel({
       ) : qaEnabled && onSubmit ? (
         <div className="border-t px-4 py-3.5" style={{ borderColor: color.border }}>
           {submitError ? (
-            <p className="mb-2 text-[11.5px] text-[#F95F4A]">{submitError}</p>
+            <p className="mb-2 text-[12px] text-[#F95F4A]">{submitError}</p>
           ) : null}
           <div className="flex items-end gap-2">
             <textarea

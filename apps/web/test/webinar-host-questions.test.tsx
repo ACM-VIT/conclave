@@ -98,5 +98,5 @@ it("shows a webinar host their hidden questions when nothing else is open", asyn
   );
 
   expect(buttonsOf("Off-topic: who is getting lunch?")).toEqual(["Unhide"]);
-  expect(container.textContent).not.toContain("Attendee questions land here");
+  expect(container.textContent).not.toContain("No questions yet.");
 });

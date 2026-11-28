@@ -631,8 +631,7 @@ function ParticipantsPanel({
             <div className="px-4 pb-3">
               {hostWebinarQuestions.length === 0 ? (
                 <p className="text-[12px] leading-snug text-[#71717a]">
-                  Attendee questions land here for you to answer live or
-                  hide.
+                  No questions yet.
                 </p>
               ) : (
                 <div className="max-h-56 space-y-1.5 overflow-y-auto">
@@ -653,16 +652,16 @@ function ParticipantsPanel({
                       >
                         <div className="flex items-center justify-between gap-2">
                           <span className="flex min-w-0 items-center gap-1.5">
-                            <span className="truncate text-[11.5px] font-medium text-[#a1a1aa]">
+                            <span className="truncate text-[12px] font-medium text-[#a1a1aa]">
                               {formatDisplayName(entry.displayName)}
                             </span>
                             {isHidden && (
-                              <span className="shrink-0 rounded-full border border-white/[0.12] px-2 py-0.5 text-[9.5px] font-medium uppercase tracking-[0.08em] text-[#fafafa]/50">
+                              <span className="shrink-0 text-[12px] text-[#fafafa]/50">
                                 Hidden
                               </span>
                             )}
                           </span>
-                          <span className="inline-flex shrink-0 items-center gap-1 text-[11px] tabular-nums text-[#71717a]">
+                          <span className="inline-flex shrink-0 items-center gap-1 text-[12px] tabular-nums text-[#71717a]">
                             <ChevronUp size={12} strokeWidth={STROKE} />
                             {entry.upvotes}
                           </span>
