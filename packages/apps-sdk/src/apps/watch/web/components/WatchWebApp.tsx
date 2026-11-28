@@ -261,11 +261,14 @@ export function WatchWebApp() {
 
   const requestsSection =
     watchRequests.requests.length > 0 || watchRequests.declined ? (
-      <div className="border-b border-white/[0.06] px-3 pb-2.5">
+      <div className="border-b border-white/[0.06] px-3 py-2.5">
         {watchRequests.requests.length > 0 ? (
-          <p className="pb-1.5 text-[11px] font-medium text-[#a1a1aa]">
-            Requests
-          </p>
+          <div className="flex items-center gap-1.5 pb-2">
+            <h3 className="text-[12px] font-medium text-[#fafafa]">Requests</h3>
+            <span className="rounded-full border border-white/10 px-1.5 py-0.5 text-[10.5px] tabular-nums text-[#a1a1aa]">
+              {watchRequests.requests.length}
+            </span>
+          </div>
         ) : null}
         <ul className="flex flex-col gap-1">
           {watchRequests.requests.map((request) => {
@@ -273,11 +276,11 @@ export function WatchWebApp() {
             return (
               <li
                 key={request.id}
-                className="flex items-center gap-2 rounded-lg border border-white/[0.06] px-2 py-1.5"
+                className="flex items-center gap-2.5 rounded-lg border border-white/[0.06] py-1.5 pl-1.5 pr-1"
                 style={{ backgroundColor: "#101014" }}
               >
                 <div
-                  className="h-8 w-14 shrink-0 overflow-hidden rounded border border-white/[0.06]"
+                  className="h-9 w-16 shrink-0 overflow-hidden rounded-md border border-white/[0.06]"
                   style={{ backgroundColor: "#0a0a0b" }}
                 >
                   <img
@@ -289,10 +292,18 @@ export function WatchWebApp() {
                   />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-[11.5px] font-medium text-[#e4e4e7]">
+                  <p
+                    className="text-[12px] font-medium leading-snug text-[#e4e4e7]"
+                    style={{
+                      display: "-webkit-box",
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: "vertical",
+                      overflow: "hidden",
+                    }}
+                  >
                     {request.title ?? request.videoId}
                   </p>
-                  <p className="mt-0.5 truncate text-[10px] text-[#71717a]">
+                  <p className="mt-0.5 truncate text-[11px] text-[#71717a]">
                     {mine ? "Your request" : (request.byName ?? "Someone")}
                   </p>
                 </div>
@@ -303,10 +314,10 @@ export function WatchWebApp() {
                       onClick={() => acceptRequest(request)}
                       aria-label="Add to queue"
                       title="Add to queue"
-                      className="flex h-6 w-6 cursor-pointer items-center justify-center rounded-full text-white transition-opacity hover:opacity-90"
-                      style={{ backgroundColor: "#22A578" }}
+                      className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full text-white transition-opacity hover:opacity-90"
+                      style={{ backgroundColor: "#F95F4A" }}
                     >
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                         <polyline points="20 6 9 17 4 12" />
                       </svg>
                     </button>
@@ -315,9 +326,9 @@ export function WatchWebApp() {
                       onClick={() => declineRequest(request)}
                       aria-label="Decline request"
                       title="Decline"
-                      className="flex h-6 w-6 cursor-pointer items-center justify-center rounded-full border border-white/10 text-[#a1a1aa] transition-colors hover:bg-white/[0.06] hover:text-[#fafafa]"
+                      className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full border border-white/10 text-[#a1a1aa] transition-colors hover:bg-white/[0.06] hover:text-[#fafafa]"
                     >
-                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                         <line x1="18" y1="6" x2="6" y2="18" />
                         <line x1="6" y1="6" x2="18" y2="18" />
                       </svg>
@@ -328,16 +339,17 @@ export function WatchWebApp() {
                     type="button"
                     onClick={watchRequests.cancelRequest}
                     aria-label="Cancel request"
-                    className="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-[#71717a] transition-colors hover:bg-white/[0.06] hover:text-[#fafafa]"
+                    title="Cancel request"
+                    className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-[#a1a1aa] transition-colors hover:bg-white/[0.06] hover:text-[#fafafa]"
                   >
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                       <line x1="18" y1="6" x2="6" y2="18" />
                       <line x1="6" y1="6" x2="18" y2="18" />
                     </svg>
                   </button>
                 ) : (
-                  <span className="shrink-0 text-[10px] text-[#71717a]">
-                    Pending
+                  <span className="shrink-0 pr-1.5 text-[11px] text-[#71717a]">
+                    Waiting
                   </span>
                 )}
               </li>
@@ -345,12 +357,33 @@ export function WatchWebApp() {
           })}
         </ul>
         {watchRequests.declined ? (
-          <p className="pt-1.5 text-[11px] text-[#71717a]">
-            Your request was declined
+          <p className="pt-1.5 text-[12px] text-[#a1a1aa]" role="status">
+            The host declined your request.
           </p>
         ) : null}
       </div>
     ) : null;
+
+  const requestSection = canRequest ? (
+    <div>
+      <button
+        type="button"
+        onClick={() => setBrowsing(true)}
+        className="flex h-9 w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-white/10 text-[12.5px] font-medium text-[#fafafa] transition-colors hover:bg-white/[0.06]"
+      >
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <line x1="12" y1="5" x2="12" y2="19" />
+          <line x1="5" y1="12" x2="19" y2="12" />
+        </svg>
+        {watchRequests.myRequest ? "Request a different video" : "Request a video"}
+      </button>
+      <p className="mt-1.5 text-[11px] text-[#71717a]">
+        {watchRequests.myRequest
+          ? "Your request is waiting for the host."
+          : "The host approves requests."}
+      </p>
+    </div>
+  ) : null;
 
   const railContent = (
     <WatchQueue
@@ -362,27 +395,28 @@ export function WatchWebApp() {
       onPlayNow={handlePlayNow}
       onMove={handleMove}
       requestsSection={requestsSection}
+      addSection={requestSection}
       headerAccessory={
         <>
-          {!appReadOnly ? (
+          {!appReadOnly && !canRequest ? (
             <button
               type="button"
               onClick={() => setBrowsing((prev) => !prev)}
-              aria-label={browsing ? "Back to video" : "Browse videos"}
               aria-pressed={browsing}
               title={browsing ? "Back to video" : "Browse videos"}
-              className={`flex h-7 w-7 cursor-pointer items-center justify-center rounded-md transition-colors ${
+              className={`inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-full px-2.5 text-[11.5px] font-medium transition-colors ${
                 browsing
                   ? "bg-white/[0.1] text-[#fafafa]"
-                  : "text-[#71717a] hover:bg-white/[0.06] hover:text-[#fafafa]"
+                  : "text-[#a1a1aa] hover:bg-white/[0.06] hover:text-[#fafafa]"
               }`}
             >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <rect x="3" y="3" width="7" height="7" rx="1.5" />
                 <rect x="14" y="3" width="7" height="7" rx="1.5" />
                 <rect x="3" y="14" width="7" height="7" rx="1.5" />
                 <rect x="14" y="14" width="7" height="7" rx="1.5" />
               </svg>
+              Browse
             </button>
           ) : null}
           <HostPill
@@ -541,7 +575,7 @@ export function WatchWebApp() {
                   <circle cx="11" cy="11" r="7" />
                   <line x1="21" y1="21" x2="16.65" y2="16.65" />
                 </svg>
-                Browse more videos
+                Find another video
               </button>
             </div>
           ) : null}
@@ -551,7 +585,7 @@ export function WatchWebApp() {
               className="absolute inset-0 z-30 flex flex-col"
               style={{ backgroundColor: "#0d0d10" }}
             >
-              <div className="flex shrink-0 items-center justify-between px-4 pt-3">
+              <div className="flex shrink-0 items-center px-4 pt-3">
                 <button
                   type="button"
                   onClick={() => setBrowsing(false)}
@@ -562,11 +596,6 @@ export function WatchWebApp() {
                   </svg>
                   Back to video
                 </button>
-                {canRequest ? (
-                  <span className="text-[11px] text-[#71717a]">
-                    Picks are sent to the host to approve
-                  </span>
-                ) : null}
               </div>
               <div className="min-h-0 flex-1">
                 <WatchEmptyState
@@ -645,12 +674,12 @@ export function WatchWebApp() {
                 onVolumeChange={player.setVolume}
               />
               {isReadOnly ? (
-                <div className="flex items-center gap-1.5 border-t border-white/[0.06] px-3 py-1.5 text-[11px] text-[#8b8b93]">
+                <div className="flex items-center gap-1.5 border-t border-white/[0.06] px-3 py-1.5 text-[11.5px] text-[#a1a1aa]">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                     <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
                     <path d="M7 11V7a5 5 0 0 1 10 0v4" />
                   </svg>
-                  Host has locked controls
+                  Only the host can play, pause or seek. Volume and captions are yours.
                 </div>
               ) : null}
             </div>

@@ -26,10 +26,17 @@ export function HostPill({ locked, isAdmin, onSetLocked }: HostPillProps) {
       }
     };
     const onScrollOrResize = () => setOpen(false);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      buttonRef.current?.focus();
+    };
+    document.addEventListener("keydown", onKeyDown);
     document.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("resize", onScrollOrResize);
     window.addEventListener("scroll", onScrollOrResize, true);
     return () => {
+      document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("pointerdown", onPointerDown);
       window.removeEventListener("resize", onScrollOrResize);
       window.removeEventListener("scroll", onScrollOrResize, true);
@@ -56,7 +63,7 @@ export function HostPill({ locked, isAdmin, onSetLocked }: HostPillProps) {
         className="inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 px-2.5 text-[11px] font-medium text-[#a1a1aa]"
         title={
           locked
-            ? "Only the host can control playback and the queue"
+            ? "Only the host controls playback and the queue"
             : "Anyone can control playback and the queue"
         }
       >
@@ -82,6 +89,7 @@ export function HostPill({ locked, isAdmin, onSetLocked }: HostPillProps) {
           setOpen((prev) => !prev);
         }}
         aria-expanded={open}
+        title="Who can control playback"
         className="inline-flex h-7 shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 px-2.5 text-[11px] font-medium text-[#fafafa] transition-colors hover:bg-white/[0.06]"
       >
         {glyph}
@@ -129,7 +137,7 @@ export function HostPill({ locked, isAdmin, onSetLocked }: HostPillProps) {
                 Everyone can control
               </span>
               <span className="mt-0.5 block text-[11px] leading-snug text-[#71717a]">
-                Playback, seeking, and the queue. Off means host only.
+                Play, pause, seek and edit the queue. When off, only hosts can.
               </span>
             </span>
             <span

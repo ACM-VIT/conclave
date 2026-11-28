@@ -22,6 +22,7 @@ type WatchQueueProps = {
   onMove: (itemId: string, direction: -1 | 1) => void;
   headerAccessory?: React.ReactNode;
   requestsSection?: React.ReactNode;
+  addSection?: React.ReactNode;
 };
 
 function QueueAddBox({
@@ -74,6 +75,7 @@ function QueueAddBox({
             if (results) setResults(null);
           }}
           placeholder="Search or paste a link"
+          aria-label="Add a video to Up next"
           className="h-9 min-w-0 flex-1 rounded-lg border border-white/10 bg-white/[0.04] px-3 text-[12.5px] text-[#fafafa] outline-none transition-colors placeholder:text-[#71717a] focus:border-[#F95F4A]/50"
         />
         <button
@@ -90,14 +92,14 @@ function QueueAddBox({
         </button>
       </form>
       {searching ? (
-        <p className="mt-2 text-[11.5px] text-[#71717a]">Searching</p>
+        <p className="mt-2 text-[12px] text-[#71717a]" role="status">Searching</p>
       ) : null}
       {results !== null && !searching ? (
         results.length === 0 ? (
-          <p className="mt-2 text-[11.5px] text-[#71717a]">
+          <p className="mt-2 text-[12px] text-[#71717a]" role="status">
             {searchUnavailable
-              ? "Search is off on this server. Paste a YouTube link instead."
-              : "Nothing found. Try a different search."}
+              ? "Search is off here. Paste a YouTube link."
+              : "No results. Try other words or paste a link."}
           </p>
         ) : (
           <ul className="mt-2 flex flex-col gap-0.5 rounded-lg border border-white/[0.06] p-1" style={{ backgroundColor: "#0c0c10" }}>
@@ -147,6 +149,9 @@ function QueueAddBox({
   );
 }
 
+const ROW_ACTION =
+  "flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-[#a1a1aa] transition-colors hover:bg-white/[0.08] hover:text-[#fafafa] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#F95F4A]/60 disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent";
+
 export function WatchQueue({
   items,
   nowPlaying,
@@ -157,66 +162,72 @@ export function WatchQueue({
   onMove,
   headerAccessory,
   requestsSection,
+  addSection,
 }: WatchQueueProps) {
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      {nowPlaying ? (
-        <div className="border-b border-white/[0.06] px-3 pb-3 pt-3">
-          <div
-            className="overflow-hidden rounded-lg border border-white/10"
-            style={{ backgroundColor: "#0a0a0b" }}
-          >
-            <img
-              src={thumbnailUrl(nowPlaying.videoId)}
-              alt=""
-              className="aspect-video w-full object-cover"
-              draggable={false}
-            />
-          </div>
-          <p
-            className="mt-2 text-[12.5px] font-medium leading-snug text-[#fafafa]"
-            style={{
-              display: "-webkit-box",
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: "vertical",
-              overflow: "hidden",
-            }}
-          >
-            {nowPlaying.title ?? nowPlaying.videoId}
-          </p>
-        </div>
-      ) : null}
-
-      <div className="flex items-center justify-between gap-2 px-3 pb-2 pt-3">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <h3 className="whitespace-nowrap text-[12px] font-medium text-[#fafafa]">
-            Up next
-          </h3>
-          {items.length > 0 ? (
-            <span className="rounded-full border border-white/10 px-1.5 py-0.5 text-[10px] tabular-nums text-[#a1a1aa]">
-              {items.length}
-            </span>
+    <div className="flex h-full min-h-0 flex-col overflow-y-auto lg:overflow-hidden">
+      <div className="border-b border-white/[0.06] px-3 pb-3 pt-2.5">
+        <div className="flex min-h-8 items-center justify-between gap-2">
+          <h3 className="text-[12px] font-medium text-[#a1a1aa]">Now playing</h3>
+          {headerAccessory ? (
+            <div className="flex shrink-0 items-center gap-1">{headerAccessory}</div>
           ) : null}
         </div>
-        {headerAccessory ? (
-          <div className="flex shrink-0 items-center gap-1">{headerAccessory}</div>
+        {nowPlaying ? (
+          <div className="mt-2 flex items-center gap-2.5">
+            <div
+              className="h-9 w-16 shrink-0 overflow-hidden rounded-md border border-white/10"
+              style={{ backgroundColor: "#0a0a0b" }}
+            >
+              <img
+                src={thumbnailUrl(nowPlaying.videoId)}
+                alt=""
+                className="h-full w-full object-cover"
+                draggable={false}
+              />
+            </div>
+            <p
+              className="min-w-0 flex-1 text-[13px] font-medium leading-snug text-[#fafafa]"
+              style={{
+                display: "-webkit-box",
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: "vertical",
+                overflow: "hidden",
+              }}
+            >
+              {nowPlaying.title ?? nowPlaying.videoId}
+            </p>
+          </div>
         ) : null}
       </div>
 
-      {requestsSection}
-
       {!readOnly ? (
-        <div className="px-3 pb-2.5">
+        <div className="border-b border-white/[0.06] px-3 py-2.5">
           <QueueAddBox onAdd={onAdd} />
         </div>
+      ) : addSection ? (
+        <div className="border-b border-white/[0.06] px-3 py-2.5">{addSection}</div>
       ) : null}
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">
+      {requestsSection}
+
+      <div className="flex items-center gap-1.5 px-3 pb-1.5 pt-3">
+        <h3 className="whitespace-nowrap text-[12px] font-medium text-[#fafafa]">
+          Up next
+        </h3>
+        {items.length > 0 ? (
+          <span className="rounded-full border border-white/10 px-1.5 py-0.5 text-[10.5px] tabular-nums text-[#a1a1aa]">
+            {items.length}
+          </span>
+        ) : null}
+      </div>
+
+      <div className="px-1.5 pb-2 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
         {items.length === 0 ? (
-          <p className="px-2 py-3 text-[12px] leading-relaxed text-[#71717a]">
+          <p className="px-1.5 py-1.5 text-[12px] leading-relaxed text-[#71717a]">
             {readOnly
-              ? "Nothing queued yet."
-              : "Add links to build a queue. When a video ends, the next one plays for everyone."}
+              ? "Nothing up next."
+              : "Nothing up next. Add a video and it plays for everyone when this one ends."}
           </p>
         ) : (
           <ul className="flex flex-col gap-0.5">
@@ -226,7 +237,7 @@ export function WatchQueue({
                 className="group flex items-center gap-2.5 rounded-lg px-1.5 py-1.5 transition-colors hover:bg-white/[0.05]"
               >
                 <div
-                  className="relative h-10 w-[71px] shrink-0 overflow-hidden rounded-md border border-white/[0.06]"
+                  className="relative h-9 w-16 shrink-0 overflow-hidden rounded-md border border-white/[0.06]"
                   style={{ backgroundColor: "#0a0a0b" }}
                 >
                   <img
@@ -242,35 +253,44 @@ export function WatchQueue({
                       onClick={() => onPlayNow(item.id)}
                       aria-label="Play now"
                       title="Play now"
-                      className="absolute inset-0 flex cursor-pointer items-center justify-center opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
-                      style={{ backgroundColor: "rgba(0, 0, 0, 0.55)" }}
+                      className="absolute inset-0 flex cursor-pointer items-center justify-center opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
+                      style={{ backgroundColor: "rgba(0, 0, 0, 0.5)" }}
                     >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="#ffffff" aria-hidden="true">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="#ffffff" aria-hidden="true">
                         <polygon points="6 4 20 12 6 20 6 4" />
                       </svg>
                     </button>
                   ) : null}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-[12px] font-medium text-[#e4e4e7]">
+                  <p
+                    className="text-[12px] font-medium leading-snug text-[#e4e4e7]"
+                    style={{
+                      display: "-webkit-box",
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: "vertical",
+                      overflow: "hidden",
+                    }}
+                  >
                     {item.title ?? item.videoId}
                   </p>
                   {item.addedByName ? (
-                    <p className="mt-0.5 truncate text-[10.5px] text-[#71717a]">
+                    <p className="mt-0.5 truncate text-[11px] text-[#71717a]">
                       {item.addedByName}
                     </p>
                   ) : null}
                 </div>
                 {!readOnly ? (
-                  <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+                  <div className="flex shrink-0 items-center opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100">
                     <button
                       type="button"
                       onClick={() => onMove(item.id, -1)}
                       disabled={index === 0}
                       aria-label="Move up"
-                      className="flex h-6 w-5 cursor-pointer items-center justify-center rounded-md text-[#71717a] transition-colors hover:bg-white/[0.06] hover:text-[#fafafa] disabled:cursor-default disabled:opacity-30"
+                      title="Move up"
+                      className={ROW_ACTION}
                     >
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                         <polyline points="18 15 12 9 6 15" />
                       </svg>
                     </button>
@@ -279,9 +299,10 @@ export function WatchQueue({
                       onClick={() => onMove(item.id, 1)}
                       disabled={index === items.length - 1}
                       aria-label="Move down"
-                      className="flex h-6 w-5 cursor-pointer items-center justify-center rounded-md text-[#71717a] transition-colors hover:bg-white/[0.06] hover:text-[#fafafa] disabled:cursor-default disabled:opacity-30"
+                      title="Move down"
+                      className={ROW_ACTION}
                     >
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                         <polyline points="6 9 12 15 18 9" />
                       </svg>
                     </button>
@@ -289,9 +310,10 @@ export function WatchQueue({
                       type="button"
                       onClick={() => onRemove(item.id)}
                       aria-label="Remove from queue"
-                      className="flex h-6 w-5 cursor-pointer items-center justify-center rounded-md text-[#71717a] transition-colors hover:bg-white/[0.06] hover:text-[#fafafa]"
+                      title="Remove"
+                      className={ROW_ACTION}
                     >
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                         <line x1="18" y1="6" x2="6" y2="18" />
                         <line x1="6" y1="6" x2="18" y2="18" />
                       </svg>
